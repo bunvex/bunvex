@@ -43,6 +43,8 @@ async function setup(schema: EngineSchema = defineSchema({})) {
   const engine = await new Engine(schema, await MemoryPersistence.open(null, { durable: false }), {
     instanceName: NAME,
     instanceSecret: SECRET,
+    // A deleted table's purge at retention's rate (256 rows a second): faster here.
+    retention: { documentRatePerSec: 1_000_000 },
   }).init();
   const functions = new Functions(engine).register("m", {
     insert: mutation(async ({ db }, { table, doc }: { table: string; doc: Record<string, unknown> }) =>
@@ -313,7 +315,10 @@ describe("modes, ids and the summary", () => {
       num_rows_written: { $integer: Buffer.from(new BigInt64Array([2n]).buffer).toString("base64") },
     });
     expect((await t.docs("messages")).map(strip)).toEqual([{ text: "a" }, { text: "b" }]);
-    // The replaced table's documents are removed in the background.
+    // The replaced table is kept, deleting, through the document retention window, then purged (STUDY-195 §1).
+    await t.engine.tablesDeleted();
+    expect(t.engine.catalog.deleting.size).toBe(1);
+    t.engine.retention!.minDocumentTs = t.engine.committer.visibleTs + 1n;
     await t.engine.tablesDeleted();
     expect(t.engine.catalog.deleting.size).toBe(0);
   });
@@ -399,6 +404,7 @@ describe("modes, ids and the summary", () => {
     );
     // `users` was written into a hidden table, which is dropped: nothing visible changed.
     expect(await t.docs("users")).toEqual([]);
+    t.engine.retention!.minDocumentTs = t.engine.committer.visibleTs + 1n;
     await t.engine.tablesDeleted();
     expect(t.engine.catalog.hidden.size).toBe(before);
     expect(t.engine.catalog.deleting.size).toBe(0);

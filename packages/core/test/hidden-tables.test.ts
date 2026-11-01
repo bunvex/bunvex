@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { decodeId, v } from "@bunvex/values";
 import { SCHEDULED_JOB_ARGS_TABLE, SCHEDULED_JOBS_TABLE, TABLES_TABLE, tableMeta } from "../src/catalog.ts";
-import { Engine, TABLE_DELETION_BATCH } from "../src/engine.ts";
+import { Engine } from "../src/engine.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
 import { SqlitePersistence } from "../src/persistence/sqlite.ts";
 import { dueJobs, getJob, insertJob } from "../src/scheduled-jobs.ts";
@@ -20,8 +20,12 @@ const dirs: string[] = [];
 afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
-/** Wait for the deletion worker, failing (instead of hanging) if it never finishes. */
+/**
+ * Move the document window past every deletion so far (STUDY-195 §1: a deleted table is purged once document
+ * retention passes it), and wait for the purge, failing (instead of hanging) if it never finishes.
+ */
 const deleted = async (e: Engine) => {
+  e.retention!.minDocumentTs = e.committer.visibleTs + 1n;
   const timeout = Bun.sleep(10_000).then(() => {
     throw new Error("the table deletion did not finish");
   });
@@ -137,31 +141,49 @@ test("imported ids: from another table's number, or not an id, are refused with 
   await e.close();
 });
 
-test("a deleted table disappears at once and is emptied in the background, across a restart", async () => {
+test("a deleted table disappears at once, keeps its row, number and documents through the window, across a restart", async () => {
   const dir = mkdtempSync(join(tmpdir(), "bunvex-hidden-"));
   dirs.push(dir);
-  const open = async () => new Engine(schema, new SqlitePersistence(join(dir, "db.sqlite"), { durable: true })).init();
+  // The purge at retention's rate (256 rows a second, DOCUMENT_RETENTION_RATE_LIMIT): faster here.
+  const open = async () =>
+    new Engine(schema, new SqlitePersistence(join(dir, "db.sqlite"), { durable: true }), {
+      retention: { documentRatePerSec: 1_000_000 },
+    }).init();
   const e = await open();
-  const n = TABLE_DELETION_BATCH + 200;
+  const n = 1200;
   for (let i = 0; i < n; i += 500)
     await e.mutation(async (db) => {
       for (let j = i; j < Math.min(i + 500, n); j++) await db.insert("items", { n: j });
     });
   const tablet = e.catalog.tables.get("items")!.id;
+  const number = e.catalog.tables.get("items")!.number;
+  const firstId = (await e.query((db) => db.query("items").first()))!._id as string;
   await e.deleteTable("items");
   expect(e.catalog.tables.has("items")).toBe(false);
   expect(e.catalog.deleting.has(tablet)).toBe(true);
-  // Close before the worker is done: the next start resumes it.
+  // Its `_index` rows went with the deletion (Convex's `all_indexes_on_table`).
+  const indexRows = await e.query((db) => db.asSystem(() => db.query("_index").collect()));
+  expect(indexRows.filter((r) => r.table_id === tablet)).toEqual([]);
   await e.close();
   const again = await open();
-  // The schema still declares `items`: a new active table, beside the one being deleted.
+  // The schema still declares `items`: a new active table, beside the one being deleted, with another number.
   expect(again.catalog.tables.get("items")?.id).not.toBe(tablet);
-  expect(again.catalog.tables.has("items")).toBe(true);
+  expect(again.catalog.tables.get("items")?.number).not.toBe(number);
+  // Inside the window: kept, and a purge pass leaves it.
+  await again.tablesDeleted();
+  expect(again.catalog.deleting.has(tablet)).toBe(true);
+  const kept = await again.query((db) => db.asSystem(() => db.query(TABLES_TABLE).collect()));
+  expect(kept.filter((r) => tableMeta(r).tablet === tablet).map((r) => r.state)).toEqual(["deleting"]);
+  const { internalIdOf } = await import("../src/internal-id.ts");
+  expect(await again.persistence.get(tablet, internalIdOf(firstId), (1n << 63n) - 1n)).not.toBeNull();
+  // Past it: the rows go, with no new revision of the documents, then the `_tables` row.
   await deleted(again);
   expect(again.catalog.deleting.size).toBe(0);
   const rows = await again.query((db) => db.asSystem(() => db.query(TABLES_TABLE).collect()));
   expect(rows.some((r) => tableMeta(r).tablet === tablet)).toBe(false);
-  // The schema's table is created afresh, empty.
+  expect(await again.persistence.get(tablet, internalIdOf(firstId), (1n << 63n) - 1n)).toBeNull();
+  expect(again.retention!.stats.tabletRowsDeleted).toBeGreaterThanOrEqual(n * 3);
+  // The schema's table is as it was: empty.
   expect(await names(again)).toEqual([]);
   await again.close();
 });

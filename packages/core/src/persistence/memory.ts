@@ -503,6 +503,36 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     return n;
   }
 
+  /** PERSIST-01 C18: a deleted tablet's index rows, then its documents, from RAM (the log keeps none apart). */
+  purgeTablet(table: TabletId, indexes: IndexId[], limit: number) {
+    this.assertWriter();
+    let n = 0;
+    for (const index of indexes) {
+      const t = this.indexes.get(index);
+      if (!t) continue;
+      const keys: Uint8Array[] = [];
+      for (const k of t.keys()) {
+        if (n >= limit) break;
+        keys.push(k);
+        n += t.get(k)!.length;
+      }
+      for (const k of keys) t.delete(k);
+      if (!t.size) this.indexes.delete(index);
+      if (n >= limit) return n;
+    }
+    if (n) return n;
+    const prefix = `${table}:`;
+    let ids = 0;
+    for (const [k, vs] of this.docs) {
+      if (ids >= limit) break;
+      if (!k.startsWith(prefix)) continue;
+      this.docs.delete(k);
+      n += vs.length;
+      ids++;
+    }
+    return n;
+  }
+
   /** PERSIST-01 C14: a log record of its own, durable when this returns. */
   getGlobal(key: string): unknown {
     const v = this.globals.get(key);

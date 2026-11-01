@@ -1,5 +1,20 @@
 # @bunvex/react-query
 
+## 0.1.0-alpha.2
+
+### Patch Changes
+
+- Updated dependencies [7af9a1f]
+- Updated dependencies [f710604]
+- Updated dependencies [8700316]
+- Updated dependencies [3b82fa1]
+- Updated dependencies [6d4fc1f]
+- Updated dependencies [06c53d7]
+- Updated dependencies [c2ac7a5]
+  - @bunvex/values@0.1.0-alpha.2
+  - @bunvex/client@0.1.0-alpha.2
+  - @bunvex/react@0.1.0-alpha.2
+
 ## 0.1.0-alpha.1
 
 ### Patch Changes

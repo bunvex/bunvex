@@ -1,4 +1,4 @@
-// The system tables example end to end (STUDY-90): an upload's metadata read from `_storage`, and scheduled
+// The system tables example end to end: an upload's metadata read from `_storage`, and scheduled
 // sends followed through `_scheduled_functions` (pending, canceled, success), with `db.system`.
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { createHash } from "node:crypto";

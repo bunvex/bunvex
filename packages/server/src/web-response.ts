@@ -21,16 +21,18 @@ type Init = ConstructorParameters<typeof Response>[1];
 /** The responses built with a body that is not a stream: its size in bytes, or null when it takes encoding. */
 const lengths = new WeakMap<Response, number | null>();
 
+// As Convex's `[[contentLength]]`.
 /**
- * The length of a response's body if it is known up front, as Convex's `[[contentLength]]`: a number for bytes or a
+ * The length of a response's body if it is known up front: a number for bytes or a
  * Blob, null for a body still to encode (a string, a URLSearchParams, a FormData), undefined for a stream, no body,
  * or a Response not built by a function (`fetch`'s).
  */
 export const bodyLength = (r: Response): number | null | undefined => lengths.get(r);
 
+// STUDY-168 PR 6.
 /**
  * `r`, read by the HTTP action server as a function's response whose body had `length` (`bodyLength`): the function
- * sandbox's host rebuilds a response its child made (STUDY-168 PR 6).
+ * sandbox's host rebuilds a response its child made.
  */
 export function withBodyLength(r: Response, length: number | null): Response {
   lengths.set(r, length);

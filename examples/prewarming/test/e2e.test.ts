@@ -1,8 +1,8 @@
-// The prewarming example end to end (STUDY-90): `prewarmQuery` subscribes ahead of the view, so the result is
+// The prewarming example end to end: `prewarmQuery` subscribes ahead of the view, so the result is
 // in the client before anything renders it, and the subscription ends after `extendSubscriptionFor`.
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { resolve } from "node:path";
-import { BunvexReactClient } from "bunvex/react";
+import { BunvexReactClient } from "@bunvex/react";
 import { build, type Deployment, deploy, until } from "bunvex-examples-harness";
 import { api } from "../bunvex/_generated/api.js";
 

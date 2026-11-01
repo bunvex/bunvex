@@ -32,25 +32,25 @@ const dep = (path: string) => `./_componentDeps/${Buffer.from(path).toString("ba
 const appDefinition = (withSecond = true) =>
   mod(
     "bunvex.config.js",
-    `import { defineApp } from "bunvex/server";\nimport { v } from "bunvex/values";\nimport counter from "${dep("counter")}";\nconst app = defineApp({ env: { APPX: v.optional(v.string()) } });\napp.use(counter, { env: { MODE: "fast", KEY: app.env.APPX } });\n${withSecond ? `app.use(counter, { name: "second" });\n` : ""}export default app;`,
+    `import { defineApp } from "@bunvex/server";\nimport { v } from "@bunvex/values";\nimport counter from "${dep("counter")}";\nconst app = defineApp({ env: { APPX: v.optional(v.string()) } });\napp.use(counter, { env: { MODE: "fast", KEY: app.env.APPX } });\n${withSecond ? `app.use(counter, { name: "second" });\n` : ""}export default app;`,
   );
 const COUNTER = {
   definitionPath: "counter",
   definition: mod(
     "bunvex.config.js",
-    `import { defineComponent } from "bunvex/server";\nimport { v } from "bunvex/values";\nexport default defineComponent("counter", { env: { MODE: v.optional(v.string()), KEY: v.optional(v.string()) } });`,
+    `import { defineComponent } from "@bunvex/server";\nimport { v } from "@bunvex/values";\nexport default defineComponent("counter", { env: { MODE: v.optional(v.string()), KEY: v.optional(v.string()) } });`,
   ),
   dependencies: [] as string[],
   schema: mod(
     "schema.js",
-    `import { defineSchema, defineTable } from "bunvex/server";\nimport { v } from "bunvex/values";\nexport default defineSchema({ messages: defineTable({ body: v.string() }).index("by_body", ["body"]) });`,
+    `import { defineSchema, defineTable } from "@bunvex/server";\nimport { v } from "@bunvex/values";\nexport default defineSchema({ messages: defineTable({ body: v.string() }).index("by_body", ["body"]) });`,
   ),
   functions: [
     mod(
       "lib.js",
       [
-        'import { action, internalQuery, mutation, query } from "bunvex/server";',
-        'import { v } from "bunvex/values";',
+        'import { action, internalQuery, mutation, query } from "@bunvex/server";',
+        'import { v } from "@bunvex/values";',
         "let calls = 0;",
         'export const add = mutation({ args: { body: v.string() }, handler: async (ctx, a) => ctx.db.insert("messages", { body: a.body }) });',
         'export const bad = mutation({ args: {}, handler: async (ctx) => ctx.db.insert("messages", { body: 1 }) });',
@@ -116,7 +116,7 @@ async function deployment(
         changedModules: [
           mod(
             "app.js",
-            `import { query } from "bunvex/server";\nexport const hi = query({ args: {}, handler: async () => "hi" });`,
+            `import { query } from "@bunvex/server";\nexport const hi = query({ args: {}, handler: async () => "hi" });`,
           ),
         ],
         unchangedModuleHashes: [],

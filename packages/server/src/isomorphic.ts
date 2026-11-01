@@ -1,6 +1,6 @@
-// `bunvex/server` outside Bun (STUDY-91): in a browser bundle and in Node (Next.js, Vite's server), as Convex's
+// `@bunvex/server` outside Bun (STUDY-91): in a browser bundle and in Node (Next.js, Vite's server), as Convex's
 // `convex/server`, which is the same module everywhere. Everything an app's code reaches through
-// `bunvex/server` and its `_generated/` — the builders, the schema, function references, validators, the
+// `@bunvex/server` and its `_generated/` — the builders, the schema, function references, validators, the
 // HTTP router, crons — and nothing of the runtime (the engine, persistence, the server), which needs Bun.
 // package.json's `bun` condition gives Bun the whole package (./index.ts); every other runtime gets this.
 // `isomorphic.test.ts` checks this file exports every value of ./index.ts not listed there as runtime-only.

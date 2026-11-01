@@ -13,8 +13,8 @@ import type {
   DocumentByName,
   SystemTableNames,
   TableNamesInDataModel,
-} from "bunvex/server";
-import type { GenericId } from "bunvex/values";
+} from "@bunvex/server";
+import type { GenericId } from "@bunvex/values";
 import schema from "../schema.js";
 
 /**

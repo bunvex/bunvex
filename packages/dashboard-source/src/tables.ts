@@ -224,7 +224,14 @@ export class Tables {
     private readonly sync: AdminSync,
     private readonly http: AdminHttp,
     private readonly clock: () => number = Date.now,
+    /** The component whose namespace these tables are (its `_components` id), null for the app's (STUDY-152 §4). */
+    readonly componentId: string | null = null,
   ) {}
+
+  /** The system functions' `componentId`, as Convex's Data screen passes the selected component's. */
+  private get inComponent() {
+    return { componentId: this.componentId };
+  }
 
   // ---------------------------------------------------------------- the table mapping
 
@@ -237,7 +244,7 @@ export class Tables {
     if (!sub) {
       const holder: NonNullable<Tables["mappingSub"]> = { off: () => {} };
       this.mappingSub = holder;
-      holder.off = this.sync.watch(GET_TABLE_MAPPING, {}, (r) => {
+      holder.off = this.sync.watch(GET_TABLE_MAPPING, this.inComponent, (r) => {
         if (r.success) {
           const before = holder.value;
           holder.value = r.value as Record<string, string>;
@@ -306,7 +313,11 @@ export class Tables {
     table: string,
     signal?: AbortSignal,
   ): Promise<{ indexes: IndexInfo[]; searchIndexes: SearchIndexInfo[] }> {
-    const json = await this.sync.query<IndexJson[] | null>(INDEXES, { tableName: table, tableNamespace: null }, signal);
+    const json = await this.sync.query<IndexJson[] | null>(
+      INDEXES,
+      { tableName: table, tableNamespace: this.componentId },
+      signal,
+    );
     const byName = <T extends { name: string }>(xs: T[]) =>
       xs.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     const declared = (json ?? []).map(indexInfoOf).filter((i): i is IndexInfo => i !== null);
@@ -318,7 +329,7 @@ export class Tables {
     const signal = o?.signal;
     const [names, schemas] = await Promise.all([
       this.tableNames(signal),
-      this.sync.query<{ active?: string }>(GET_SCHEMAS, {}, signal),
+      this.sync.query<{ active?: string }>(GET_SCHEMAS, this.inComponent, signal),
     ]);
     const declared = new Set(
       schemas.active
@@ -329,7 +340,7 @@ export class Tables {
       names.map(async (name) => {
         const [{ indexes, searchIndexes }, documentCount] = await Promise.all([
           this.indexesOf(name, signal),
-          this.sync.query<number>(TABLE_SIZE, { tableName: name }, signal),
+          this.sync.query<number>(TABLE_SIZE, { tableName: name, ...this.inComponent }, signal),
         ]);
         return { name, indexes, documentCount, declared: declared.has(name), searchIndexes };
       }),
@@ -357,7 +368,12 @@ export class Tables {
       filters = base64(JSON.stringify(server.json));
       origins = server.origins;
     }
-    const args = { table: q.table, filters, paginationOpts: { numItems: q.numItems, cursor: q.cursor } };
+    const args = {
+      table: q.table,
+      filters,
+      paginationOpts: { numItems: q.numItems, cursor: q.cursor },
+      ...this.inComponent,
+    };
     const result = await this.sync
       .query<Page<Record<string, unknown>>>(PAGINATED_TABLE_DOCUMENTS, args, signal)
       .catch((e: unknown) => {
@@ -376,7 +392,7 @@ export class Tables {
 
   async getDocument(table: string, id: string, o?: CallOptions): Promise<Document | null> {
     await this.requireTable(table, o?.signal);
-    const args = { ids: [{ id, tableName: table }] };
+    const args = { ids: [{ id, tableName: table }], ...this.inComponent };
     const [doc] = await this.sync.query<(Record<string, unknown> | null)[]>(LIST_BY_ID, args, o?.signal);
     this.servedRead(table, { udfPath: LIST_BY_ID, args, generation: null, last: fingerprint([doc ?? null]) });
     return doc ? toDocument(doc) : null;
@@ -502,7 +518,7 @@ export class Tables {
     onIndexes: (indexes: IndexListEntry[] | null) => void,
     onError: (error: DataSourceError) => void,
   ): Unsubscribe {
-    return this.sync.watch(INDEXES, { tableName: table, tableNamespace: null }, (r) => {
+    return this.sync.watch(INDEXES, { tableName: table, tableNamespace: this.componentId }, (r) => {
       if (!r.success) onError(errorOfFailure(INDEXES, r));
       else onIndexes((r.value as IndexJson[] | null) ?? null);
     });
@@ -521,7 +537,7 @@ export class Tables {
       s.watchers.add(watcher);
       if (s.watchers.size === 1) for (const read of s.reads.values()) this.subscribe(s, read);
       let first = true;
-      offSize = this.sync.watch(TABLE_SIZE, { tableName: table }, (r) => {
+      offSize = this.sync.watch(TABLE_SIZE, { tableName: table, ...this.inComponent }, (r) => {
         if (!r.success) return onError(errorOfFailure(TABLE_SIZE, r));
         const count = r.value as number;
         const changed = !first && count !== s.count;

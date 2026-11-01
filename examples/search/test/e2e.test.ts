@@ -1,4 +1,4 @@
-// The search example end to end (STUDY-90): full-text search whose results follow new messages, live.
+// The search example end to end: full-text search whose results follow new messages, live.
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { resolve } from "node:path";
 import { build, type Deployment, deploy, until } from "bunvex-examples-harness";

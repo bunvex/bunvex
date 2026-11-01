@@ -8,8 +8,8 @@
 import { heapStats } from "bun:jsc";
 import { defineSchema, defineTable, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
+import { createServer, Functions, query } from "@bunvex/server";
 import { v } from "@bunvex/values";
-import { createServer, Functions, query } from "bunvex/server";
 import { CodeVersion } from "../packages/server/src/code-version.ts";
 
 const engine = await new Engine(

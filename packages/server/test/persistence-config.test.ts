@@ -197,7 +197,6 @@ describe("call timeouts (STUDY-25 L3)", () => {
     expect(persistenceConfigFromEnv({ PERSISTENCE: "mysql", MYSQL_TIMEOUT_SECONDS: "2" }).timeoutMs).toBe(2000);
     // Whole seconds, as Convex's `u64` knob: anything else is logged and the driver's default (STUDY-147).
     expect(persistenceConfigFromEnv({ PERSISTENCE: "mysql", MYSQL_TIMEOUT_SECONDS: "2.5" }).timeoutMs).toBe(19_000);
-    expect(persistenceConfigFromEnv({ PERSISTENCE: "mongodb", MONGODB_TIMEOUT_SECONDS: "7" }).timeoutMs).toBe(7000);
     // another driver's variable is ignored; unset leaves the driver's default
     expect(persistenceConfigFromEnv({ PERSISTENCE: "postgres", MYSQL_TIMEOUT_SECONDS: "5" }).timeoutMs).toBeUndefined();
     expect(persistenceConfigFromEnv({ PERSISTENCE: "sqlite" }).timeoutMs).toBeUndefined();
@@ -214,10 +213,9 @@ describe("pools (STUDY-147 §3.7, Convex's knobs; DV-112 reversed)", () => {
     const c = persistenceConfigFromEnv(env);
     return [c.pool, c.idleMs];
   };
-  test("Convex's defaults: 128 connections, closed after 90 s idle; MongoDB keeps 16, no idle setting", () => {
+  test("Convex's defaults: 128 connections, closed after 90 s idle", () => {
     expect(pool({ PERSISTENCE: "postgres" })).toEqual([128, 90_000]);
     expect(pool({ PERSISTENCE: "mysql" })).toEqual([128, 90_000]);
-    expect(pool({ PERSISTENCE: "mongodb" })).toEqual([16, undefined]);
   });
   test("each driver's own knobs, which win over POOL; POOL when they are not set", () => {
     expect(
@@ -232,7 +230,7 @@ describe("pools (STUDY-147 §3.7, Convex's knobs; DV-112 reversed)", () => {
     ).toEqual([30, 6000]);
     expect(pool({ PERSISTENCE: "postgres", POOL: "8", POSTGRES_MAX_CONNECTIONS: "40" })[0]).toBe(40);
     expect(pool({ PERSISTENCE: "postgres", POOL: "8" })[0]).toBe(8);
-    expect(pool({ PERSISTENCE: "mongodb", POOL: "8" })[0]).toBe(8);
+    expect(pool({ PERSISTENCE: "mysql", POOL: "8" })[0]).toBe(8);
     // another driver's knob is ignored; a value that does not parse is the default, as `env_config`
     expect(pool({ PERSISTENCE: "postgres", MYSQL_MAX_CONNECTIONS: "30" })[0]).toBe(128);
     expect(pool({ PERSISTENCE: "postgres", POSTGRES_MAX_CONNECTIONS: "many" })[0]).toBe(128);
@@ -261,10 +259,10 @@ describe("opening the local drivers", () => {
   test("memory keeps its log in the data directory", () => roundTrip("memory", "bunvex.log"));
   test("sqlite keeps its file in the data directory", () => roundTrip("sqlite", "bunvex.sqlite"));
 
-  test("an unknown driver is refused, listing the known ones; MongoDB needs a URL", async () => {
-    await expect(openPersistence({ kind: "oracle" })).rejects.toThrow(
-      "unknown PERSISTENCE=oracle (memory, sqlite, postgres, mysql, mongodb)",
-    );
-    await expect(openPersistence({ kind: "mongodb" })).rejects.toThrow(/^PERSISTENCE=mongodb needs PERSISTENCE_URL$/);
+  test("an unknown driver is refused, listing the known ones (mongodb among them: its driver is gone)", async () => {
+    for (const kind of ["oracle", "mongodb"])
+      await expect(openPersistence({ kind })).rejects.toThrow(
+        `unknown PERSISTENCE=${kind} (memory, sqlite, postgres, mysql)`,
+      );
   });
 });

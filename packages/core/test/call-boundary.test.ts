@@ -106,7 +106,7 @@ test("a query's call begins with its epoch's catalog, sent through the codec; a 
   const e = await engine();
   const catalogs: unknown[] = [];
   const { seen, call } = recording(async (db) => {
-    catalogs.push(db.catalog);
+    catalogs.push((db as unknown as { catalog: unknown }).catalog);
     return (await db.query("notes").collect()).length;
   });
   expect(await e.queryJson(call("query", {}))).toBe("0");

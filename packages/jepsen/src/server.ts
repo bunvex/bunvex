@@ -1,5 +1,5 @@
 // A bunvex server process for the Jepsen-style runs (STUDY-57 §3.1): the workload's functions, persistence
-// chosen by the same environment as the real server (PERSISTENCE=memory|sqlite|postgres|mysql|mongodb,
+// chosen by the same environment as the real server (PERSISTENCE=memory|sqlite|postgres|mysql,
 // PERSISTENCE_URL, DATA, DURABLE), on PORT. A separate process so the nemesis can kill it (SIGKILL) and
 // start it again on the same data. Prints "ready <port>" once it serves. JEPSEN_STORE_FAULTS=<seed> wraps the
 // store in injected faults (store-faults.ts); the clock skew is preloaded (skew.ts).

@@ -1,5 +1,5 @@
+import { Authenticated, AuthLoading, Unauthenticated, useBunvexAuth, useMutation, useQuery } from "@bunvex/react";
 import { SignInButton, UserButton } from "@clerk/clerk-react";
-import { Authenticated, AuthLoading, Unauthenticated, useBunvexAuth, useMutation, useQuery } from "bunvex/react";
 import { type FormEvent, useEffect, useState } from "react";
 import { api } from "../bunvex/_generated/api";
 import type { Id } from "../bunvex/_generated/dataModel";

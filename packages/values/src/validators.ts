@@ -16,9 +16,10 @@ function throwUndefinedValidator(context: string, field?: string): never {
 
 export type OptionalProperty = "required" | "optional";
 
+// Convex's `GenericId` (STUDY-36).
 /**
- * A document's id in a table, as Convex's `GenericId`: a string branded with its table name, so ids of
- * different tables do not mix (STUDY-36). `_generated/dataModel` names it `Id<TableName>`.
+ * A document's id in a table: a string branded with its table name, so ids of different tables do not mix.
+ * `_generated/dataModel` names it `Id<TableName>`.
  */
 export type GenericId<TableName extends string> = string & { __tableName: TableName };
 
@@ -30,23 +31,30 @@ export type ValidatorJSON =
   | { type: "object"; value: Record<string, ObjectFieldType> }
   | { type: "record"; keys: RecordKeyValidatorJSON; values: RecordValueValidatorJSON }
   | { type: "union"; value: ValidatorJSON[] };
-/** A field of an object validator's JSON (Convex's `ObjectFieldType`). */
+// Convex's `ObjectFieldType`.
+/** A field of an object validator's JSON. */
 export type ObjectFieldType = { fieldType: ValidatorJSON; optional: boolean };
-/** What a record validator's keys may be, as JSON (Convex's `RecordKeyValidatorJSON`): strings, ids, or a union. */
+// Convex's `RecordKeyValidatorJSON`.
+/** What a record validator's keys may be, as JSON: strings, ids, or a union. */
 export type RecordKeyValidatorJSON =
   | { type: "string" }
   | { type: "id"; tableName: string }
   | { type: "union"; value: RecordKeyValidatorJSON[] };
-/** A record validator's values as JSON (Convex's `RecordValueValidatorJSON`): never optional. */
+// Convex's `RecordValueValidatorJSON`.
+/** A record validator's values as JSON: never optional. */
 export type RecordValueValidatorJSON = ObjectFieldType & { optional: false };
 
+// biome-ignore lint/suspicious/noUnsafeDeclarationMerging: the merged interface holds a type-only field, never set (rule 7)
 abstract class BaseValidator<Type, IsOptional extends OptionalProperty> {
-  /** Only for type inference (`Infer`); never set at runtime. */
-  declare readonly type: Type;
   readonly isValidator = true as const;
   constructor(readonly isOptional: IsOptional) {}
   abstract readonly kind: string;
   abstract get json(): ValidatorJSON;
+}
+// Declared by merging, not as a `declare` field, so Babel (React Native's Metro) reads the source as written.
+interface BaseValidator<Type, IsOptional extends OptionalProperty> {
+  /** Only for type inference (`Infer`); never set at runtime. */
+  readonly type: Type;
 }
 
 // biome-ignore lint/suspicious/noExplicitAny: a validator of any type (composite parts typed where used)
@@ -139,7 +147,8 @@ export class VInt64<Type = bigint, IsOptional extends OptionalProperty = "requir
   }
 }
 
-/** Convex's `v.commitTs()` (STUDY-53): an int64 commit timestamp, or `db.vars.commitTs` before the commit. */
+// Convex's `v.commitTs()` (STUDY-53).
+/** `v.commitTs()`: an int64 commit timestamp, or `db.vars.commitTs` before the commit. */
 export class VCommitTs<
   Type = bigint | CommitTsPlaceholder,
   IsOptional extends OptionalProperty = "required",
@@ -373,9 +382,9 @@ function optionalOf<V extends GenericValidator>(x: V): Validator<Infer<V> | unde
   return (x.isOptional === "optional" ? x : (x as { optional(): unknown }).optional()) as never;
 }
 
+// Convex's `VOptional`.
 /**
- * The validator `v.optional(x)` makes of `x` (Convex's `VOptional`): the same kind of validator, its type with
- * `undefined` added, optional.
+ * The validator `v.optional(x)` makes of `x`: the same kind of validator, its type with `undefined` added, optional.
  */
 export type VOptional<T extends GenericValidator> =
   T extends VId<infer Type, OptionalProperty>
@@ -408,10 +417,11 @@ export type VOptional<T extends GenericValidator> =
                               ? VUnion<Type | undefined, Members, "optional">
                               : never;
 
+// Convex's `AsObjectValidator`. Convex's `Validator` defaults to `"required"`; bunvex's to either, so it is spelled
+// out.
 /**
- * An `args` or `returns` given as a validator or as an object of field validators, as a validator (Convex's
- * `AsObjectValidator`): a validator as it is, the fields as an object validator of them, required (Convex's
- * `Validator` defaults to `"required"`; bunvex's to either, so it is spelled out).
+ * An `args` or `returns` given as a validator or as an object of field validators, as a validator: a validator as it
+ * is, the fields as a required object validator of them.
  */
 export type AsObjectValidator<V extends GenericValidator | PropertyValidators> = V extends GenericValidator
   ? V
@@ -419,7 +429,8 @@ export type AsObjectValidator<V extends GenericValidator | PropertyValidators> =
     ? Validator<ObjectType<V>, "required">
     : never;
 
-/** Convex's `asObjectValidator`: a validator as it is, an object of field validators as `v.object(fields)`. */
+// Convex's `asObjectValidator`.
+/** A validator as it is, an object of field validators as `v.object(fields)`. */
 export function asObjectValidator<V extends GenericValidator | PropertyValidators>(obj: V): AsObjectValidator<V> {
   return ((obj as GenericValidator).isValidator ? obj : v.object(obj as PropertyValidators)) as AsObjectValidator<V>;
 }
@@ -461,19 +472,18 @@ export const v = {
   nullable: <V extends RequiredValidator>(x: V) => v.union(x, v.null()),
 };
 
+// STUDY-100 T2.
 /**
- * `v` with `v.id` limited to `TableNames` (STUDY-100 T2): `_generated/server` exports `v` typed so with the
- * app's tables and the system tables, so editors complete them and a misspelled table is a type error. With no
- * schema, or `strictTableNameTypes: false`, `TableNames` is `string` and any name is accepted. The value is `v`.
+ * `v` with `v.id` limited to `TableNames`: `_generated/server` exports `v` typed so with the app's tables and the
+ * system tables, so editors complete them and a misspelled table is a type error. With no schema, or
+ * `strictTableNameTypes: false`, `TableNames` is `string` and any name is accepted. The value is `v`.
  */
 export type TableValidators<TableNames extends string> = Omit<typeof v, "id"> & {
   id: <TableName extends TableNames>(tableName: TableName) => VId<GenericId<TableName>>;
 };
 
-/**
- * A validator from its JSON form (the inverse of `.json`): how a pushed schema, stored as Convex stores
- * it, becomes validators again (STUDY-35).
- */
+// The schema is stored as Convex stores it (STUDY-35).
+/** A validator from its JSON form (the inverse of `.json`): how a pushed schema becomes validators again. */
 export function validatorFromJson(j: ValidatorJSON): GenericValidator {
   switch (j.type) {
     case "null":

@@ -1,4 +1,4 @@
-import { httpRouter } from "bunvex/server";
+import { httpRouter } from "@bunvex/server";
 import { httpAction } from "./_generated/server";
 
 const http = httpRouter();

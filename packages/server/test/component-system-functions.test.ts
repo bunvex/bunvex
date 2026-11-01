@@ -32,19 +32,19 @@ const mod = (path: string, lines: string[]): ModuleSource => ({
 const dep = (path: string) => `./_componentDeps/${Buffer.from(path).toString("base64url")}`;
 
 const APP_DEFINITION = mod("bunvex.config.js", [
-  'import { defineApp } from "bunvex/server";',
+  'import { defineApp } from "@bunvex/server";',
   `import counter from "${dep("counter")}";`,
   "const app = defineApp();",
   "app.use(counter);",
   "export default app;",
 ]);
 const APP_SCHEMA = mod("schema.js", [
-  'import { defineSchema, defineTable } from "bunvex/server";',
-  'import { v } from "bunvex/values";',
+  'import { defineSchema, defineTable } from "@bunvex/server";',
+  'import { v } from "@bunvex/values";',
   "export default defineSchema({ notes: defineTable({ text: v.string() }) });",
 ]);
 const APP = mod("app.js", [
-  'import { componentsGeneric, mutation, query } from "bunvex/server";',
+  'import { componentsGeneric, mutation, query } from "@bunvex/server";',
   "const c = componentsGeneric().counter.lib;",
   "export const seed = mutation({ args: {}, handler: async (ctx) => { await ctx.db.insert('notes', { text: 'app' }); await ctx.runMutation(c.add, { n: 1 }); } });",
   "export const items = query({ args: {}, handler: async (ctx) => ctx.runQuery(c.all, {}) });",
@@ -52,19 +52,19 @@ const APP = mod("app.js", [
 const COUNTER = {
   definitionPath: "counter",
   definition: mod("bunvex.config.js", [
-    'import { defineComponent } from "bunvex/server";',
+    'import { defineComponent } from "@bunvex/server";',
     'export default defineComponent("counter");',
   ]),
   dependencies: [] as string[],
   schema: mod("schema.js", [
-    'import { defineSchema, defineTable } from "bunvex/server";',
-    'import { v } from "bunvex/values";',
+    'import { defineSchema, defineTable } from "@bunvex/server";',
+    'import { v } from "@bunvex/values";',
     "export default defineSchema({ items: defineTable({ n: v.number() }) });",
   ]),
   functions: [
     mod("lib.js", [
-      'import { mutation, query } from "bunvex/server";',
-      'import { v } from "bunvex/values";',
+      'import { mutation, query } from "@bunvex/server";',
+      'import { v } from "@bunvex/values";',
       "export const add = mutation({ args: { n: v.number() }, handler: async (ctx, { n }) => ctx.db.insert('items', { n }) });",
       "export const all = query({ args: {}, handler: async (ctx) => ctx.db.query('items').collect() });",
     ]),

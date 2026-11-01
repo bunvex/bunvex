@@ -39,15 +39,15 @@ const noop = "export const noop = query({ args: {}, handler: async () => null })
 const component = (name: string, modules: string[]) => ({
   definitionPath: name,
   definition: mod("bunvex.config.js", [
-    'import { defineComponent } from "bunvex/server";',
+    'import { defineComponent } from "@bunvex/server";',
     `export default defineComponent("${name}");`,
   ]),
   dependencies: [] as string[],
   schema: null,
   functions: modules.map((m) =>
     mod(`${m}.js`, [
-      'import { query } from "bunvex/server";',
-      'import { v } from "bunvex/values";',
+      'import { query } from "@bunvex/server";',
+      'import { v } from "@bunvex/values";',
       "export const q = query({ args: {}, handler: async () => null });",
       `export const viaHandle = query({ args: { handles: v.array(v.string()) }, handler: async (ctx, { handles }) => { for (const h of handles) await ctx.runQuery(h, {}); return ${used}; } });`,
     ]),
@@ -56,15 +56,15 @@ const component = (name: string, modules: string[]) => ({
 });
 
 const APP = mod("app.js", [
-  'import { componentsGeneric, createFunctionHandle, mutation, query } from "bunvex/server";',
-  'import { v } from "bunvex/values";',
+  'import { componentsGeneric, createFunctionHandle, mutation, query } from "@bunvex/server";',
+  'import { v } from "@bunvex/values";',
   "const components = componentsGeneric();",
   "const ref = (name) => { const [c, m, f] = name.split('.'); return c === 'app' ? `${m}:${f}` : components[c][m][f]; };",
   noop,
   `export const calls = query({ args: { calls: v.array(v.string()) }, handler: async (ctx, { calls }) => { for (const c of calls) await ctx.runQuery(ref(c), {}); return ${used}; } });`,
   "export const handles = mutation({ args: {}, handler: async () => Promise.all([ref('app.app.noop'), ref('app.rootother.noop'), components.probe2.lib.q, components.probe.other.q, components.probe.lib.q].map((r) => createFunctionHandle(r))) });",
 ]);
-const ROOTOTHER = mod("rootother.js", ['import { query } from "bunvex/server";', noop]);
+const ROOTOTHER = mod("rootother.js", ['import { query } from "@bunvex/server";', noop]);
 
 async function deployment() {
   const dir = mkdtempSync(join(tmpdir(), "bunvex-component-nested-"));
@@ -102,7 +102,7 @@ async function deployment() {
     nodeDependencies: [],
     appDefinition: {
       definition: mod("bunvex.config.js", [
-        'import { defineApp } from "bunvex/server";',
+        'import { defineApp } from "@bunvex/server";',
         `import probe from "${dep("probe")}";`,
         `import probe2 from "${dep("probe2")}";`,
         `import probe3 from "${dep("probe3")}";`,

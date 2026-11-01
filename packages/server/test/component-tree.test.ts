@@ -245,7 +245,7 @@ describe("the tree as start_push answers it", () => {
     const evaluated = await evaluateDefinitions({
       app: {
         definition: {
-          source: `import { defineApp } from "bunvex/server";\nimport { v } from "bunvex/values";\nimport counter from "${dep("counter")}";\nconst app = defineApp({ env: { APPX: v.string() } });\napp.use(counter, { env: { MODE: "fast", KEY: app.env.APPX } });\nexport default app;`,
+          source: `import { defineApp } from "@bunvex/server";\nimport { v } from "@bunvex/values";\nimport counter from "${dep("counter")}";\nconst app = defineApp({ env: { APPX: v.string() } });\napp.use(counter, { env: { MODE: "fast", KEY: app.env.APPX } });\nexport default app;`,
         },
         dependencies: ["counter"],
       },
@@ -254,7 +254,7 @@ describe("the tree as start_push answers it", () => {
           "counter",
           {
             definition: {
-              source: `import { defineComponent } from "bunvex/server";\nimport { v } from "bunvex/values";\nexport default defineComponent("counter", { env: { MODE: v.union(v.literal("fast"), v.literal("slow")), KEY: v.string() } });`,
+              source: `import { defineComponent } from "@bunvex/server";\nimport { v } from "@bunvex/values";\nexport default defineComponent("counter", { env: { MODE: v.union(v.literal("fast"), v.literal("slow")), KEY: v.string() } });`,
             },
             dependencies: [],
           },

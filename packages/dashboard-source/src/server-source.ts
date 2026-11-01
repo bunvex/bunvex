@@ -8,6 +8,7 @@
 import {
   type CallOptions,
   type Capabilities,
+  type ComponentInfo,
   type DashboardDataSource,
   DataSourceError,
   type DeclaredIndexes,
@@ -36,11 +37,26 @@ import { LogStream, type LogStreamOptions } from "./logs.ts";
 import { Metrics } from "./metrics.ts";
 import { roomStatsOf, roomsReads } from "./rooms.ts";
 import { Settings } from "./settings.ts";
-import { AdminSync, watchConnection } from "./sync.ts";
+import { AdminSync, errorOfFailure, watchConnection } from "./sync.ts";
 import { SystemTables } from "./system-tables.ts";
 import { Tables } from "./tables.ts";
 import { topologyReads } from "./topology.ts";
 import { dataWrites } from "./writes.ts";
+
+/** Convex's component list (`system-udfs/convex/_system/frontend/components.ts`), as the dashboard's picker reads it. */
+const COMPONENTS = "_system/frontend/components:list";
+type ComponentJson = { id: string; name: string | null; path: string; state?: string };
+
+/** The installed components, the app (path "") left out, as Convex's picker lists them after its "app" entry. */
+export const componentsOf = (rows: ComponentJson[]): ComponentInfo[] =>
+  rows
+    .filter((c) => c.path !== "")
+    .map((c) => ({
+      id: c.id,
+      name: c.name ?? c.path.split("/").pop()!,
+      path: c.path,
+      state: c.state === "unmounted" ? "unmounted" : "active",
+    }));
 
 export type ServerDataSourceOptions = {
   /** The deployment's URL, e.g. `http://127.0.0.1:3210`. */
@@ -174,9 +190,26 @@ export function createServerDataSource(opts: ServerDataSourceOptions): ServerDat
     };
   };
 
+  /** The schema of the app (null) or of a component, as Convex's `getSchemas` given its `componentId`. */
+  const schemaIn = async (componentId: string | null, o?: CallOptions) => {
+    const [schemas, progress] = await Promise.all([
+      sync.query<{ active?: string }>("_system/frontend/getSchemas", { componentId }, o?.signal),
+      sync.query<{ numDocsValidated: number; totalDocs: number | null } | null>(
+        "_system/frontend/getSchemas:schemaValidationProgress",
+        { componentId },
+        o?.signal,
+      ),
+    ]);
+    return schemaInfoOf(schemas.active, progress ? { state: "validating", ...progress } : undefined);
+  };
+
+  // each component's Data screen reads and writes (STUDY-152 §4), made once per id
+  const inComponents = new Map<string, { source: ServerDataSource; tables: Tables }>();
+
   const close = async () => {
     logs.close();
     tables.close();
+    for (const c of inComponents.values()) c.tables.close();
     deployment.close();
     settings.close();
     await functions.close();
@@ -236,17 +269,7 @@ export function createServerDataSource(opts: ServerDataSourceOptions): ServerDat
     },
 
     // ---------------------------------------------------------------- the schema
-    async getSchema(o) {
-      const [schemas, progress] = await Promise.all([
-        sync.query<{ active?: string }>("_system/frontend/getSchemas", {}, o?.signal),
-        sync.query<{ numDocsValidated: number; totalDocs: number | null } | null>(
-          "_system/frontend/getSchemas:schemaValidationProgress",
-          {},
-          o?.signal,
-        ),
-      ]);
-      return schemaInfoOf(schemas.active, progress ? { state: "validating", ...progress } : undefined);
-    },
+    getSchema: (o) => schemaIn(null, o),
 
     // ---------------------------------------------------------------- the deployment state (UI-01 §17.2)
     async getDeploymentState(o): Promise<DeploymentState> {
@@ -390,6 +413,36 @@ export function createServerDataSource(opts: ServerDataSourceOptions): ServerDat
     return closeBeforeRooms();
   };
   source[Symbol.dispose] = () => void source.close();
+
+  // ---------------------------------------------------------------- components (STUDY-152 §4)
+  // Convex's picker: `components:list`, subscribed while watched. A component's Data screen is this source with the
+  // tables, the schema and the writes passing its `componentId`, as Convex's Data screen passes the selected one's;
+  // `/api/shapes2` refuses a component on bunvex yet, so a component's tables have no inferred type, and
+  // `/api/delete_tables` refuses one too.
+  source.listComponents = async (o) => componentsOf(await sync.query<ComponentJson[]>(COMPONENTS, {}, o?.signal));
+  source.watchComponents = (onChange, onError) =>
+    sync.watch(COMPONENTS, {}, (r) => (r.success ? onChange() : onError(errorOfFailure(COMPONENTS, r))));
+  source.inComponent = (id) => {
+    const known = inComponents.get(id);
+    if (known) return known.source;
+    const t = new Tables(sync, http, Date.now, id);
+    const { deleteTables: _refused, ...w } = dataWrites(sync, http, t);
+    const { inferDocumentType: _noShapes, deleteTables: _noDelete, ...rest } = source;
+    const scoped: ServerDataSource = {
+      ...rest,
+      listTables: (o) => t.listTables(o),
+      getSchema: (o) => schemaIn(id, o),
+      listDocuments: (q, o) => t.listDocuments(q, o),
+      getDocument: (table, docId, o) => t.getDocument(table, docId, o),
+      watchTable: (table, onChange, onError) => t.watchTable(table, onChange, onError),
+      watchTables: (onChange, onError) => t.watchTables(onChange, onError),
+      watchIndexes: (table, onIndexes, onError) => t.watchIndexes(table, onIndexes, onError),
+      tableOfId: (docId, o) => t.tableOfId(docId, o),
+      ...w,
+    };
+    inComponents.set(id, { source: scoped, tables: t });
+    return scoped;
+  };
 
   return source;
 }

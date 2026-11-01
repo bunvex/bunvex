@@ -2,13 +2,13 @@
 // `FunctionReference_future` as well as a `FunctionReference` takes one on bunvex too, typed by its `_fn` — the React
 // hooks and client (`useQuery`, `useMutation`, `useAction`, `usePreloadedQuery`, `useQueries`, `watchQuery`,
 // `prewarmQuery`, `mutation`, `action`, `query`), the browser and HTTP clients, optimistic updates' local store,
-// `QueryOptions`, and `bunvex/nextjs`'s `fetchQuery` / `fetchMutation` / `fetchAction` / `preloadQuery`. Checked by
+// `QueryOptions`, and `@bunvex/nextjs`'s `fetchQuery` / `fetchMutation` / `fetchAction` / `preloadQuery`. Checked by
 // `tsc` (`bun run typecheck` compiles this file); `takesFutures` is never run. The runtime test is a placeholder.
 import { expect, test } from "bun:test";
-import type * as bb from "bunvex/browser";
-import * as bn from "bunvex/nextjs";
-import * as br from "bunvex/react";
-import type * as b from "bunvex/server";
+import type * as bb from "@bunvex/client";
+import * as bn from "@bunvex/nextjs";
+import * as br from "@bunvex/react";
+import type * as b from "@bunvex/server";
 import type * as cb from "convex/browser";
 import type * as cr from "convex/react";
 import type * as c from "convex/server";
@@ -69,7 +69,7 @@ async function takesFutures(
     await http.mutation(m, { id: "x" }),
     await http.action(a),
   ];
-  // `bunvex/nextjs`.
+  // `@bunvex/nextjs`.
   const viaNext: [string, null, number] = [
     await bn.fetchQuery(q, { a: 1 }),
     await bn.fetchMutation(m, { id: "x" }),

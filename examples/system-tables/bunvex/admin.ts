@@ -1,4 +1,4 @@
-import { v } from "bunvex/values";
+import { v } from "@bunvex/values";
 import { mutation, query } from "./_generated/server";
 
 /** Every scheduled send, with its state (pending, inProgress, success, failed, canceled): `db.system`. */

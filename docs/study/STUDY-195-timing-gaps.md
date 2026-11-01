@@ -1,7 +1,7 @@
 # STUDY-195 — Two timing gaps: purging a deleted table, and a push's search and vector indexes
-<!-- index: a deleted table's `_tables` row and number kept through document retention; a push's search and vector `_index` rows written and built before it finishes | decided (owner, 2026-10-27): purge once the window passes (DV-580) -->
+<!-- index: a deleted table's `_tables` row and number kept through document retention; a push's search and vector `_index` rows written and built before it finishes | decided (owner, 2026-10-27): purge once the window passes (DV-580); built: (b) #914, (a) #940 -->
 
-- **Status:** decided (owner, 2026-10-27): Q1 as recommended (DV-580). Docs only; (b) is built (#914), (a) is to be built.
+- **Status:** decided (owner, 2026-10-27): Q1 as recommended (DV-580). Docs only; (b) is built (#914), (a) is built (#940).
 - **Convex source read:** get-convex/convex-backend at `precompiled-2026-10-26-04d2f3b`, the oracle's release
   (STUDY-193).
 - **bunvex code read:** `main` at `e84b3b1a` (after #886).

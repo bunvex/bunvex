@@ -1,6 +1,6 @@
 {
   "name": "@bunvex/react-clerk",
-  "version": "0.1.0-alpha.1",
+  "version": "0.1.0-alpha.2",
   "description": "BunvexProviderWithClerk: the React client authenticated with Clerk.",
   "license": "Apache-2.0",
   "type": "module",
@@ -11,11 +11,11 @@
     "@bunvex/react": "workspace:*"
   },
   "peerDependencies": {
-    "react": "^19.3.0"
+    "react": "^19.3.1"
   },
   "devDependencies": {
     "@types/react": "^19.3.0",
-    "react": "^19.3.0"
+    "react": "^19.3.1"
   },
   "repository": {
     "type": "git",

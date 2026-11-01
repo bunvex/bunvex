@@ -1,5 +1,5 @@
-import { defineSchema, defineTable } from "bunvex/server";
-import { v } from "bunvex/values";
+import { defineSchema, defineTable } from "@bunvex/server";
+import { v } from "@bunvex/values";
 
 export default defineSchema({
   messages: defineTable({ body: v.string(), user: v.id("users") }),

@@ -141,8 +141,12 @@ largest gap in bunvex's favour, and it raises C2 (module state).
   namespace's. `apiSpec` reads its `componentId` itself. The HTTP routes `run_test_function`, `cancel_job`,
   `cancel_all_jobs` and `delete_component` take a component (DV-391 resolved); `delete_tables` and
   `delete_scheduled_functions_table` still refuse one (`ComponentsNotSupported`: the engine deletes and replaces
-  root tables only). The dashboard (STUDY-149) still always sends `null`: the picker and each screen are the
-  next PRs.
+  root tables only). The **Database screen** has Convex's picker: `listComponents` / `watchComponents` /
+  `inComponent(id)` on the dashboard's contract, "app" then the mounted components then the unmounted ones
+  (marked `*`), the choice in `?component=` (an id the list lacks is the app's), the screen's reads and writes
+  in the component's scope, an unmounted one's data read-only (no writes offered), its system tables and its
+  file and scheduled-run references not shown (those screens are the app's yet), and no inferred document type
+  (`/api/shapes2` refuses a component). Functions, Logs, Schedules, Files and Schema still show the app's only.
 
 ## 5. Export and import
 

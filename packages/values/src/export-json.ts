@@ -14,9 +14,9 @@ import { fromJsonValue, isBytes, type JSONValue } from "./value.ts";
 
 const b64 = toBase64;
 
+// As serde_json writes it (Convex's 1.0.151, checked against it: STUDY-18 §8).
 /**
- * A finite float64 as serde_json writes it (Convex's 1.0.151, checked against it: STUDY-18 §8): shortest
- * round-trip digits, always a float, `e+` before a positive exponent.
+ * A finite float64 as an export writes it: shortest round-trip digits, always a float, `e+` before a positive exponent.
  */
 export function formatExportFloat(n: number): string {
   if (Object.is(n, 0)) return "0.0";

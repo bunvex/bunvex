@@ -18,7 +18,7 @@
     "typecheck": "tsc -p . && tsc -p packages/react && tsc -p packages/react-clerk && tsc -p packages/react-auth0 && tsc -p packages/sync-e2e/react && tsc -p packages/ui && tsc -p packages/dashboard && tsc -p packages/dashboard-source && tsc -p packages/sync-e2e/dashboard && tsc -p apps/dashboard && tsc -p apps/site",
     "lint": "biome ci .",
     "format": "biome check --write .",
-    "check:deps": "bun scripts/check-deps.ts",
+    "check:deps": "bun scripts/check-deps.ts && bun scripts/public-docs.ts",
     "check:docs": "bun scripts/docs.ts",
     "docs": "bun scripts/docs.ts --write",
     "coverage": "bun scripts/coverage.ts",
@@ -36,7 +36,7 @@
     "test:examples:browser": "cd examples/_browser && bun test --timeout 180000 ./*.browser.ts"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.2.0",
+    "@biomejs/biome": "2.6.3",
     "@changesets/cli": "^2.29.0",
     "@hughescr/stryker-bun-runner": "1.5.2",
     "@stryker-mutator/core": "10.0.0",

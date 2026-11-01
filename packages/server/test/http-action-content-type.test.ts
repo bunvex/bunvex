@@ -13,7 +13,7 @@ import type { FunctionLog } from "../src/function-log.ts";
 import { Functions } from "../src/functions.ts";
 import { createServer } from "../src/server.ts";
 
-const SERVER = ["bunvex", "server"].join("/");
+const SERVER = ["@bunvex", "server"].join("/");
 const stops: (() => unknown)[] = [];
 afterEach(async () => {
   for (const s of stops.splice(0).reverse()) await s();

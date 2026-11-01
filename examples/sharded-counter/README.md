@@ -1,7 +1,6 @@
 # Sharded counter: one million checkboxes
 
-A component from npm, the way an app installs one: `@bunvex/sharded-counter`, bunvex's sharded counter (the same API
-as Convex's `@convex-dev/sharded-counter`).
+A component from npm, the way an app installs one: `@bunvex/sharded-counter`, bunvex's sharded counter.
 
 - `bunvex/bunvex.config.ts` mounts it twice: `shardedCounter` and `checkboxCounter`.
 - `bunvex/checkboxes.ts` keeps a million checkboxes as bits, 4,000 to a document, and counts the checked ones in

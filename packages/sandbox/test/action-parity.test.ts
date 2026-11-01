@@ -21,8 +21,8 @@ import { constructedAt } from "./parity-frames.ts";
 provideProcessExecutor(createProcessExecutor);
 process.env.TZ = "UTC";
 
-const SERVER = JSON.stringify(["bunvex", "server"].join("/"));
-const VALUES = JSON.stringify(["bunvex", "values"].join("/"));
+const SERVER = JSON.stringify(["@bunvex", "server"].join("/"));
+const VALUES = JSON.stringify(["@bunvex", "values"].join("/"));
 
 /** The target of the cases' `fetch`es: what each path answers. */
 let target: ReturnType<typeof Bun.serve>;

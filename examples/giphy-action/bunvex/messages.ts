@@ -1,4 +1,4 @@
-import { BunvexError, v } from "bunvex/values";
+import { BunvexError, v } from "@bunvex/values";
 import { internal } from "./_generated/api";
 import { action, internalMutation, mutation, query } from "./_generated/server";
 

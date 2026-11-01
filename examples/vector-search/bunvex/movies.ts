@@ -1,4 +1,4 @@
-import { v } from "bunvex/values";
+import { v } from "@bunvex/values";
 import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 import { action, internalAction, internalMutation, mutation, query } from "./_generated/server";

@@ -1,5 +1,5 @@
-import { defineSchema, defineTable } from "bunvex/server";
-import { v } from "bunvex/values";
+import { defineSchema, defineTable } from "@bunvex/server";
+import { v } from "@bunvex/values";
 
 /** The size of an embedding (OpenAI's text-embedding-3-small and ada-002 models). */
 export const DIMENSIONS = 1536;

@@ -1,20 +1,18 @@
 #!/usr/bin/env bash
-# Disposable, NATIVE (no Docker VM) Postgres 17, MySQL 8.4 and MongoDB 8.0 for bunvex on macOS.
+# Disposable, NATIVE (no Docker VM) Postgres 17 and MySQL 8.4 for bunvex on macOS.
 # Data lives under .data/stores; nothing is installed as a service.
 #   scripts/mac-stores.sh start|stop|urls
-# Requires: brew install postgresql@17 mysql@8.4; MongoDB binaries in .data/mongo-bin (official tarball).
+# Requires: brew install postgresql@17 mysql@8.4.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 D="$PWD/.data/stores"; mkdir -p "$D"
 PG=/opt/homebrew/opt/postgresql@17/bin
 MY=/opt/homebrew/opt/mysql@8.4/bin
-MO="$PWD/.data/mongo-bin/bin"
 export LC_ALL="${LC_ALL:-en_US.UTF-8}"
 
 urls() {
   echo "PG_URL=postgres://$USER@127.0.0.1:5434/bunvex"
   echo "MYSQL_URL=mysql://root@127.0.0.1:3307/bunvex"
-  echo "MONGO_URL=mongodb://127.0.0.1:27018/bunvex"
   echo "DO_NOT_REQUIRE_SSL=1   # these stores have no verifiable TLS; bunvex requires it by default"
 }
 
@@ -34,20 +32,12 @@ start() {
   "$MY/mysql" -h127.0.0.1 -P3307 -uroot -e "create database if not exists bunvex"
   echo "mysql ok (3307)"
 
-  # MongoDB (journaled by default)
-  mkdir -p "$D/mongo"
-  # A single-node replica set: bunvex's MongoDB driver needs transactions (a standalone server has none).
-  "$MO/mongod" --dbpath "$D/mongo" --port 27018 --bind_ip 127.0.0.1 --wiredTigerCacheSizeGB 1 --replSet rs0 \
-    --logpath "$D/mongo.log" --pidfilepath "$D/mongo.pid" --fork >/dev/null
-  (cd bench && bun -e 'const {MongoClient}=require("mongodb");const c=new MongoClient("mongodb://127.0.0.1:27018/?directConnection=true");await c.connect();const a=c.db().admin();if(!(await a.command({hello:1})).setName)await a.command({replSetInitiate:{_id:"rs0",members:[{_id:0,host:"127.0.0.1:27018"}]}});for(let i=0;i<60&&!(await a.command({hello:1})).isWritablePrimary;i++)await Bun.sleep(500);await c.close()')
-  echo "mongodb ok (27018, replica set rs0)"
 }
 
 stop() {
   "$PG/pg_ctl" -D "$D/pg" -m fast stop >/dev/null 2>&1 && echo "postgres stopped"
   [ -f "$D/mysql.pid" ] && kill "$(cat "$D/mysql.pid")" 2>/dev/null && echo "mysql stopped"
-  [ -f "$D/mongo.pid" ] && kill "$(cat "$D/mongo.pid")" 2>/dev/null && echo "mongodb stopped"
   true
 }
 
-case "${1:-}" in start) start ;; stop) stop ;; urls) urls ;; *) sed -n 2,6p "$0"; exit 1 ;; esac
+case "${1:-}" in start) start ;; stop) stop ;; urls) urls ;; *) sed -n 2,5p "$0"; exit 1 ;; esac

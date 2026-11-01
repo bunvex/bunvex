@@ -616,7 +616,15 @@ class ChildCall extends ChildCallBase implements DbHost {
   private ctx(kind: "query" | "mutation") {
     const tx = new Tx(this, this.m.db);
     const db = this.m.db === "reader" ? readerOf(tx) : tx;
-    const auth = { getUserIdentity: async () => this.op("auth.getUserIdentity", []) };
+    const auth = {
+      getUserIdentity: async () => this.op("auth.getUserIdentity", []),
+      // Only a mutation's: the host signs (DV-579). The options cross as JSON, as Convex's client sends its
+      // syscall's arguments (an undefined claim dropped, a non-finite number as null).
+      ...(kind === "mutation" && {
+        signJwt: async (options: unknown) =>
+          this.op("auth.signJwt", [JSON.parse(JSON.stringify({ ...(options as object) }))]),
+      }),
+    };
     const methods = (prefix: string, names: string[]) =>
       Object.fromEntries(names.map((n) => [n, (...args: unknown[]) => this.op(prefix, [n, ...args])]));
     const nested =

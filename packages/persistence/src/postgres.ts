@@ -840,6 +840,33 @@ export class PostgresPersistence implements Persistence, Lease, ReadOnlyFlag, Re
   }
 
   /**
+   * PERSIST-01 C18: up to `limit` rows of the tablet's indexes, else Convex's `delete_tablet_chunk` (every version of
+   * up to `limit` of its documents), behind the lease check.
+   */
+  async purgeTablet(table: TabletId, indexes: IndexId[], limit: number) {
+    if (indexes.length) {
+      const n = await this.fenced(
+        `delete from indexes i using (
+           select index_id, key_sha256, ts from indexes
+           where index_id in (select decode(x, 'hex') from jsonb_array_elements_text(($1::text::jsonb)->0) x)
+           limit (($1::text::jsonb)->>1)::bigint
+         ) s
+         where i.index_id = s.index_id and i.key_sha256 = s.key_sha256 and i.ts = s.ts`,
+        [indexes.map(cachedIdHex), limit],
+      );
+      if (n) return n;
+    }
+    return this.fenced(
+      `delete from documents d
+       where d.table_id = decode(($1::text::jsonb)->>0, 'hex') and d.id in (
+         select id from documents where table_id = decode(($1::text::jsonb)->>0, 'hex')
+         limit (($1::text::jsonb)->>1)::bigint
+       )`,
+      [idHex(table), limit],
+    );
+  }
+
+  /**
    * PERSIST-01 C17: index rows at their own ts, replacing a row of the same key and ts (Convex's
    * `insert_overwrite_index`), in statements of at most 1 024 rows behind the lease check. Idempotent.
    */

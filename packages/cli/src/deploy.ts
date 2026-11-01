@@ -13,7 +13,6 @@ import { argumentError, invalidChoice, missingArgument, optionsIn, tooManyArgume
 import { BundleError, bundleFunctions, type ModuleConfig } from "./bundle.ts";
 import {
   type CodegenConfig,
-  packagesOf,
   printTypecheckFailure,
   runCodegen,
   type TypecheckMode,
@@ -193,7 +192,7 @@ export function typescriptCompilerOf(cwd: string): TypescriptCompiler {
 export function codegenConfig(cwd: string): CodegenConfig {
   const config = readProjectConfig(cwd);
   const fileType = config.codegen?.fileType ?? "js/dts";
-  return { fileType, packages: packagesOf(cwd), commonjs: config.generateCommonJSApi === true };
+  return { fileType, commonjs: config.generateCommonJSApi === true };
 }
 
 const sha256 = (m: ModuleConfig) =>

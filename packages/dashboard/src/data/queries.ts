@@ -61,6 +61,23 @@ export const schemaQuery = ({ source, scope }: QueryScope) =>
     refetchInterval: (q) => (q.state.data?.validation?.state === "validating" ? 2_000 : false),
   });
 
+/** The installed components (STUDY-152 §4), the app left out; none for a source without them. */
+export const componentsQuery = ({ source, scope }: QueryScope) =>
+  queryOptions({
+    queryKey: [...dashboardKeys.all(scope), "components"] as const,
+    queryFn: ({ signal }) => source.listComponents?.({ signal }) ?? Promise.resolve([]),
+  });
+
+/**
+ * The scope of component `id`'s Data screen (Convex's selected component): the source in its namespace, under keys
+ * of its own. The app's scope for none, an id the list does not have (Convex drops it from the URL), or a source
+ * without components.
+ */
+export function componentScope(scope: QueryScope, components: readonly { id: string }[], id: string | undefined) {
+  if (id === undefined || !scope.source.inComponent || !components.some((c) => c.id === id)) return scope;
+  return { source: scope.source.inComponent(id), scope: `${scope.scope}\u0000component:${id}` };
+}
+
 export const tablesQuery = ({ source, scope }: QueryScope) =>
   queryOptions({
     queryKey: dashboardKeys.tables(scope),

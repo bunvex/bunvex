@@ -1,4 +1,4 @@
-import { preloadQuery } from "bunvex/nextjs";
+import { preloadQuery } from "@bunvex/nextjs";
 import Link from "next/link";
 import { api } from "../bunvex/_generated/api";
 import { Counter } from "./Counter";

@@ -1,6 +1,6 @@
 # @bunvex/helpers
 
-The port of [convex-helpers](https://github.com/get-convex/convex-helpers) to bunvex (STUDY-181): the same
+The port of [convex-helpers](https://github.com/get-convex/convex-helpers) to bunvex: the same
 exports, signatures, behaviour and messages, written for bunvex. An app moves by renaming `convex-helpers` to
 `@bunvex/helpers` in its imports; the subpaths are the same.
 
@@ -82,7 +82,7 @@ const page = await mergedStream(authors.map(byAuthor), ["_creationTime"])
   .paginate({ ...paginationOpts, maximumRowsRead: 1000 });
 ```
 
-A stream's cursors are convex-helpers' own, byte for byte (STUDY-181 H-2): the value JSON of an index key, `undefined`
+A stream's cursors are convex-helpers' own, byte for byte: the value JSON of an index key, `undefined`
 as `"undefined"`, and `"[]"` at the end. A cursor stored by an app or a component on Convex keeps working.
 
 ```ts
@@ -107,9 +107,9 @@ const result = await paginator(ctx.db, schema)
 `getPage` returns each document's raw index key (`indexKeys`), not a cursor; it reads one row past its limit to set
 `hasMore`. `PageRequest.indexFields` is accepted and not read, as upstream: a named index needs `schema`.
 
-That completes part 1 (STUDY-181). The other parts of convex-helpers come later (STUDY-158 §3.4).
+The other parts of convex-helpers come later.
 
-Where it differs from convex-helpers (rule 5, DV-544): a validator's `isConvexValidator` is bunvex's
+Where it differs from convex-helpers: a validator's `isConvexValidator` is bunvex's
 `isValidator`, and `vRequired` refuses an unknown kind with "Unknown validator type: ". `server/stream` uses
 `@bunvex/values`' `toJsonValue` / `fromJsonValue` where upstream uses `convexToJson` / `jsonToConvex`: the same
 encoding.
@@ -118,7 +118,7 @@ A custom function's handler sees the same `ctx` as upstream's, built differently
 each of its getters, where this keeps them getters, so a mutation's `ctx.rooms` is still built only on first use.
 Triggers merge `ctx` the same way.
 
-Triggers keep their locks and queue per transaction, where convex-helpers keeps them in module variables (DV-545). On
+Triggers keep their locks and queue per transaction, where convex-helpers keeps them in module variables. On
 Convex a request evaluates its modules afresh, so the two are the same within a request; bunvex evaluates them once
 per code version, where module variables would make mutations running at the same time wait on each other's writes to
 tables with triggers.

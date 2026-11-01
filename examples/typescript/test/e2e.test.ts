@@ -1,4 +1,4 @@
-// The TypeScript example end to end (STUDY-90): the schema types the functions and the client; deployed with
+// The TypeScript example end to end: the schema types the functions and the client; deployed with
 // the typecheck on, used through the public client, and its front end typechecked against the generated types.
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { resolve } from "node:path";

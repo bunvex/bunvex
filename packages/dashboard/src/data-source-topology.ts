@@ -87,7 +87,7 @@ export type TopologyNode = {
 };
 
 /** `other`: a driver of another package, which the deployment cannot name. */
-export type StoreDriver = "memory" | "sqlite" | "postgres" | "mysql" | "mongodb" | "other";
+export type StoreDriver = "memory" | "sqlite" | "postgres" | "mysql" | "other";
 
 export type TopologyStore = {
   driver: StoreDriver;

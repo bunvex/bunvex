@@ -1,10 +1,10 @@
-// The shapes of the names STUDY-180 brought to `bunvex/server` and `bunvex/values`, against Convex's own types from
+// The shapes of the names STUDY-180 brought to `@bunvex/server` and `@bunvex/values`, against Convex's own types from
 // the installed `convex` 1.48.0: an app's value of one is a value of the other (assignable both ways), checked by
 // `tsc` (`bun run typecheck` compiles this file). Where bunvex's type accepts more, only Convex's → bunvex's is
 // checked, and the comment says why. The runtime test compares the two runtime values STUDY-180 added.
 import { expect, test } from "bun:test";
-import * as b from "bunvex/server";
-import * as bv from "bunvex/values";
+import * as b from "@bunvex/server";
+import * as bv from "@bunvex/values";
 import type * as c from "convex/server";
 import { SearchFilter as ConvexSearchFilter } from "convex/server";
 import * as cv from "convex/values";
@@ -163,7 +163,7 @@ check<Equal<keyof b.GenericSchema, keyof c.GenericSchema>>(true);
 check<Assignable<b.GenericSchema, Record<string, b.TableDefinition>>>(true);
 check<Assignable<Record<string, b.TableDefinition>, b.GenericSchema>>(true);
 
-// `bunvex/values`.
+// `@bunvex/values`.
 check<Equal<bv.NumericValue, cv.NumericValue>>(true);
 check<Mutual<bv.ObjectFieldType, cv.ObjectFieldType>>(true);
 check<Mutual<bv.RecordKeyValidatorJSON, cv.RecordKeyValidatorJSON>>(true);

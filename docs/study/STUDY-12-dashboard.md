@@ -255,7 +255,7 @@ columns, add documents).
 | D4 | Changed data flashes **blue** (our `--info`), not yellow | blue already means "live" in bunvex; yellow reads as our `--warning` | **decided** (UI-01 §12.5.4) |
 | D5 | Changes compared by **row id**, not by position; a row counts as new when it arrives between or above rows already shown, not when `_creationTime` is within 1 s of the viewer's clock | scrolling and paging never flash; no dependence on a skewed clock | **decided: keep** (30 Sep 2026) |
 | D6 | With reduced motion, a steady tint for the same time instead of no flash; a polite screen-reader announcement ("2 documents changed"), at most every 5 s | accessibility | **decided: keep** (30 Sep 2026) |
-| D7 | The filter lives in one `filter` param: base64url of bunvex's `FilterExpression` (`index.eq` + `range`, `clauses`, `order`); Convex's `filters` param is base64 of its own shape (`indexEq`/`indexRange` clauses, a search-index variant) | our contract's shape; search indexes do not exist yet | **decided: keep** (30 Sep 2026) |
+| D7 | The filter lives in one `filter` param: base64url of bunvex's `FilterExpression` (`index.eq` + `range`, or `search`, then `clauses` and `order`); Convex's `filters` param is base64 of its own shape (`indexEq`/`indexRange` clauses, a search-index variant) | our contract's shape; no app observes it, only a link copied from one dashboard to the other | **decided: keep** (30 Sep 2026); **kept** (1 Nov 2026), after search indexes reached the filter (`SearchFilter`) |
 | D8 | A link to a document is `?doc=<id>` (opens the side panel); Convex links a filter `_id eq <id>` | the document opens beside the list instead of replacing it | **decided: keep** (30 Sep 2026) |
 | D9 | ~~Values typed in a syntax of our own (`42`, `"text"`, `42n`, a bare word is text)~~ | — | **decided: match Convex** (30 Sep 2026): values are JavaScript literals (`{ name: "Ada", credits: 10n }`, `Bytes("…")`, `undefined` removes a field), edited in a Monaco editor where a value can be long — filter values, cells with objects or arrays, the whole document, adding documents. No longer a divergence. |
 | D10 | Columns are reordered by **dragging a header**, as Convex (dnd-kit there, pointer events here), **and** from a **Columns** panel (keyboard-first) | the panel is the keyboard and screen-reader way | **decided** (30 Sep 2026): both — dragging added (UI-01 §17.3), the panel kept |
@@ -365,7 +365,7 @@ The contract already has `listFunctions` (path, kind, visibility), `listLogs` (n
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| L1 | Functions has no Statistics tab | the server has no app-metrics API yet (parity §20); like D12 | **closed on the mock** (30 Sep 2026): the Statistics tab is built from the contract's metrics (§12, UI-01 §18.2) |
+| L1 | Functions has no Statistics tab | the server has no app-metrics API yet (parity §20); like D12 | **closed** (30 Sep 2026 on the mock; on the server's app-metrics since STUDY-149): the Statistics tab is built from the contract's metrics (§12, UI-01 §18.2), the same charts as Convex's `PerformanceGraphs.tsx` (DV-25 resolved, 27 Oct 2026) |
 | L2 | Log filters on the client over the loaded list | — (this is Convex's way) | **decided** (29 Sep 2026): match Convex |
 | L3 | An optional `runFunction` in the contract and a Run panel | — (Convex has the runner) | **decided** (29 Sep 2026): build it |
 | L4 | Older logs load at the end of the list (`listLogs` pages); Convex shows only what its stream's ring buffer holds | the contract pages history; a server with a longer history can show it | **decided** (30 Sep 2026): keep the paging |
@@ -581,7 +581,7 @@ functions in `npm-packages/system-udfs/convex/_system/frontend/`, the system tab
 | # | bunvex | why | status |
 |---|---|---|---|
 | S1 | Scheduled functions and cron runs refresh on a `watch…` signal (refetch), not a reactive query | the same approach as the documents (D3) | follows D3 (decided) |
-| S2 | No component picker | bunvex has no components yet | follow-up |
+| S2 | No component picker | bunvex has no components yet | built for the Database screen (STUDY-152 §4, 27 Oct 2026); the other screens follow |
 | F1 | A preview for **text** files too (Convex previews images only) | proposed, **not built**: it would be a divergence | **decided** (30 Sep 2026): images only, as Convex |
 | H1 | The author of an event is the credential ("admin key"), not a team member | a self-hosted deployment has no team members; the audit entry's `member_id` is null there | Decided (owner, 2026-10-01): keep bunvex's (DV-72) |
 | H2 | Events are recorded by the source (the mock records the dashboard's writes, cancellations, file and environment-variable changes); pushes and index builds appear once the server records them | the contract only reads the log | follow-up (server) |

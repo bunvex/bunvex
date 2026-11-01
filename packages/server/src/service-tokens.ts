@@ -4,12 +4,14 @@
 // way to mint its token, and Convex's answers `AiGatewayUnavailable`. bunvex answers it to both functions (Convex
 // still hands out the cloud gateway's URL from `getServiceUrl`: DV-491).
 
-/** The services a token or URL can be asked for (Convex's `ServiceName`). */
+// Convex's `ServiceName`.
+/** The services a token or URL can be asked for. */
 export type ServiceName = "ai-gateway";
 
 let actionRunning: () => boolean = () => false;
 
-/** Set by the server: whether an action is running (where Convex's syscalls exist). */
+// Where Convex's syscalls exist.
+/** Set by the server: whether an action is running. */
 export function setServiceCallContext(running: () => boolean) {
   actionRunning = running;
 }
@@ -32,12 +34,14 @@ async function serviceCall(fn: string, syscall: string, service: unknown): Promi
   throw new AiGatewayUnavailableError(fn);
 }
 
-/** A token for `service`, to send as `Authorization: Bearer <token>` (Convex's); unavailable when self-hosted. */
+// Convex's.
+/** A token for `service`, to send as `Authorization: Bearer <token>`; unavailable when self-hosted. */
 export function getServiceToken(service: ServiceName): Promise<string> {
   return serviceCall("getServiceToken", "1.0/createServiceToken", service);
 }
 
-/** The base URL of `service` (Convex's); unavailable when self-hosted (DV-491). */
+// Convex's; unavailable when self-hosted: DV-491.
+/** The base URL of `service`; unavailable when self-hosted. */
 export function getServiceUrl(service: ServiceName): Promise<string> {
   return serviceCall("getServiceUrl", "1.0/getServiceUrl", service);
 }

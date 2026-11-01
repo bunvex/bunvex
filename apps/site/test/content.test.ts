@@ -146,11 +146,11 @@ describe("content", () => {
     }
   });
 
-  test("the samples import only what an app imports: bunvex/* and its own generated code", () => {
+  test("the samples import only what an app imports: @bunvex/* and its own generated code", () => {
     const modules = FILES.files.flatMap((f) => [...f.code.matchAll(/from "([^"]+)"/g)].map((m) => m[1]));
     expect(modules.length).toBeGreaterThan(0);
     for (const m of modules)
-      expect(m).toMatch(/^(bunvex\/(server|values|react)|\.\/_generated\/server|\.\.\/bunvex\/_generated\/api)$/);
+      expect(m).toMatch(/^(@bunvex\/(server|values|react)|\.\/_generated\/server|\.\.\/bunvex\/_generated\/api)$/);
   });
 
   test("every install command is one the READMEs give", () => {
@@ -158,10 +158,8 @@ describe("content", () => {
     for (const i of INSTALL) for (const line of i.lines) expect(read(where[i.id])).toContain(line);
   });
 
-  test("the drivers are the five the README lists", () => {
-    expect(DRIVERS.map((d): string => d.name).sort()).toEqual(
-      ["MongoDB", "MySQL", "Postgres", "SQLite", "memory + log"].sort(),
-    );
+  test("the drivers are the four the README lists", () => {
+    expect(DRIVERS.map((d): string => d.name).sort()).toEqual(["MySQL", "Postgres", "SQLite", "memory + log"].sort());
     expect(SHIP.map((s) => s.command)).toContain("bunvex dev");
   });
 

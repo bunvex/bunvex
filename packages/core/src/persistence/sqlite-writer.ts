@@ -9,7 +9,7 @@
 // sent as one character per byte.
 import type { Database, Statement } from "bun:sqlite";
 import { internalIdBytes } from "../internal-id.ts";
-import type { DocPrune, DocWrite, IndexEntryAt, IndexPrune, IndexWrite } from "./index.ts";
+import type { DocPrune, DocWrite, IndexEntryAt, IndexId, IndexPrune, IndexWrite, TabletId } from "./index.ts";
 
 /** A tablet's or an index's bytes, by id: few distinct ones, bound on every statement. */
 const idBytesCache = new Map<string, Uint8Array>();
@@ -36,6 +36,8 @@ export const WriteOp = {
   PruneIndexes: "I",
   /** Retention's deletes of document versions (PERSIST-01 C13); answers how many rows went. */
   PruneDocuments: "D",
+  /** A deleted tablet's purge (PERSIST-01 C18): its index rows, else its documents; answers how many rows went. */
+  PurgeTablet: "P",
   /** A persistence global (PERSIST-01 C14): its key, then its JSON text. */
   Global: "S",
   /** The read-only flag: `1` sets it, `0` clears it. */
@@ -182,6 +184,14 @@ export function encodeDocumentPrunes(entries: DocPrune[]): string {
   return w.take();
 }
 
+export function encodeTabletPurge(table: TabletId, indexes: IndexId[], limit: number): string {
+  const w = new WireWriter();
+  w.str(table);
+  w.num(limit);
+  for (const i of indexes) w.str(i);
+  return w.take();
+}
+
 export function encodeGlobalWrite(key: string, json: string): string {
   const w = new WireWriter();
   w.str(key);
@@ -216,6 +226,8 @@ export class SqliteWriter {
   private putIdx: Statement;
   private pruneIdx: Statement;
   private pruneDoc: Statement;
+  private purgeIdx: Statement;
+  private purgeDoc: Statement;
   private putGlobal: Statement;
 
   constructor(private db: Database) {
@@ -226,6 +238,13 @@ export class SqliteWriter {
     this.putIdx = this.prepare(`insert or replace into indexes values (?, ?, ?, ?, ?, ?)`);
     this.pruneIdx = this.prepare(`delete from indexes where index_id = ? and ts <= ? and key = ?`);
     this.pruneDoc = this.prepare(`delete from documents where table_id = ? and id = ? and ts <= ?`);
+    this.purgeIdx = this.prepare(
+      `delete from indexes where (index_id, key, ts) in (select index_id, key, ts from indexes where index_id = ? limit ?)`,
+    );
+    // Convex's `DELETE_TABLE_DOCUMENTS`: every version of up to `limit` of the tablet's documents.
+    this.purgeDoc = this.prepare(
+      `delete from documents where table_id = ? and id in (select id from documents where table_id = ? limit ?)`,
+    );
     this.putGlobal = this.prepare(`insert or replace into persistence_globals values (?, ?)`);
   }
 
@@ -282,6 +301,15 @@ export class SqliteWriter {
             n += this.pruneDoc.run(cachedBytes(table), internalIdBytes(id), r.big()).changes;
           }
           return n;
+        });
+      case WriteOp.PurgeTablet:
+        return this.tx(() => {
+          const table = cachedBytes(r.str());
+          const limit = Number(r.big());
+          let n = 0;
+          while (!r.done && n < limit) n += this.purgeIdx.run(cachedBytes(r.str()), limit - n).changes;
+          if (n) return n;
+          return this.purgeDoc.run(table, table, limit).changes;
         });
       case WriteOp.Global: {
         const key = r.str();

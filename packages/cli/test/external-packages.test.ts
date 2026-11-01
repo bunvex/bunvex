@@ -21,7 +21,7 @@ const SECRET = "ef".repeat(32);
 const NAME = "external-packages-test";
 const KEY = issueAdminKey({ instanceName: NAME, cipherKey: adminKeyCipherKey(SECRET) });
 // The app's imports, spelled so the dependency checker does not take them for this test's own.
-const SERVER = JSON.stringify(["bunvex", "server"].join("/"));
+const SERVER = JSON.stringify(["@bunvex", "server"].join("/"));
 
 const stops: (() => unknown)[] = [];
 const dirs: string[] = [];
@@ -159,7 +159,7 @@ describe("what the CLI leaves external (Convex's bundler/external.ts)", () => {
       "bunvex/b.ts": NODE_FILE(`import { y } from "tiny-other";`, "y"),
     };
     const dir = project(files, [ASSET("hi"), PURE, OTHER], {
-      dependencies: { bunvex: "*", "tiny-asset": "1.2.3" },
+      dependencies: { "@bunvex/server": "*", "tiny-asset": "1.2.3" },
       devDependencies: { "tiny-pure": "^2.0.0" },
       // A local version is bundled, as Convex's.
       optionalDependencies: { "tiny-other": "file:./vendor/tiny-other" },
@@ -283,7 +283,7 @@ export const bin = action(async () => probe());`,
     "bunvex/plain.ts": `import { query } from ${SERVER}; export const ping = query(async () => "pong");`,
   };
   const PACKAGE_JSON = {
-    dependencies: { bunvex: "*", "tiny-asset": "1.2.3", "tiny-bin": "^1.0.0", "tiny-env": "1.0.0" },
+    dependencies: { "@bunvex/server": "*", "tiny-asset": "1.2.3", "tiny-bin": "^1.0.0", "tiny-env": "1.0.0" },
   };
   const INSTALLED = [ASSET("hello from tiny-asset"), BIN, ENV];
 

@@ -1,9 +1,9 @@
-// The Clerk example end to end (STUDY-90). Clerk is replaced by a local OpenID Connect issuer (discovery and
+// The Clerk example end to end. Clerk is replaced by a local OpenID Connect issuer (discovery and
 // JWKS over HTTP, tokens signed here) that the deployment trusts through `auth.config.ts`; the tokens are what
 // Clerk's "bunvex" JWT template signs: `aud: "bunvex"`, the user's id as `sub`, and their name.
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { resolve } from "node:path";
-import { BunvexHttpClient } from "bunvex/browser";
+import { BunvexHttpClient } from "@bunvex/client";
 import { build, type Deployment, deploy, until } from "bunvex-examples-harness";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import { api } from "../bunvex/_generated/api.js";

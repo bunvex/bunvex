@@ -59,6 +59,20 @@ function echo(req: Request, limit: number): Response {
   );
 }
 
+/**
+ * `GET /.well-known/jwks.json` (STUDY-192 §3.3, Convex's `deployment_jwks`): the public keys that verify
+ * `ctx.auth.signJwt`'s tokens, cacheable for `maxAgeSeconds` (`DEPLOYMENT_JWKS_MAX_AGE_SECONDS`, 300), with no
+ * authentication. `null` for another path.
+ */
+export function jwksRoute(req: Request, pathname: string, jwks: () => unknown, maxAgeSeconds: number): Response | null {
+  if (pathname !== "/.well-known/jwks.json") return null;
+  if (req.method !== "GET" && req.method !== "HEAD") return methodNotAllowed("GET,HEAD");
+  // axum's `Json`: `content-type: application/json`, no charset.
+  return new Response(JSON.stringify(jwks()), {
+    headers: { "content-type": "application/json", "cache-control": `public, max-age=${maxAgeSeconds}` },
+  });
+}
+
 /** The health routes, or `null` for another path. */
 export function healthRoute(
   req: Request,

@@ -2,7 +2,7 @@
 // Prints the best req/s of the VU levels, the same shape as the Mac and VPS tables.
 //   bun bench/load/run.ts
 // Env: STORES (memory sqlite postgres mysql), VUS (8 32 128), DURATION (10s), SCENARIOS,
-//      PORT, DATA, PG_URL, MYSQL_URL, MONGO_URL, PSQL, MYSQL.
+//      PORT, DATA, PG_URL, MYSQL_URL, PSQL, MYSQL.
 // Postgres and MySQL must already be listening (scripts/mac-stores.sh start). The 4 MiB/s write cap
 // stays off unless MAX_BYTES_WRITTEN_PER_SECOND is set. Fan-out is not this suite.
 import { mkdirSync, readdirSync, rmSync } from "node:fs";
@@ -29,7 +29,6 @@ const urls: Record<string, string | undefined> = {
   sqlite: undefined,
   postgres: process.env.PG_URL ?? `postgres://${process.env.USER ?? "postgres"}@127.0.0.1:5434/bunvex`,
   mysql: process.env.MYSQL_URL ?? "mysql://root@127.0.0.1:3307/bunvex",
-  mongodb: process.env.MONGO_URL ?? "mongodb://127.0.0.1:27018/bunvex",
 };
 
 function databaseName(url: string): string {
@@ -93,16 +92,6 @@ async function freshDatabase(store: string): Promise<void> {
       `DROP DATABASE IF EXISTS ${db}; CREATE DATABASE ${db}`,
     ]);
   }
-  if (store === "mongodb" && url) {
-    await command(
-      [
-        "bun",
-        "-e",
-        "const {MongoClient}=require('mongodb');const c=new MongoClient(process.env.MONGO_URL);await c.connect();await c.db().dropDatabase();await c.close()",
-      ],
-      childEnv({ MONGO_URL: url }),
-    );
-  }
 }
 
 function childEnv(extra: Record<string, string> = {}): Record<string, string> {
@@ -120,7 +109,6 @@ function serverEnv(store: string): Record<string, string> {
   const url = urls[store];
   if (url) env.PERSISTENCE_URL = url;
   else delete env.PERSISTENCE_URL;
-  if (store === "mongodb" && url) env.MONGO_URL = url;
   return env;
 }
 

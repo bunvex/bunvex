@@ -19,6 +19,7 @@ import type { BulkTarget } from "./bulk-edit.tsx";
 import { CellEditor } from "./cell-editor.tsx";
 import { type CellActions, CellMenuItems, cellShortcut, withClause } from "./cell-menu.tsx";
 import { useColumnState } from "./column-settings.tsx";
+import { DatabaseScope, useSelectedComponent } from "./components.tsx";
 import { useCanCreateTable } from "./create-table.tsx";
 import { FilterBar } from "./filter-bar.tsx";
 import { activeCount } from "./filter-model.ts";
@@ -40,7 +41,16 @@ import { cellText, documentFields } from "./values.ts";
  */
 const CONFIRM_DELETE_FROM_CELL_MENU = true;
 
+/** The Database screen, in the scope of the component the URL names (STUDY-152 §4). */
 export function DatabaseScreen(): ReactNode {
+  return (
+    <DatabaseScope>
+      <DatabaseContent />
+    </DatabaseScope>
+  );
+}
+
+function DatabaseContent(): ReactNode {
   const { table } = tableRoute.useParams();
   const scope = useQueryScope();
   const { data: tables } = useSuspenseQuery(tablesQuery(scope));
@@ -140,7 +150,9 @@ function TableView({ info }: { info: TableInfo }) {
   const expr: FilterExpression | undefined = applied ?? undefined;
   const liveError = useLiveTable(table);
   const { data: caps } = useQuery(capabilitiesQuery(scope));
-  const canWrite = caps !== undefined && !caps.readOnly && caps.operations.includes("writeData");
+  // an unmounted component's data is read-only, as Convex's ("Cannot add documents in an unmounted component.")
+  const unmounted = useSelectedComponent()?.state === "unmounted";
+  const canWrite = caps !== undefined && !caps.readOnly && caps.operations.includes("writeData") && !unmounted;
   const { source } = scope;
   // each write needs the grant and the source's method for it
   const can = {
@@ -216,7 +228,7 @@ function TableView({ info }: { info: TableInfo }) {
   const [deleting, setDeleting] = useState<Document | null>(null);
   const goToReference = async (id: string) => {
     const table = await queryClient.fetchQuery(referenceQuery(scope, id)).catch(() => null);
-    const target = table === null ? null : referenceTarget(table, id);
+    const target = table === null ? null : referenceTarget(table, id, search.component);
     if (target) void navigate(target as never);
     else setNotice({ ok: false, message: `No document has the id ${id}.` });
   };
@@ -463,7 +475,7 @@ function TableView({ info }: { info: TableInfo }) {
               onDeleted={() => {
                 // gone: the table list without it, and the first table left (as Convex's, which leaves the table)
                 void queryClient.invalidateQueries({ queryKey: dashboardKeys.tables(scope.scope) });
-                void navigate({ to: "/database" });
+                void navigate({ to: "/database", search: { component: search.component } });
               }}
               panels={(
                 [

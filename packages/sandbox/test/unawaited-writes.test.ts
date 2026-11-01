@@ -14,7 +14,7 @@ import { createProcessExecutor } from "../src/executor.ts";
 
 provideProcessExecutor(createProcessExecutor);
 
-const SERVER = JSON.stringify(["bunvex", "server"].join("/"));
+const SERVER = JSON.stringify(["@bunvex", "server"].join("/"));
 
 const MODULE = `
 import { query, mutation } from ${SERVER};

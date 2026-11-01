@@ -1,4 +1,4 @@
-// The GIF chat end to end (STUDY-90): an action calls Giphy — here a local stand-in, so the test needs no
+// The GIF chat end to end: an action calls Giphy — here a local stand-in, so the test needs no
 // network and no key — and posts the GIF through an internal mutation.
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { resolve } from "node:path";

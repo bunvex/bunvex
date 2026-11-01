@@ -1,4 +1,4 @@
-// The file-storage example end to end (STUDY-90): upload a file to a generated URL, save its id in a message,
+// The file-storage example end to end: upload a file to a generated URL, save its id in a message,
 // and read it back from the URL the list gives.
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { resolve } from "node:path";

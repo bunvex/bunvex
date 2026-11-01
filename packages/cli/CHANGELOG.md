@@ -1,5 +1,126 @@
 # @bunvex/cli
 
+## 0.1.0-alpha.2
+
+### Minor Changes
+
+- d8d7d5b: The CLI links the local dashboard where Convex's CLI links its own (STUDY-149 PR 8, DV-477): `bunvex dev`'s "View the bunvex dashboard at" line, `export` and `import` (Settings → Snapshots), a push's staged indexes and slow schema wait, the auth config's missing variable, and the MCP `status` tool's `dashboardUrl` — while `bunvex dev` serves it for the deployment; otherwise, and on a self-hosted deployment, no link. A push waiting on its schema prints Convex's three progress lines.
+- c3c5b73: New commands, as Convex's (STUDY-146): `bunvex network-test` (DNS, TCP, `/instance_name`, a WebSocket subscription and `/echo` against the deployment, with `--timeout`, `--ip-family` and `--speed-test`), `bunvex docs` (`--no-open`), `bunvex update` (how to update the `bunvex` package) and `bunvex dashboard` / `dash` (Convex's answers for self-hosted and local deployments).
+- fb0c977: `node.externalPackages` (STUDY-148): `bunvex deploy` leaves the listed packages (or every dependency, with `"*"`) as imports in the `"use node"` bundle, as Convex's CLI does, and names them and their installed versions in the push. The deployment installs them with `bun install` (running every install script), records Convex's `_external_deps_packages` row and blob, reuses one of the last ten installs with the same packages, counts them in the package size limit, and answers a failed install with Convex's 400 `InvalidExternalModules`. Node actions import and `require` them from a per-process directory (file modes kept), and they read the deployment's variables first.
+- 3556fd2: `bunvex.json` reads Convex's remaining keys (STUDY-145): `node` and `bundler` are checked with Convex's messages, in its schema's key order. `node.nodeVersion` is sent with the push; the deployment takes "20", "22" and "24", refuses "18" and anything else with Convex's 400 `InvalidConfig` messages, stores it in `_source_packages.nodeVersion`, answers it from `get_config_hashes` and diffs it in the audit log's `node_version_diff` (Node actions still run in Bun). `bundler.includeSourcesContent` keeps the original sources in the pushed source maps; by default they are left out, as Convex's esbuild does. The push sends `functions` as configured.
+- 19159c9: `bunvex dev` and `bunvex deploy` now tell you when npm has a newer `bunvex` (AD-29, STUDY-146 §7). They print one line, from a check that runs beside the command. It never holds the command up: the check has a 1.5 s timeout, asks the registry at most once a day (the answer is cached), and fails silently. It is off when `CI`, `BUNVEX_DISABLE_VERSION_CHECK` or `NO_UPDATE_NOTIFIER` is set, and `BUNVEX_VERSION_API_ORIGIN` points it at another registry.
+
+### Patch Changes
+
+- 4fc70ae: The CLI names the packages apps install, `@bunvex/*` (npm will not allow `bunvex`; STUDY-146 §8). The update notice in `dev` and `deploy` asks the registry for `@bunvex/cli` (`/@bunvex%2Fcli/latest`): it asked for `bunvex`, which does not exist, so it never printed. `bunvex update` prints `bun update --latest '@bunvex/*'`, which upgrades every `@bunvex/*` package together, and links `@bunvex/server`'s changelog. Codegen writes `@bunvex/server` and `@bunvex/values` imports unless the app's `package.json` depends on the repository's private `bunvex` aggregate; a missing `package.json`, or one without bunvex, used to get `bunvex/*`.
+- 308b5a8: Codegen writes a component package's `_generated/` (a definition in TypeScript, linked from a workspace) with the
+  imports its own `package.json` depends on (`@bunvex/*`), not the app's: an app on the `bunvex` aggregate no longer
+  rewrites a component package's committed files (STUDY-183).
+- f88bdec: Matches Convex at `precompiled-2026-10-10-72ce13c` (STUDY-173): a push refused for a missing environment variable
+  prints how to set it, one `bunvex env set NAME <value>` per variable (with `--url <url> --admin-key <admin key>` for a
+  deployment named by its URL), then the dashboard's page when one is served. A variable that `bunvex.config.ts`
+  requires and the deployment lacks is named the same way, and `bunvex dev` pushes again once it is set.
+- 6e24260: The local dashboard `bunvex dev` serves answers only requests addressed to `127.0.0.1:<port>` or `localhost:<port>`, as Convex's CLI does now: any other `Host` gets an empty 403 on every path, not only on `/api/current_deployment`. A page that rebinds its own name to 127.0.0.1 gets nothing from it. `bunvex dashboard serve` still serves any `Host`.
+- 83980eb: `bunvex dev` prints Convex's current lines. A first local run says "Setting up a new project..." and, on a terminal, what `dev` does and "Continue?". The configuration lines list what changed in `.env.local` (and `.gitignore`), followed by where to write functions, where to give feedback and the dashboard. The deployment is named as Convex's `announceDeploymentTarget` does, and durations use Convex's units. A self-hosted `dev` saves the deployment's URLs to `.env.local` (and removes `BUNVEX_DEPLOYMENT`), as Convex's.
+- b6f7506: `bunvex env list --include-values` prints the values explicitly; it conflicts with `--names-only`. When an AI agent runs `bunvex env list` (detected from the variables agents set, or `BUNVEX_AGENT_MODE`), it lists names only, with a note on stderr, unless `--include-values` is passed. The MCP `envList` tool returns names only unless `includeValues` is true, and then each name and value.
+- 0a13600: When a push fails because the auth config reads an environment variable the deployment does not have, the dashboard link `deploy` and `dev` print opens that variable (`settings/environment-variables?var=NAME`), as Convex's. The dashboard's environment variables page adds a row for each `?var=` name.
+- 4cbbb65: `bunvex-local-backend` and its `keygen admin-key` read the instance secret from `INSTANCE_SECRET` when
+  `--instance-secret` is absent (the flag still wins), and `bunvex dev` and the Docker image pass it there instead
+  of on the command line, which every user of the machine can read (DV-525, STUDY-170).
+- 9b68259: `bunvex dev` refuses a local backend version that is not a release's name (`precompiled-YYYY-MM-DD-…`), from `--local-backend-version`, `config.json` or the releases API, with "Invalid local backend version", before the version reaches a cache path or a download URL, as Convex's CLI does.
+- b857256: `bunvex dev`'s local dashboard no longer stops `dev` when another process binds its port between the probe and the bind (two `bunvex dev` starting at once): it moves on to the next free port (STUDY-149).
+- 236352d: `bunvex.json`'s `node.externalPackages` is checked as Convex's `convex.json` (STUDY-148): an array of strings, an element named by its index (`` `node.externalPackages.1` in `bunvex.json`: Expected string, received number ``), before `node.nodeVersion`. The listed packages are still bundled; installing them on the deployment is designed in STUDY-148 and waits on the owner.
+- ad46d5f: Only the scoped `@bunvex/*` packages exist (npm refuses the name `bunvex`): a pushed module's `@bunvex/server` and `@bunvex/values` are linked to the server's own, and `bunvex/server` or `bunvex/values` no longer are; `bunvex codegen` always writes `@bunvex/*` imports.
+- Updated dependencies [eadda52]
+- Updated dependencies [aba2963]
+- Updated dependencies [fbadec1]
+- Updated dependencies [b050aef]
+- Updated dependencies [2088702]
+- Updated dependencies [2247a22]
+- Updated dependencies [0ea0a8d]
+- Updated dependencies [7af9a1f]
+- Updated dependencies [3f01dcf]
+- Updated dependencies [a11b239]
+- Updated dependencies [017ef5b]
+- Updated dependencies [73835d5]
+- Updated dependencies [ddd0d0d]
+- Updated dependencies [f7a2f41]
+- Updated dependencies [4ece712]
+- Updated dependencies [571c5b3]
+- Updated dependencies [e669eef]
+- Updated dependencies [497900c]
+- Updated dependencies [6e651a5]
+- Updated dependencies [2a00ff2]
+- Updated dependencies [61a9ab5]
+- Updated dependencies [77e560f]
+- Updated dependencies [3d41523]
+- Updated dependencies [beca1af]
+- Updated dependencies [f7c6187]
+- Updated dependencies [b735691]
+- Updated dependencies [f710604]
+- Updated dependencies [8700316]
+- Updated dependencies [fe0972c]
+- Updated dependencies [6ea0bb2]
+- Updated dependencies [4677584]
+- Updated dependencies [fc479ca]
+- Updated dependencies [1095634]
+- Updated dependencies [d94ae3d]
+- Updated dependencies [112f669]
+- Updated dependencies [8b023c3]
+- Updated dependencies [0a54a2e]
+- Updated dependencies [32c0219]
+- Updated dependencies [65d1737]
+- Updated dependencies [823507c]
+- Updated dependencies [4cbbb65]
+- Updated dependencies [d2b717a]
+- Updated dependencies [d4946a1]
+- Updated dependencies [7f1b03e]
+- Updated dependencies [b534664]
+- Updated dependencies [7d97595]
+- Updated dependencies [0572b42]
+- Updated dependencies [fb0c977]
+- Updated dependencies [2012ca8]
+- Updated dependencies [67bb45e]
+- Updated dependencies [326e98b]
+- Updated dependencies [87fde6b]
+- Updated dependencies [5600a35]
+- Updated dependencies [60aae8d]
+- Updated dependencies [3556fd2]
+- Updated dependencies [3b82fa1]
+- Updated dependencies [e84cf7a]
+- Updated dependencies [bc36f50]
+- Updated dependencies [c366b9d]
+- Updated dependencies [c279803]
+- Updated dependencies [d1543b1]
+- Updated dependencies [607fd19]
+- Updated dependencies [c3b026b]
+- Updated dependencies [77572e8]
+- Updated dependencies [f6745eb]
+- Updated dependencies [ad46d5f]
+- Updated dependencies [6d4fc1f]
+- Updated dependencies [dac285e]
+- Updated dependencies [1408599]
+- Updated dependencies [88d2e14]
+- Updated dependencies [df255f4]
+- Updated dependencies [8d28fb4]
+- Updated dependencies [f2be031]
+- Updated dependencies [0ec64a4]
+- Updated dependencies [5cb27ae]
+- Updated dependencies [b4880bd]
+- Updated dependencies [07ad661]
+- Updated dependencies [deab272]
+- Updated dependencies [057fd69]
+- Updated dependencies [d2207bc]
+- Updated dependencies [7b1ef5f]
+- Updated dependencies [06c53d7]
+- Updated dependencies [c2ac7a5]
+- Updated dependencies [166c25d]
+  - @bunvex/core@0.1.0-alpha.2
+  - @bunvex/server@0.1.0-alpha.2
+  - @bunvex/values@0.1.0-alpha.2
+  - @bunvex/protocol@0.1.0-alpha.2
+  - @bunvex/client@0.1.0-alpha.2
+
 ## 0.1.0-alpha.1
 
 ### Minor Changes

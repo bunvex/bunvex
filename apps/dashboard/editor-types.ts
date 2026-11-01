@@ -1,5 +1,5 @@
 // The declarations the runner's custom test query is typed against (STUDY-162), as Convex's dashboard bundles the
-// `convex` package's (`dashboard-common/scripts/build-convexServerTypes.py`): `bunvex/server` and `bunvex/values`,
+// `convex` package's (`dashboard-common/scripts/build-convexServerTypes.py`): `@bunvex/server` and `@bunvex/values`,
 // and the `@bunvex/*` packages they import, emitted by one TypeScript program over their sources (as STUDY-160's
 // `scripts/npm-packages.ts` does at release), keyed by the file each would be in an app's `node_modules`.
 // Run at build time by the Vite plugin in vite.config.ts; the browser loads the result as a chunk of its own.
@@ -7,7 +7,7 @@ import { dirname, join, relative } from "node:path";
 import ts from "typescript";
 
 const ROOT = join(import.meta.dirname, "../..");
-/** What `bunvex/server` and `bunvex/values` import, through each other. */
+/** What `@bunvex/server` and `@bunvex/values` import, through each other. */
 const PACKAGES = ["values", "search", "protocol", "core", "auth", "file-storage", "persistence", "server"];
 /** Where a file lives in the editor's file system. */
 export const MODULES = "file:///node_modules";

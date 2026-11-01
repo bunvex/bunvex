@@ -98,7 +98,7 @@ describe("bunvex-local-backend", () => {
       "--db postgres needs the database's URL as the db_spec argument",
     );
     expect(parseLocalBackendFlags(["--instance-secret", SECRET, "--db", "oracle"])).toBe(
-      "error: invalid value 'oracle' for '--db <DB>'\n  [possible values: sqlite, postgres, mysql, mongodb]\n\nFor more information, try '--help'.",
+      "error: invalid value 'oracle' for '--db <DB>'\n  [possible values: sqlite, postgres, mysql]\n\nFor more information, try '--help'.",
     );
     expect(parseLocalBackendFlags(["--instance-secret", SECRET, "--bogus"])).toBe(
       clap(
@@ -129,7 +129,7 @@ describe("bunvex-local-backend", () => {
       ["--function-sandbox", "--function-sandbox <FUNCTION_SANDBOX>"],
     ]) {
       const possible = {
-        "--db <DB>": "sqlite, postgres, mysql, mongodb",
+        "--db <DB>": "sqlite, postgres, mysql",
         "--deny-addresses <DENY_ADDRESSES>": "none, metadata, private",
         "--function-sandbox <FUNCTION_SANDBOX>": "vm, process",
       }[shown!];
@@ -141,7 +141,7 @@ describe("bunvex-local-backend", () => {
     }
     // An empty value is no value for a list of values only.
     expect(parseLocalBackendFlags(["--db="])).toBe(
-      "error: a value is required for '--db <DB>' but none was supplied\n  [possible values: sqlite, postgres, mysql, mongodb]\n\nFor more information, try '--help'.",
+      "error: a value is required for '--db <DB>' but none was supplied\n  [possible values: sqlite, postgres, mysql]\n\nFor more information, try '--help'.",
     );
     expect(parseLocalBackendFlags(["--instance-secret", SECRET, "--local-storage="])).toMatchObject({
       localStorage: "",
@@ -172,7 +172,7 @@ describe("bunvex-local-backend", () => {
       );
     expect(bad(["-i", "127.0.0.1"])).toMatchObject({ hostname: "127.0.0.1" });
     expect(bad(["--db", "postgresql"])).toBe(
-      "error: invalid value 'postgresql' for '--db <DB>'\n  [possible values: sqlite, postgres, mysql, mongodb]\n\n  tip: a similar value exists: 'postgres'\n\nFor more information, try '--help'.",
+      "error: invalid value 'postgresql' for '--db <DB>'\n  [possible values: sqlite, postgres, mysql]\n\n  tip: a similar value exists: 'postgres'\n\nFor more information, try '--help'.",
     );
   });
 
@@ -591,7 +591,6 @@ describe("bunvex-local-backend", () => {
     const ENV = {
       POSTGRES_TIMEOUT_SECONDS: "4",
       MYSQL_TIMEOUT_SECONDS: "3",
-      MONGODB_TIMEOUT_SECONDS: "7",
       PG_CA_FILE: "/pg.pem",
       MYSQL_CA_FILE: "/my.pem",
       // The entry script's choice of driver does not change the flags'.
@@ -601,7 +600,6 @@ describe("bunvex-local-backend", () => {
     test("each driver's timeout and CA file, whatever the environment's PERSISTENCE", () => {
       expect(localBackendDatabaseEnv("postgres", ENV)).toMatchObject({ caFile: "/pg.pem", timeoutMs: 4000 });
       expect(localBackendDatabaseEnv("mysql", ENV)).toMatchObject({ caFile: "/my.pem", timeoutMs: 3000 });
-      expect(localBackendDatabaseEnv("mongodb", ENV)).toMatchObject({ timeoutMs: 7000 });
     });
 
     test("each driver's pool and idle lifetime (STUDY-147 §3.7): Convex's knobs, else POOL, else 128 and 90 s", () => {
@@ -610,7 +608,6 @@ describe("bunvex-local-backend", () => {
         localBackendDatabaseEnv("mysql", { MYSQL_MAX_CONNECTIONS: "20", MYSQL_INACTIVE_CONNECTION_LIFETIME_SECS: "5" }),
       ).toEqual({ pool: 20, idleMs: 5000 });
       expect(localBackendDatabaseEnv("postgres", { POOL: "8" })).toEqual({ pool: 8, idleMs: 90_000 });
-      expect(localBackendDatabaseEnv("mongodb", {})).toEqual({ pool: 16 });
     });
 
     test("unset (or another driver's), the drivers' defaults", () => {

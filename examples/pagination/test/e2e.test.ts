@@ -1,4 +1,4 @@
-// The pagination example end to end (STUDY-90): pages that load on demand and stay live.
+// The pagination example end to end: pages that load on demand and stay live.
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { resolve } from "node:path";
 import { build, type Deployment, deploy, until } from "bunvex-examples-harness";

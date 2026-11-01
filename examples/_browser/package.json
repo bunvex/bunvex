@@ -9,10 +9,10 @@
     ".": "./index.ts"
   },
   "dependencies": {
-    "bunvex": "workspace:*",
     "bunvex-examples-harness": "workspace:*"
   },
   "devDependencies": {
+    "@bunvex/cli": "workspace:*",
     "playwright-core": "1.63.0"
   }
 }

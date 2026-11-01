@@ -1,4 +1,4 @@
-// The argument validation example end to end (STUDY-90): calls the validators refuse never reach the handler
+// The argument validation example end to end: calls the validators refuse never reach the handler
 // (nothing is written), and `returns` is checked.
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { resolve } from "node:path";

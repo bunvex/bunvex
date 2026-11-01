@@ -1,7 +1,6 @@
 // Code generation (STUDY-36): the functions directory's `_generated/` — `api`, `server` and `dataModel` —
 // with the content of Convex's (npm-packages/convex/src/cli/codegen_templates, lib/codegen.ts), importing
-// from `@bunvex/server` and `@bunvex/values`, the packages an app installs (STUDY-40 L7; `bunvex/server` and
-// `bunvex/values` for an app on this repository's private aggregate `bunvex`, as its examples are):
+// from `@bunvex/server` and `@bunvex/values`, the packages an app installs (STUDY-40 L7):
 //
 // - `api.d.ts` builds `api` / `internal` from the modules' types (`ApiFromModules`, `FilterApi`), one
 //   `import type * as …` per module (the bundler's entry points); `api.js` is `anyApi`;
@@ -24,54 +23,17 @@ import { entryPoints } from "./bundle.ts";
 
 export type CodegenConfig = {
   fileType: "ts" | "js/dts";
-  /** Where the generated files import from: `@bunvex/*` (the default), or `bunvex/*` for an app on the private aggregate. */
-  packages?: "bunvex" | "@bunvex";
   /** Also write the CommonJS api (`api_cjs.cjs`, `api_cjs.d.cts`); ignored with `fileType: "ts"`, as Convex. */
   commonjs?: boolean;
 };
 
 const posix = (p: string) => p.split(sep).join("/");
 // The packages the generated files import (spelled at run time: they are text here, not imports).
-const SERVER = ["bunvex", "server"].join("/");
-const VALUES = ["bunvex", "values"].join("/");
+const SERVER = ["@bunvex", "server"].join("/");
+const VALUES = ["@bunvex", "values"].join("/");
 type Imports = { server: string; values: string };
-/** The quoted specifiers the generated files import: `@bunvex/*` unless the app is on the aggregate `bunvex`. */
-export const importsOf = (packages: CodegenConfig["packages"]): Imports =>
-  packages === "bunvex"
-    ? { server: JSON.stringify(SERVER), values: JSON.stringify(VALUES) }
-    : { server: JSON.stringify(`@${SERVER}`), values: JSON.stringify(`@${VALUES}`) };
-
-/**
- * Where the generated files import from (STUDY-40 L7): the scoped `@bunvex/*` packages, which are how an app installs
- * bunvex (npm will not allow `bunvex`), as Convex's always import the package its apps install. Only an app that
- * depends on this repository's private aggregate `bunvex` (its examples and tests) gets `bunvex/*`.
- */
-export function packagesOf(cwd: string): CodegenConfig["packages"] {
-  try {
-    const pkg = JSON.parse(readFileSync(join(cwd, "package.json"), "utf8")) as Record<string, Record<string, unknown>>;
-    const deps = { ...pkg.dependencies, ...pkg.devDependencies, ...pkg.peerDependencies };
-    if ("bunvex" in deps) return "bunvex";
-  } catch {
-    // no package.json
-  }
-  return "@bunvex";
-}
-
-/**
- * Where a component's generated files import from: the packages of the package its directory belongs to (the
- * nearest `package.json` up from it), else `fallback`, the app's. A component of the app's own shares the app's
- * `package.json`; a component package (STUDY-183: `@bunvex/sharded-counter`, its definition in TypeScript, so
- * codegen writes its `_generated/` as Convex's does a linked one) depends on `@bunvex/*` whatever the app installs,
- * and its committed files must not change with the app that deploys it.
- */
-export function componentPackagesOf(dir: string, fallback: CodegenConfig["packages"]): CodegenConfig["packages"] {
-  for (let at = resolve(dir); ; ) {
-    if (existsSync(join(at, "package.json"))) return packagesOf(at);
-    const parent = resolve(at, "..");
-    if (parent === at) return fallback;
-    at = parent;
-  }
-}
+/** The quoted specifiers the generated files import: the `@bunvex/*` packages an app installs (STUDY-40 L7). */
+export const importsOf = (): Imports => ({ server: JSON.stringify(SERVER), values: JSON.stringify(VALUES) });
 
 export function header(description: string) {
   return `/* eslint-disable */
@@ -211,7 +173,6 @@ export function generatedFiles(
   opts: {
     hasSchema: boolean;
     fileType: CodegenConfig["fileType"];
-    packages?: CodegenConfig["packages"];
     commonjs?: boolean;
     /** The entries of `components`, one per child instance (STUDY-156): none when the app mounts none. */
     components?: string[];
@@ -222,7 +183,7 @@ export function generatedFiles(
   api: Record<string, string>;
   apiStub: Record<string, string>;
 } {
-  const q = importsOf(opts.packages);
+  const q = importsOf();
   const ts = opts.fileType === "ts";
   const componentsType = opts.components?.length ? `{\n${opts.components.join("\n")}\n}` : "{}";
   const dataModel = opts.hasSchema ? dataModelWithSchema(q) : dataModelWithoutSchema(q);
@@ -506,7 +467,6 @@ export function runCodegen(
   const files = generatedFiles(opts.initial ? [] : modulePaths(functionsDir), {
     hasSchema,
     fileType: config.fileType,
-    packages: config.packages,
     commonjs: config.commonjs,
     components: opts.components,
   });

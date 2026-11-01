@@ -16,7 +16,7 @@ import {
   internalQueryGeneric,
   mutationGeneric,
   queryGeneric,
-} from "bunvex/server";
+} from "@bunvex/server";
 
 /**
  * Define a query in this bunvex app's public API, readable by clients.
@@ -62,4 +62,4 @@ export const env = process.env;
  * Validators, as `v` from bunvex/values, with `v.id` typed by this app's tables and the system tables: editors
  * complete them, and a misspelled table is a type error (any name, with no schema or `strictTableNameTypes: false`).
  */
-export { v } from "bunvex/values";
+export { v } from "@bunvex/values";

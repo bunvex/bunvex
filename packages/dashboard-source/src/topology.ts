@@ -19,7 +19,7 @@ import type { AdminHttp } from "./admin-http.ts";
 /** How often `watchTopology` asks: the server's sampling period. */
 export const TOPOLOGY_INTERVAL_MS = 5_000;
 
-const DRIVERS: readonly StoreDriver[] = ["memory", "sqlite", "postgres", "mysql", "mongodb", "other"];
+const DRIVERS: readonly StoreDriver[] = ["memory", "sqlite", "postgres", "mysql", "other"];
 
 /** `/api/debug/topology`, as the server sends it (`packages/server/src/topology.ts`). */
 type TopologyJson = {

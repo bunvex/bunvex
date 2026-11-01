@@ -1,7 +1,7 @@
 // The cache canary: a query that reads no time and a row written only every few minutes. It must stay cached
 // between those writes: each of its runs past the warm-up is a miss the soak counts (STUDY-174, #751).
-import { mutationGeneric, queryGeneric } from "bunvex/server";
-import { v } from "bunvex/values";
+import { mutationGeneric, queryGeneric } from "@bunvex/server";
+import { v } from "@bunvex/values";
 
 export const get = queryGeneric({
   args: { key: v.string() },

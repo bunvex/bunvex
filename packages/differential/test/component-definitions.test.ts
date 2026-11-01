@@ -2,8 +2,8 @@
 // Convex's package (`convex/server` 1.48.0) and bunvex's, their `export()` and their errors compared. No backend
 // needed. The one wording bunvex changes is its runtime's name (DV-494).
 import { describe, expect, test } from "bun:test";
-import * as b from "bunvex/server";
-import * as bv from "bunvex/values";
+import * as b from "@bunvex/server";
+import * as bv from "@bunvex/values";
 import * as c from "convex/server";
 import * as cv from "convex/values";
 

@@ -1,4 +1,4 @@
-// The examples' end-to-end helper (STUDY-90). `deploy(dir)` runs the backend as `bunvex-local-backend`
+// The examples' end-to-end helper. `deploy(dir)` runs the backend as `bunvex-local-backend`
 // (the same program the release compiles, run by Bun), takes an admin key from its `keygen`, and runs
 // `bunvex deploy` in the example, as a self-hosted user would; `build(dir)` typechecks and builds its front
 // end. Every step goes through the CLI and the public client, never the server's internals.
@@ -6,11 +6,11 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { BunvexClient, BunvexHttpClient } from "bunvex/browser";
+import { BunvexClient, BunvexHttpClient } from "@bunvex/client";
 
 const ROOT = resolve(import.meta.dir, "../..");
-const BACKEND = join(ROOT, "packages/bunvex/bin/local-backend.ts");
-const CLI = join(ROOT, "packages/bunvex/bin/bunvex.ts");
+const BACKEND = join(ROOT, "apps/local-backend/local-backend.ts");
+const CLI = join(ROOT, "packages/cli/bin/bunvex.ts");
 
 /** Run a command; its output is returned, and thrown with it when it fails. */
 async function run(cmd: string[], cwd: string, env: Record<string, string> = {}): Promise<string> {
@@ -85,7 +85,7 @@ export async function deploy(dir: string, options: { env?: Record<string, string
       join(state, "storage"),
       join(state, "backend.sqlite3"),
     ],
-    // The secret in the environment, as `bunvex dev` gives it (DV-525).
+    // The secret in the environment, as `bunvex dev` gives it.
     { cwd: state, env: { ...process.env, INSTANCE_SECRET: secret }, stdout: "ignore", stderr: "pipe" },
   );
   const clients: BunvexClient[] = [];

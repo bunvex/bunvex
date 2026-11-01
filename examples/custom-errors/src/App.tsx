@@ -1,5 +1,5 @@
-import { useMutation, useQuery } from "bunvex/react";
-import { BunvexError } from "bunvex/values";
+import { useMutation, useQuery } from "@bunvex/react";
+import { BunvexError } from "@bunvex/values";
 import { Component, type FormEvent, type ReactNode, useState } from "react";
 import { api } from "../bunvex/_generated/api";
 

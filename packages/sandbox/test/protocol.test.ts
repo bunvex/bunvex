@@ -144,7 +144,7 @@ describe("a version across the wire", () => {
       {
         path: "m.js",
         environment: "isolate" as const,
-        source: `import { mutation, query, internalAction } from "bunvex/server";
+        source: `import { mutation, query, internalAction } from "@bunvex/server";
           export const z = query(async () => 1);
           export const a = mutation(async () => 1);
           export const b = internalAction(async () => 1);`,
@@ -152,7 +152,7 @@ describe("a version across the wire", () => {
       {
         path: "crons.js",
         environment: "isolate" as const,
-        source: `import { cronJobs } from "bunvex/server";
+        source: `import { cronJobs } from "@bunvex/server";
           const c = cronJobs();
           c.daily("d", { hourUTC: 1, minuteUTC: 2 }, "m:a", { n: 1n, b: new Uint8Array([1, 2]).buffer });
           export default c;`,

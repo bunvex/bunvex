@@ -5,7 +5,7 @@ the same transaction as your mutation, sharded for throughput, or applied in the
 It is bunvex's version of [`@convex-dev/rate-limiter`](https://github.com/get-convex/rate-limiter) and **matches
 `@convex-dev/rate-limiter` 0.4.2**: the same client API, React hook, component name (`rateLimiter`), tables,
 function paths, arguments, results, math and messages, so an app moves by renaming its imports and a Convex export of
-the component's data imports unchanged ([STUDY-197](../../docs/study/STUDY-197-rate-limiter.md)).
+the component's data imports unchanged.
 
 ## Install
 
@@ -93,6 +93,6 @@ register(t); // mounted as `rateLimiter`, with its batch worker
 ## Differences from Convex's package
 
 - Its names are bunvex's: `bunvex.config.js` for `convex.config.js`, `BunvexError` for `ConvexError` (the same
-  `data`, DV-538), and the hook reads `useBunvex` where Convex's reads `useConvex`.
+  `data`), and the hook reads `useBunvex` where Convex's reads `useConvex`.
 - The `./test` entry registers the component with `@bunvex/testing` (no `modules`: the harness pushes the
   component's directory, and its child comes with it).

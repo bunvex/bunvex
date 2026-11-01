@@ -180,7 +180,8 @@ function keyLength(v: Value | undefined): number {
   return n;
 }
 
-/** `valuesToKey(values).length`, without encoding: what Convex meters for an index key read (STUDY-71). */
+// What Convex meters for an index key read (STUDY-71).
+/** `valuesToKey(values).length`, without encoding: the bytes an index key read is charged. */
 export function keyBytesLength(values: (Value | undefined)[]): number {
   let n = 0;
   for (const v of values) n += keyLength(v);
@@ -404,9 +405,10 @@ function readJson(r: Reader): string {
   throw new RangeError(`unknown type tag 0x${tag.toString(16)}`);
 }
 
+// STUDY-133 Q4.
 /**
- * Exactly one value from its sort key, straight to its JSON text (`JSON.stringify(toJsonValue(v))`), without the
- * value in between: MySQL's v1 documents are read this way (STUDY-133 Q4), on every read of one.
+ * Exactly one value from its sort key, straight to its JSON text (`JSON.stringify(toJsonValue(v))`), without the value
+ * in between: MySQL's v1 documents are read this way, on every read of one.
  */
 export function sortKeyToJsonText(key: Uint8Array): string {
   const r = new Reader(key);
@@ -415,10 +417,11 @@ export function sortKeyToJsonText(key: Uint8Array): string {
   return s;
 }
 
+// For the subscriptions inspector (STUDY-131 AD-25).
 /**
- * The values a sort key encodes, read back (the inverse of `valuesToKey`), as far as they are complete:
- * `consumed` is how many bytes they took. What follows (an interval bound's `0xFF`, or a key cut short) is
- * left to the caller. For reading keys back for people (STUDY-131 AD-25), not on any hot path.
+ * The values a sort key encodes, read back (the inverse of `valuesToKey`), as far as they are complete: `consumed` is
+ * how many bytes they took. What follows (an interval bound's `0xFF`, or a key cut short) is left to the caller. For
+ * reading keys back for people, not on any hot path.
  */
 export function keyToValues(key: Uint8Array): { values: (Value | undefined)[]; consumed: number } {
   const r = new Reader(key);
@@ -436,9 +439,10 @@ export function keyToValues(key: Uint8Array): { values: (Value | undefined)[]; c
   return { values, consumed };
 }
 
+// Convex's `ConvexValue::read_sort_key` with nothing left over (STUDY-133 Q4).
 /**
- * Exactly one value from its sort key (Convex's `ConvexValue::read_sort_key` with nothing left over): MySQL's
- * v1 document encoding stores a document as its sort key (STUDY-133 Q4). Throws on anything but one whole value.
+ * Exactly one value from its sort key; throws on anything but one whole value. MySQL's v1 document encoding stores a
+ * document as its sort key.
  */
 export function sortKeyToValue(key: Uint8Array): Value {
   const r = new Reader(key);

@@ -10,7 +10,7 @@ import { provideProcessExecutor } from "@bunvex/server/executor";
 import { v } from "@bunvex/values";
 import { ProcessExecutor } from "../src/executor.ts";
 
-const SERVER = JSON.stringify(["bunvex", "server"].join("/"));
+const SERVER = JSON.stringify(["@bunvex", "server"].join("/"));
 const MODULES = [
   {
     path: "m.js",

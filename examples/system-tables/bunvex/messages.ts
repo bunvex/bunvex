@@ -1,4 +1,4 @@
-import { v } from "bunvex/values";
+import { v } from "@bunvex/values";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { mutation, query } from "./_generated/server";

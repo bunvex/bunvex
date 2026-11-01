@@ -15,7 +15,7 @@
 | Unit | one module, its behaviour and its messages; a fake socket or an in-memory store where needed | `packages/*/test/*.test.ts` | root `bun test` (`bun run check`, CI `check`) |
 | Property | random inputs (fast-check, pinned), an invariant or a reference model; a failure prints its seed and a shrunk counterexample | `packages/*/test/*.property.test.ts` | root `bun test` |
 | Seeded oracle | a seeded random workload checked against a simple model (the linear OCC validator, a sequential replay) | `core/test/occ-validation.test.ts`, `core/test/read-set-serializable.test.ts` | root `bun test` |
-| Conformance | PERSIST-01's K1–K29, the same suite on every driver | `@bunvex/persistence-conformance` | memory and SQLite in `bun test`; Postgres, MySQL and MongoDB in their CI jobs |
+| Conformance | PERSIST-01's K1–K29, the same suite on every driver | `@bunvex/persistence-conformance` | memory and SQLite in `bun test`; Postgres and MySQL in their CI jobs |
 | End to end | a real server and clients over HTTP and WebSocket, compared with an oracle client | `packages/sync-e2e`, the dashboard in Chromium (`bun run e2e`) | `bun test`; the `e2e` CI job |
 | Linearizability | concurrent histories with faults injected, checked for linearizability | track 2's harness (its own spec) | its own job |
 | Mutation | mutate the source, the suite must fail: measures what the tests actually pin | Stryker on the engine's critical files (§7) | weekly, `mutation.yml`; `bun run mutation` |

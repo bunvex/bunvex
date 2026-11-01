@@ -1,11 +1,11 @@
-// The TanStack Query example end to end (STUDY-90). There is no `window` here, so `BunvexQueryClient` takes its
+// The TanStack Query example end to end. There is no `window` here, so `BunvexQueryClient` takes its
 // server path (a Server Component's): prefetches over HTTP, every query of one render at one snapshot. The live
 // path is the functions' own subscription, checked through the client.
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { resolve } from "node:path";
+import { BunvexReactClient } from "@bunvex/react";
 import { BunvexQueryClient, bunvexQuery } from "@bunvex/react-query";
 import { dehydrate, QueryClient } from "@tanstack/react-query";
-import { BunvexReactClient } from "bunvex/react";
 import { build, type Deployment, deploy, until } from "bunvex-examples-harness";
 import { api } from "../bunvex/_generated/api.js";
 

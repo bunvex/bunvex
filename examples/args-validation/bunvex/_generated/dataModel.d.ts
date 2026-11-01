@@ -8,8 +8,8 @@
  * @module
  */
 
-import type { AnyDataModel } from "bunvex/server";
-import type { GenericId } from "bunvex/values";
+import type { AnyDataModel } from "@bunvex/server";
+import type { GenericId } from "@bunvex/values";
 
 /**
  * No `schema.ts` file found!

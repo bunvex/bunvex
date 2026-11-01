@@ -1,6 +1,6 @@
 "use client";
 
-import { BunvexProvider, BunvexReactClient } from "bunvex/react";
+import { BunvexProvider, BunvexReactClient } from "@bunvex/react";
 import { type ReactNode, useState } from "react";
 
 // `bunvex dev` writes the deployment's URL to .env.local as NEXT_PUBLIC_BUNVEX_URL.

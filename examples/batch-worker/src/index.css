@@ -54,3 +54,24 @@ input {
 .fill.green {
   background: #22c55e;
 }
+.requests {
+  list-style: none;
+  padding: 0;
+}
+.requests li {
+  margin: 0.25rem 0;
+}
+.state {
+  border-radius: 4px;
+  font-size: 0.8rem;
+  padding: 0 0.4rem;
+}
+.state.pending {
+  background: #fde68a;
+}
+.state.started {
+  background: #bfdbfe;
+}
+.state.finished {
+  background: #bbf7d0;
+}

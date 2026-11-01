@@ -41,8 +41,8 @@ provideProcessExecutor(() => {
 const SECRET = "be".repeat(32);
 const NAME = "component-bench";
 const KEY = issueAdminKey({ instanceName: NAME, cipherKey: adminKeyCipherKey(SECRET) });
-const SERVER = JSON.stringify(["bunvex", "server"].join("/"));
-const VALUES = JSON.stringify(["bunvex", "values"].join("/"));
+const SERVER = JSON.stringify(["@bunvex", "server"].join("/"));
+const VALUES = JSON.stringify(["@bunvex", "values"].join("/"));
 const mod = (path: string, source: string) => ({ path, source, environment: "isolate" as const });
 const dep = (path: string) => `./_componentDeps/${Buffer.from(path).toString("base64url")}`;
 

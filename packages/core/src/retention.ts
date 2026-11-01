@@ -50,6 +50,8 @@ export type RetentionOptions = {
   documentRatePerSec?: number;
   /** DOCUMENT_RETENTION_BATCH_INTERVAL_SECONDS: how often the document deleter runs. Default 60 s. */
   documentEveryMs?: number;
+  /** DELETE_TABLET_CHUNK_SIZE: rows a deleted table's purge removes per call (PERSIST-01 C18). Default 256. */
+  tabletChunk?: number;
   /** RETENTION_CHECKPOINT_PERIOD_SECS: how often a cursor is persisted. Default 300 s. */
   checkpointEveryMs?: number;
   /**
@@ -93,13 +95,25 @@ export class Retention {
    * `candidate_min_snapshot_ts`), so the index deleter still finds the versions it derives keys from.
    */
   private indexConfirmed = 0n;
-  readonly stats = { indexRowsDeleted: 0, documentRowsDeleted: 0, advances: 0, errors: 0 };
+  readonly stats = { indexRowsDeleted: 0, documentRowsDeleted: 0, tabletRowsDeleted: 0, advances: 0, errors: 0 };
+  /**
+   * Deleted tables waiting for the document window to pass their deletion (Convex's `tablets_to_delete`, STUDY-195
+   * §1): each tablet's deletion ts and the indexes whose rows go with it. Unlike Convex's list, read once at its
+   * start, a table deleted while the server runs is added here, and purged once the window passes (DV-580).
+   */
+  private tablets = new Map<TabletId, { ts: bigint; indexes: string[] }>();
+  /** Told once a tablet is purged, to remove its `_tables` row (Convex's `cleanup_deleted_tablets`). */
+  onTabletPurged: (tablet: TabletId) => Promise<void> = async () => {};
   private stopped = false;
   /** Sleeps in progress: their timer, and how to end them early (on stop). */
   private timers = new Map<LongTimer, () => void>();
   private running = new Set<Promise<unknown>>();
   private lastCheckpoint = { index: 0, document: 0 };
-  private wake: { index: (() => void) | null; document: (() => void) | null } = { index: null, document: null };
+  private wake: { index: (() => void) | null; document: (() => void) | null; tablets: (() => void) | null } = {
+    index: null,
+    document: null,
+    tablets: null,
+  };
 
   constructor(
     private store: Persistence & RetentionStore,
@@ -119,6 +133,7 @@ export class Retention {
       documentRatePerSec: opts.documentRatePerSec ?? knob("DOCUMENT_RETENTION_RATE_LIMIT", 256, "positive"),
       documentEveryMs: opts.documentEveryMs ?? knob("DOCUMENT_RETENTION_BATCH_INTERVAL_SECONDS", 60, "float") * 1000,
       checkpointEveryMs: opts.checkpointEveryMs ?? secondsKnob("RETENTION_CHECKPOINT_PERIOD_SECS", 300),
+      tabletChunk: opts.tabletChunk ?? knob("DELETE_TABLET_CHUNK_SIZE", 256, "positive"),
       maxBackoffMs: opts.maxBackoffMs ?? secondsKnob("RETENTION_DELETE_FREQUENCY", 60),
       background: opts.background ?? true,
     };
@@ -145,6 +160,47 @@ export class Retention {
       () => this.jitter(this.opts.documentEveryMs),
       () => this.deleteDocuments(),
     );
+    this.loop("tablets", null, () => this.purgeTablets());
+  }
+
+  /**
+   * A deleted table to purge once the document window passes `ts`, its deletion (the ts of its `_tables` row's
+   * `deleting` revision): its `indexes`' rows, then its documents (PERSIST-01 C18).
+   */
+  scheduleTabletPurge(tablet: TabletId, ts: bigint, indexes: string[]) {
+    this.tablets.set(tablet, { ts, indexes });
+    this.wake.tablets?.();
+  }
+
+  /** The deleted tables still waiting, by tablet: their deletion ts (tests). */
+  waitingTablets(): Map<TabletId, bigint> {
+    return new Map([...this.tablets].map(([t, v]) => [t, v.ts]));
+  }
+
+  /**
+   * One pass of the purge (Convex's `go_delete_table_documents`): every waiting table deleted below the document
+   * window is purged chunk by chunk at the document deleter's rate, then `onTabletPurged`. Never one inside it.
+   */
+  purgeTablets(): Promise<boolean> {
+    return this.exclusive("tablets", async () => {
+      for (const [tablet, { ts, indexes }] of [...this.tablets]) {
+        if (this.stopped) return false;
+        // N.B. as Convex's: a table deleted inside the retention window is kept.
+        if (ts >= this.minDocumentTs) continue;
+        for (;;) {
+          const t0 = performance.now();
+          const n = await this.store.purgeTablet(tablet, indexes, this.opts.tabletChunk);
+          this.stats.tabletRowsDeleted += n;
+          if (n === 0) break;
+          const wait = (n / this.opts.documentRatePerSec) * 1000 - (performance.now() - t0);
+          if (wait > 0) await this.sleep(wait);
+          if (this.stopped) return false;
+        }
+        await this.onTabletPurged(tablet);
+        this.tablets.delete(tablet);
+      }
+      return false;
+    });
   }
 
   /** Stop the loops and wait for a pass in flight. */
@@ -157,6 +213,7 @@ export class Retention {
     this.timers.clear();
     this.wake.index?.();
     this.wake.document?.();
+    this.wake.tablets?.();
     await Promise.allSettled([...this.running]);
   }
 
@@ -179,7 +236,11 @@ export class Retention {
    * failure, back off from 50 ms doubling up to `maxBackoffMs` (the document deleter: up to `documentEveryMs`, as
    * Convex's). A lost lease or a stopped committer ends it.
    */
-  private loop(name: "advance" | "index" | "document", every: (() => number) | null, pass: () => Promise<boolean>) {
+  private loop(
+    name: "advance" | "index" | "document" | "tablets",
+    every: (() => number) | null,
+    pass: () => Promise<boolean>,
+  ) {
     let backoff = 50;
     const run = async () => {
       while (!this.stopped && !this.committer.stopped) {
@@ -197,7 +258,7 @@ export class Retention {
         }
         if (more) continue; // a pass stopped at its cap: the next one follows at once
         if (every) await this.sleep(every());
-        else await this.waitForWork(name as "index" | "document");
+        else await this.waitForWork(name as "index" | "document" | "tablets");
       }
     };
     const p = run();
@@ -217,7 +278,7 @@ export class Retention {
     });
   }
 
-  private waitForWork(which: "index" | "document") {
+  private waitForWork(which: "index" | "document" | "tablets") {
     return new Promise<void>((ok) => {
       if (this.stopped) return ok();
       this.wake[which] = () => {
@@ -244,13 +305,15 @@ export class Retention {
     if (doc > this.minDocumentTs) {
       await this.store.setGlobal(RETENTION_GLOBALS.minDocumentTs, tsGlobal(doc));
       this.minDocumentTs = doc;
+      // A deleted table may now be past the window.
+      this.wake.tablets?.();
     }
     return false;
   }
 
   /** Passes of one deleter never overlap (a loop's and a direct call's). */
-  private passes = { index: Promise.resolve(false), document: Promise.resolve(false) };
-  private exclusive(which: "index" | "document", pass: () => Promise<boolean>) {
+  private passes = { index: Promise.resolve(false), document: Promise.resolve(false), tablets: Promise.resolve(false) };
+  private exclusive(which: "index" | "document" | "tablets", pass: () => Promise<boolean>) {
     const next = this.passes[which].catch(() => false).then(pass);
     this.passes[which] = next;
     return next;

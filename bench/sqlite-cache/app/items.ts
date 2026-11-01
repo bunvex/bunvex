@@ -1,7 +1,7 @@
 // STUDY-174 Q6's read bench: a seed mutation, then the three reads the driver measures: a point get by id, an
 // index range read, and a paginated query over one group.
-import { mutationGeneric, paginationOptsValidator, queryGeneric } from "bunvex/server";
-import { v } from "bunvex/values";
+import { mutationGeneric, paginationOptsValidator, queryGeneric } from "@bunvex/server";
+import { v } from "@bunvex/values";
 
 export const GROUPS = 1000;
 

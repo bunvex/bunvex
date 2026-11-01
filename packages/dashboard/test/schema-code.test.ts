@@ -35,8 +35,8 @@ describe("the saved schema as code", () => {
     const r = schemaCode(schema, tables)!;
     expect(r.code).toBe(
       [
-        'import { defineSchema, defineTable } from "bunvex/server";',
-        'import { v } from "bunvex/values";',
+        'import { defineSchema, defineTable } from "@bunvex/server";',
+        'import { v } from "@bunvex/values";',
         "",
         "export default defineSchema({",
         '  tasks: defineTable({ text: v.string(), owner: v.optional(v.id("users")) }).index("by_owner", ["owner"]),',

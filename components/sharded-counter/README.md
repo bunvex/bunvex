@@ -5,7 +5,7 @@ documents (shards), a write goes to one of them, and the count is their sum. It 
 [`@convex-dev/sharded-counter`](https://github.com/get-convex/sharded-counter) and **matches
 `@convex-dev/sharded-counter` 0.2.3**: the same client API, component name (`shardedCounter`), table and index, and
 the same function paths, arguments and results, so an app moves by renaming its imports and a Convex export of the
-component's data imports unchanged ([STUDY-183](../../docs/study/STUDY-183-sharded-counter.md)).
+component's data imports unchanged.
 
 ## Install
 

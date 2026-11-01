@@ -1,4 +1,4 @@
-import { BunvexError, v } from "bunvex/values";
+import { BunvexError, v } from "@bunvex/values";
 import { action, mutation } from "./_generated/server";
 
 /** Post a message; an empty one is refused with an error the client can show. */

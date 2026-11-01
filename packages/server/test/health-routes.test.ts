@@ -132,7 +132,9 @@ test("/echo: a declared length just past 128 MiB is a 413 before the body is rea
 
 /**
  * POSTs `total` bytes with no declared length (one reused 1 MiB chunk) from another process, and prints how many
- * bytes came back, or -1 when the answer broke off: a real client, apart from the server's event loop.
+ * bytes came back, or -1 when the answer broke off: a real client, apart from the server's event loop. An answer
+ * that stops coming for 15 s broke off too: under load (2 runs in 40, 8 at once) the server's side of a cut-off
+ * echo is gone while the client's stays ESTABLISHED, the reset never received, and a read would wait forever.
  */
 const STREAM_CLIENT = `
 const [url, total] = [process.argv[1], Number(process.argv[2])];
@@ -149,11 +151,24 @@ const body = new ReadableStream({
 let got = 0;
 try {
   const r = await fetch(url, { method: "POST", body, duplex: "half" });
-  for await (const part of r.body) got += part.byteLength;
+  const reader = r.body.getReader();
+  for (;;) {
+    let stalled;
+    const next = await Promise.race([
+      reader.read(),
+      new Promise((resolve) => (stalled = setTimeout(resolve, 15_000, "stalled"))),
+    ]);
+    clearTimeout(stalled);
+    if (next === "stalled") throw new Error("stalled");
+    if (next.done) break;
+    got += next.value.byteLength;
+  }
 } catch {
   got = -1;
 }
 console.log(got);
+// A stalled connection would keep the process alive.
+process.exit(0);
 `;
 
 async function streamed(url: string, total: number): Promise<number> {

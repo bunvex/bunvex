@@ -249,12 +249,13 @@ export const doc = <
   return withSystem(schema.tables[tableName].validator);
 };
 
+// convex-helpers' `id` takes the schema's tables only; the system tables (`_storage`, `_scheduled_functions`) are
+// AD-23's, as `v.id` suggests them (AD-21).
 /**
  * @deprecated Use `schema.doc` and `schema.id` instead.
- * `v` for a schema's functions: `id(table)` limited to the schema's tables and the system tables, and `doc(table)`,
- * the validator of a table's whole documents. For `args` and `returns`; a schema cannot use it (it would be circular).
- * convex-helpers' `id` takes the schema's tables only; the system tables (`_storage`, `_scheduled_functions`) are
- * AD-23's, as `v.id` suggests them (AD-21). Types only: at run time it is `v.id`.
+ * `v` for a schema's functions: `id(table)` limited to the schema's tables and the system tables, and `doc(table)`, the
+ * validator of a table's whole documents. For `args` and `returns`; a schema cannot use it (it would be circular).
+ * Types only: at run time it is `v.id`.
  */
 export function typedV<Schema extends SchemaDefinition<any, boolean>>(
   schema: Schema,

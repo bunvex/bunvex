@@ -27,7 +27,7 @@ export function packageOf(importPath: string): { name: string; dir: string } {
 }
 
 /** The packages linked to the server's own modules: never installed. */
-const isBunvex = (name: string) => name === "bunvex" || name.startsWith("@bunvex/");
+const isBunvex = (name: string) => name.startsWith("@bunvex/");
 
 /** Convex's `shouldMarkExternal`: whether a dependency of `package.json` may be left external. */
 export function shouldMarkExternal(name: string, version: string, allowList: string[]): boolean {

@@ -44,7 +44,7 @@ export type DashboardProps = {
   deploymentUrl?: string;
   /**
    * The declarations the runner's custom test query is typed against (STUDY-162), loaded the first time it opens:
-   * `file:///node_modules/…` → text (`apps/dashboard`'s build bundles `bunvex/server` and `bunvex/values`'s).
+   * `file:///node_modules/…` → text (`apps/dashboard`'s build bundles `@bunvex/server` and `@bunvex/values`'s).
    * Without it, the query is checked for syntax only.
    */
   queryTypes?: () => Promise<Record<string, string>>;

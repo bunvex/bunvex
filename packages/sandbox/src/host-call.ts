@@ -80,6 +80,8 @@ const OPS: Record<string, { kinds: readonly Kind[]; writes?: boolean }> = {
   "db.replace": { kinds: ["query", "mutation"], writes: true },
   "db.delete": { kinds: ["query", "mutation"], writes: true },
   "auth.getUserIdentity": { kinds: ["query", "mutation"] },
+  // A mutation's `ctx.auth.signJwt` (STUDY-192): signed here, the key never in the child (DV-579).
+  "auth.signJwt": { kinds: ["mutation"] },
   storage: { kinds: ["query", "mutation"] },
   scheduler: { kinds: ["mutation"] },
   runQuery: { kinds: ["query", "mutation"] },
@@ -614,6 +616,8 @@ export class HostCall extends HostCallBase {
       }
       case "auth.getUserIdentity":
         return ctx.auth!.getUserIdentity!();
+      case "auth.signJwt":
+        return (ctx.auth as { signJwt: (options: unknown) => Promise<string> }).signJwt(args[0]);
       case "storage": {
         const method = this.method(args, STORAGE_METHODS[this.kind], "ctx.storage");
         return ctx.storage![method]!(...args.slice(1));

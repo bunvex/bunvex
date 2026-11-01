@@ -1,4 +1,4 @@
-// The scheduling example end to end (STUDY-90): a message counts down and deletes itself through scheduled
+// The scheduling example end to end: a message counts down and deletes itself through scheduled
 // runs, and a subscriber sees every step live.
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { resolve } from "node:path";

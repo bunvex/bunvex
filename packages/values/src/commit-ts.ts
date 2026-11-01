@@ -6,7 +6,8 @@
 const UNRESOLVED =
   "This commit timestamp is unresolved: its value is assigned when the mutation commits. Read the document after the mutation completes to get its value.";
 
-/** The largest int64: the placeholder's value until the commit (Convex's `MAX_COMMIT_TS`). */
+// Convex's `MAX_COMMIT_TS`.
+/** The largest int64: the placeholder's value until the commit. */
 // A static mutant the bun runner cannot switch on (the module is loaded once); commit-ts.test.ts pins the value.
 // Stryker disable next-line ArithmeticOperator: see above.
 export const MAX_COMMIT_TS = (1n << 63n) - 1n;

@@ -33,7 +33,7 @@ const mod = (path: string, lines: string[]): ModuleSource => ({
 const dep = (path: string) => `./_componentDeps/${Buffer.from(path).toString("base64url")}`;
 
 const APP_DEFINITION = mod("bunvex.config.js", [
-  'import { defineApp } from "bunvex/server";',
+  'import { defineApp } from "@bunvex/server";',
   `import foods from "${dep("foods")}";`,
   "const app = defineApp();",
   "app.use(foods);",
@@ -41,8 +41,8 @@ const APP_DEFINITION = mod("bunvex.config.js", [
 ]);
 /** The same table in the app and in the component, each with its own indexes. */
 const SCHEMA = mod("schema.js", [
-  'import { defineSchema, defineTable } from "bunvex/server";',
-  'import { v } from "bunvex/values";',
+  'import { defineSchema, defineTable } from "@bunvex/server";',
+  'import { v } from "@bunvex/values";',
   "export default defineSchema({",
   "  foods: defineTable({ description: v.string(), cuisine: v.string(), embedding: v.array(v.float64()) })",
   '    .searchIndex("by_description", { searchField: "description", filterFields: ["cuisine"] })',
@@ -53,8 +53,8 @@ const SEARCH = (db: string) =>
   `async (ctx, { query, cuisine }) => ${db}.query("foods").withSearchIndex("by_description", (q) => cuisine === undefined ? q.search("description", query) : q.search("description", query).eq("cuisine", cuisine)).collect()`;
 const SEARCH_ARGS = "{ query: v.string(), cuisine: v.optional(v.string()) }";
 const APP = mod("app.js", [
-  'import { action, componentsGeneric, mutation, query } from "bunvex/server";',
-  'import { v } from "bunvex/values";',
+  'import { action, componentsGeneric, mutation, query } from "@bunvex/server";',
+  'import { v } from "@bunvex/values";',
   "const c = componentsGeneric().foods.lib;",
   "export const populate = mutation({ args: {}, handler: async (ctx) => { await ctx.runMutation(c.populate, {}); await ctx.db.insert('foods', { description: 'app soup', cuisine: 'app', embedding: [1, 0, 0] }); } });",
   `export const searchQuery = query({ args: ${SEARCH_ARGS}, handler: async (ctx, a) => ctx.runQuery(c.searchQuery, a) });`,
@@ -71,15 +71,15 @@ const FOODS = [
 const COMPONENT = {
   definitionPath: "foods",
   definition: mod("bunvex.config.js", [
-    'import { defineComponent } from "bunvex/server";',
+    'import { defineComponent } from "@bunvex/server";',
     'export default defineComponent("foods");',
   ]),
   dependencies: [] as string[],
   schema: SCHEMA,
   functions: [
     mod("lib.js", [
-      'import { action, mutation, query } from "bunvex/server";',
-      'import { v } from "bunvex/values";',
+      'import { action, mutation, query } from "@bunvex/server";',
+      'import { v } from "@bunvex/values";',
       `export const populate = mutation({ args: {}, handler: async (ctx) => { for (const [description, cuisine, embedding] of ${JSON.stringify(FOODS)}) await ctx.db.insert("foods", { description, cuisine, embedding }); } });`,
       `export const searchQuery = query({ args: ${SEARCH_ARGS}, handler: async (ctx, a) => (await (${SEARCH("ctx.db")})(ctx, a)).map((d) => d.description) });`,
       `export const searchMutation = mutation({ args: ${SEARCH_ARGS}, handler: async (ctx, a) => (await (${SEARCH("ctx.db")})(ctx, a)).map((d) => d.description) });`,
@@ -135,7 +135,7 @@ async function server(dir: string, modules: MemoryBlobStore) {
 }
 
 const NO_COMPONENTS = mod("bunvex.config.js", [
-  'import { defineApp } from "bunvex/server";',
+  'import { defineApp } from "@bunvex/server";',
   "export default defineApp();",
 ]);
 

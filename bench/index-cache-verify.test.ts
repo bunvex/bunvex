@@ -5,8 +5,8 @@
 // (verifyPercent 100, Convex's INDEX_CACHE_VERIFY_PERCENT) and fails the read when the two differ, so a stale
 // entry anywhere fails the test. A last case checks the harness itself: a cache that ignores the write log
 // is caught.
-//   bun test bench/index-cache-verify.test.ts         memory and SQLite; Postgres, MySQL and MongoDB when
-//                                                     PG_URL / MYSQL_URL / MONGO_URL are set (scratch databases)
+//   bun test bench/index-cache-verify.test.ts         memory and SQLite; Postgres and MySQL when
+//                                                     PG_URL / MYSQL_URL are set (scratch databases)
 import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -40,7 +40,6 @@ const stores: Store[] = [
 for (const [name, url] of [
   ["postgres", "PG_URL"],
   ["mysql", "MYSQL_URL"],
-  ["mongodb", "MONGO_URL"],
 ] as const)
   if (process.env[url]) stores.push({ name, open: async () => (await import(`./drivers/${name}.ts`)).open(true) });
 

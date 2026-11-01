@@ -1,9 +1,11 @@
 # STUDY-197 — `@bunvex/rate-limiter`
-<!-- index: `@bunvex/rate-limiter`, the third own component (STUDY-158 §3.4 step 4.3) and a prerequisite of built-in auth (STUDY-191): token bucket and fixed window, shards with two random choices, reservations, the asynchronous mode on `@bunvex/batch-worker` (a stale-snapshot check, a queue of pending updates), the client `RateLimiter`, the React hook `useRateLimit`; written from get-convex/rate-limiter 0.4.2 | decided (owner, 2026-10-27): L-1–L-2 as recommended; built: the package, its tests and the differential test; the examples (L-1) to come -->
+<!-- index: `@bunvex/rate-limiter`, the third own component (STUDY-158 §3.4 step 4.3) and a prerequisite of built-in auth (STUDY-191): token bucket and fixed window, shards with two random choices, reservations, the asynchronous mode on `@bunvex/batch-worker` (a stale-snapshot check, a queue of pending updates), the client `RateLimiter`, the React hook `useRateLimit`; written from get-convex/rate-limiter 0.4.2 | decided (owner, 2026-10-27): L-1–L-2 as recommended; built: the package, its tests, the differential test and the examples (L-1) -->
 
 - **Status:** decided (owner, 2026-10-27): L-1–L-2 as recommended (§7). Built (2026-10-27): `components/rate-limiter/`,
   its tests and `packages/differential/test/rate-limiter.test.ts` (§5); L-2's rule in `scripts/check-deps.ts`. The
-  examples (L-1) come in their own PR.
+  examples (L-1) are built (2026-10-29): `examples/rate-limiter` (the playground, `useRateLimit`, the API walk-through
+  and the load test) and the rate-limited LLM worker in `examples/batch-worker` (`bunvex/rateLimited.ts`), each with
+  its end-to-end test.
 - **Convex source read:** get-convex/rate-limiter at `dee5af1` (0.4.2), pinned in
   [upstream.md](../parity/upstream.md#other-repositories). Paths are relative to that repository's root.
 - **bunvex source:** `main`, with `@bunvex/batch-worker` (STUDY-196, #917). Paths are relative to the repository's

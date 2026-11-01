@@ -1,4 +1,4 @@
-import { fetchQuery } from "bunvex/nextjs";
+import { fetchQuery } from "@bunvex/nextjs";
 import type { NextApiRequest, NextApiResponse } from "next";
 import { api } from "../../bunvex/_generated/api";
 

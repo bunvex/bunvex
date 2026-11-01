@@ -1,5 +1,51 @@
 # @bunvex/persistence
 
+## 0.1.0-alpha.2
+
+### Patch Changes
+
+- 79f8fac: On MySQL, a connect that does not finish within the call's timeout fails with `DatabaseTimeoutError`, as Convex's, so the committer retries the flush. mysql2's own `connect ETIMEDOUT` no longer stops the committer.
+- fae5446: MySQL errors are retried as Convex's now classifies them: of the IO errors, only a refused or reset connection, an unexpected end and a temporary DNS failure (`EAI_AGAIN`) count as a lost connection. A broken pipe, a timeout, or an unreachable host or network is no longer retried.
+- deab272: `GET /api/debug/topology` (an admin key with ViewMetrics) reports the deployment's topology for the dashboard's
+  Topology screen: this process as the leader alone, with its connections, subscriptions, query cache, commits per
+  second, CPU and memory and a minute of samples, and the store with its driver and lease, read from counters the
+  server already keeps. Each persistence driver names itself (`driver`), and the engine keeps its lease's holder and
+  last renewal round trip (`leaseState`).
+- Updated dependencies [eadda52]
+- Updated dependencies [2088702]
+- Updated dependencies [0ea0a8d]
+- Updated dependencies [3f01dcf]
+- Updated dependencies [a11b239]
+- Updated dependencies [017ef5b]
+- Updated dependencies [73835d5]
+- Updated dependencies [497900c]
+- Updated dependencies [61a9ab5]
+- Updated dependencies [3d41523]
+- Updated dependencies [beca1af]
+- Updated dependencies [8700316]
+- Updated dependencies [823507c]
+- Updated dependencies [7d97595]
+- Updated dependencies [0572b42]
+- Updated dependencies [fb0c977]
+- Updated dependencies [67bb45e]
+- Updated dependencies [87fde6b]
+- Updated dependencies [3b82fa1]
+- Updated dependencies [e84cf7a]
+- Updated dependencies [d1543b1]
+- Updated dependencies [c3b026b]
+- Updated dependencies [77572e8]
+- Updated dependencies [f6745eb]
+- Updated dependencies [1408599]
+- Updated dependencies [88d2e14]
+- Updated dependencies [0ec64a4]
+- Updated dependencies [5cb27ae]
+- Updated dependencies [07ad661]
+- Updated dependencies [deab272]
+- Updated dependencies [d2207bc]
+- Updated dependencies [7b1ef5f]
+- Updated dependencies [c2ac7a5]
+  - @bunvex/core@0.1.0-alpha.2
+
 ## 0.1.0-alpha.1
 
 ### Minor Changes

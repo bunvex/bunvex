@@ -34,26 +34,26 @@ const mod = (path: string, source: string, environment: "isolate" | "node" = "is
 });
 const dep = (path: string) => `./_componentDeps/${Buffer.from(path).toString("base64url")}`;
 
-/** The app mounting `counter` twice, as the CLI bundles it (`bunvex/server` external, DV-495). */
+/** The app mounting `counter` twice, as the CLI bundles it (`@bunvex/server` external, DV-495). */
 const APP_DEFINITION = mod(
   "bunvex.config.js",
-  `import { defineApp } from "bunvex/server";\nimport counter from "${dep("counter")}";\nconst app = defineApp();\napp.use(counter);\napp.use(counter, { name: "second" });\nexport default app;`,
+  `import { defineApp } from "@bunvex/server";\nimport counter from "${dep("counter")}";\nconst app = defineApp();\napp.use(counter);\napp.use(counter, { name: "second" });\nexport default app;`,
 );
 const COUNTER = {
   definitionPath: "counter",
   definition: mod(
     "bunvex.config.js",
-    `import { defineComponent } from "bunvex/server";\nexport default defineComponent("counter");`,
+    `import { defineComponent } from "@bunvex/server";\nexport default defineComponent("counter");`,
   ),
   dependencies: [] as string[],
   schema: mod(
     "schema.js",
-    `import { defineSchema, defineTable } from "bunvex/server";\nimport { v } from "bunvex/values";\nexport default defineSchema({ messages: defineTable({ body: v.string() }).index("by_body", ["body"]) });`,
+    `import { defineSchema, defineTable } from "@bunvex/server";\nimport { v } from "@bunvex/values";\nexport default defineSchema({ messages: defineTable({ body: v.string() }).index("by_body", ["body"]) });`,
   ),
   functions: [
     mod(
       "lib.js",
-      `import { internalMutation, mutation } from "bunvex/server";\nexport const add = mutation({ args: {}, handler: async () => 1 });\nexport const secret = internalMutation({ args: {}, handler: async () => 2 });`,
+      `import { internalMutation, mutation } from "@bunvex/server";\nexport const add = mutation({ args: {}, handler: async () => 1 });\nexport const secret = internalMutation({ args: {}, handler: async () => 2 });`,
     ),
   ],
   udfServerVersion: "1.46.0",
@@ -102,7 +102,7 @@ async function deployment() {
         changedModules: o.app ?? [
           mod(
             "app.js",
-            `import { query } from "bunvex/server";\nexport const hello = query({ args: {}, handler: async () => "hi" });`,
+            `import { query } from "@bunvex/server";\nexport const hello = query({ args: {}, handler: async () => "hi" });`,
           ),
         ],
         unchangedModuleHashes: [],
@@ -169,7 +169,7 @@ describe("start_push with components", () => {
     const d = await deployment();
     const definition = mod(
       "bunvex.config.js",
-      `import { defineApp } from "bunvex/server";\nexport default defineApp();`,
+      `import { defineApp } from "@bunvex/server";\nexport default defineApp();`,
     );
     const r = await d.start({ definition, dependencies: [], components: [] });
     expect(r.status).toBe(200);
@@ -300,7 +300,7 @@ describe("refused, as Convex's push refuses them", () => {
     });
     const twice = mod(
       "bunvex.config.js",
-      `import { defineApp } from "bunvex/server";\nimport counter from "${dep("counter")}";\nconst app = defineApp();\napp.use(counter);\napp.use(counter);\nexport default app;`,
+      `import { defineApp } from "@bunvex/server";\nimport counter from "${dep("counter")}";\nconst app = defineApp();\napp.use(counter);\napp.use(counter);\nexport default app;`,
     );
     expect(await refused({ definition: twice })).toEqual({
       status: 400,
@@ -327,7 +327,7 @@ describe("refused, as Convex's push refuses them", () => {
     // (Its search and vector indexes are built since STUDY-157 PR 5.)
     const staged = mod(
       "schema.js",
-      `import { defineSchema, defineTable } from "bunvex/server";\nimport { v } from "bunvex/values";\nexport default defineSchema({ messages: defineTable(v.object({ body: v.string() })).staged(v.any()) });`,
+      `import { defineSchema, defineTable } from "@bunvex/server";\nimport { v } from "@bunvex/values";\nexport default defineSchema({ messages: defineTable(v.object({ body: v.string() })).staged(v.any()) });`,
     );
     const r = await d.start({ components: [{ ...COUNTER, schema: staged }] });
     expect(r.status).toBe(400);
@@ -398,7 +398,7 @@ describe("evaluate_schema with components (PR 3d)", () => {
     ...COUNTER,
     schema: mod(
       "schema.js",
-      `import { defineSchema, defineTable } from "bunvex/server";\nimport { v } from "bunvex/values";\nexport default defineSchema({ messages: defineTable({ body: v.string(), n: v.optional(v.number()) }).index("by_body", ["body"]).index("by_both", ["body", "n"]) });`,
+      `import { defineSchema, defineTable } from "@bunvex/server";\nimport { v } from "@bunvex/values";\nexport default defineSchema({ messages: defineTable({ body: v.string(), n: v.optional(v.number()) }).index("by_body", ["body"]).index("by_both", ["body", "n"]) });`,
     ),
   };
 
@@ -513,7 +513,7 @@ describe("finish_push with components (PR 4)", () => {
     >;
   const onlyCounter = mod(
     "bunvex.config.js",
-    `import { defineApp } from "bunvex/server";\nimport counter from "${dep("counter")}";\nconst app = defineApp();\napp.use(counter);\nexport default app;`,
+    `import { defineApp } from "@bunvex/server";\nimport counter from "${dep("counter")}";\nconst app = defineApp();\napp.use(counter);\nexport default app;`,
   );
 
   test("create: `counter` and `second`, Convex's answer and rows", async () => {
@@ -605,7 +605,7 @@ describe("finish_push with components (PR 4)", () => {
   test("every child and its definition removed: unmounted, the definition's row deleted", async () => {
     const d = await deployment();
     await push(d);
-    const none = mod("bunvex.config.js", `import { defineApp } from "bunvex/server";\nexport default defineApp();`);
+    const none = mod("bunvex.config.js", `import { defineApp } from "@bunvex/server";\nexport default defineApp();`);
     const r = await push(d, { definition: none, dependencies: [], components: [] });
     expect(r.finish.status).toBe(200);
     expect(r.finish.body.definitionDiffs).toEqual({ "": {}, counter: {} });
@@ -633,7 +633,7 @@ describe("finish_push with components (PR 4)", () => {
     const d = await deployment();
     const withEnv = mod(
       "bunvex.config.js",
-      `import { defineApp } from "bunvex/server";\nimport { v } from "bunvex/values";\nexport default defineApp({ env: { APPX: v.literal("a") } });`,
+      `import { defineApp } from "@bunvex/server";\nimport { v } from "@bunvex/values";\nexport default defineApp({ env: { APPX: v.literal("a") } });`,
     );
     const unset = await push(d, { definition: withEnv, dependencies: [], components: [] });
     expect(unset.finish).toEqual({
@@ -695,7 +695,7 @@ describe("delete_component (PR 4b)", () => {
   }
   const onlyCounter = mod(
     "bunvex.config.js",
-    `import { defineApp } from "bunvex/server";\nimport counter from "${dep("counter")}";\nconst app = defineApp();\napp.use(counter);\nexport default app;`,
+    `import { defineApp } from "@bunvex/server";\nimport counter from "${dep("counter")}";\nconst app = defineApp();\napp.use(counter);\nexport default app;`,
   );
 
   test("a mounted component is refused; an unmounted one goes, rows and tables, with its audit event", async () => {
@@ -727,7 +727,7 @@ describe("delete_component (PR 4b)", () => {
     const d = await deployment();
     const app = mod(
       "bunvex.config.js",
-      `import { defineApp } from "bunvex/server";\nimport outer from "${dep("outer")}";\nconst app = defineApp();\napp.use(outer);\nexport default app;`,
+      `import { defineApp } from "@bunvex/server";\nimport outer from "${dep("outer")}";\nconst app = defineApp();\napp.use(outer);\nexport default app;`,
     );
     const outer = {
       ...COUNTER,
@@ -735,7 +735,7 @@ describe("delete_component (PR 4b)", () => {
       dependencies: ["inner"],
       definition: mod(
         "bunvex.config.js",
-        `import { defineComponent } from "bunvex/server";\nimport inner from "${dep("inner")}";\nconst c = defineComponent("outer");\nc.use(inner);\nexport default c;`,
+        `import { defineComponent } from "@bunvex/server";\nimport inner from "${dep("inner")}";\nconst c = defineComponent("outer");\nc.use(inner);\nexport default c;`,
       ),
     };
     const inner = {
@@ -743,12 +743,12 @@ describe("delete_component (PR 4b)", () => {
       definitionPath: "inner",
       definition: mod(
         "bunvex.config.js",
-        `import { defineComponent } from "bunvex/server";\nexport default defineComponent("inner");`,
+        `import { defineComponent } from "@bunvex/server";\nexport default defineComponent("inner");`,
       ),
     };
     const ids = await pushed(d, { definition: app, dependencies: ["outer"], components: [outer, inner] });
     expect(Object.keys(ids)).toEqual(["", "outer", "outer/inner"]);
-    const none = mod("bunvex.config.js", `import { defineApp } from "bunvex/server";\nexport default defineApp();`);
+    const none = mod("bunvex.config.js", `import { defineApp } from "@bunvex/server";\nexport default defineApp();`);
     await pushed(d, { definition: none, dependencies: [], components: [] });
     expect((await d.admin("/api/delete_component", { componentId: ids.outer })).status).toBe(200);
     const left = await d.engine.query((db) => db.asSystem(() => db.query("_components").collect()));

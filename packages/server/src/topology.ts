@@ -15,7 +15,7 @@ export const TOPOLOGY_SAMPLE_MS = 5_000;
 export const TOPOLOGY_HISTORY = 12;
 
 /** The drivers the dashboard names; another package's driver is `other`. */
-const DRIVERS = new Set(["memory", "sqlite", "postgres", "mysql", "mongodb"]);
+const DRIVERS = new Set(["memory", "sqlite", "postgres", "mysql"]);
 
 export type TopologySources = {
   engine: Engine;

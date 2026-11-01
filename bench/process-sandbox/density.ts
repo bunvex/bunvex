@@ -4,7 +4,7 @@
 import { readFileSync } from "node:fs";
 import { Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
-import { Functions } from "bunvex/server";
+import { Functions } from "@bunvex/server";
 import { benchSchema } from "../functions.ts";
 import { SandboxedDeployment } from "./host.ts";
 import { APP } from "./setup.ts";

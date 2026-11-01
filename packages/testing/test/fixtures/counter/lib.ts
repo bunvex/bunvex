@@ -23,3 +23,9 @@ export const count = query({
         .unique()
     )?.n ?? 0,
 });
+
+/** A token the component signs (STUDY-192): its `iss` names the component. */
+export const sign = mutation({
+  args: {},
+  handler: async (ctx) => ctx.auth.signJwt({ claims: { sub: "counter" }, expiresInSeconds: 60 }),
+});

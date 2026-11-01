@@ -74,8 +74,8 @@ function io(cwd: string) {
 }
 
 // The app's imports, spelled so the dependency checker does not take them for this test's own.
-const SERVER = JSON.stringify(["bunvex", "server"].join("/"));
-const VALUES = JSON.stringify(["bunvex", "values"].join("/"));
+const SERVER = JSON.stringify(["@bunvex", "server"].join("/"));
+const VALUES = JSON.stringify(["@bunvex", "values"].join("/"));
 
 /** A component named `name` with a `messages` table and `lib:add` / `lib:count`. */
 const component = (name: string, extra = ""): Record<string, string> => ({
@@ -257,12 +257,14 @@ describe("bunvex deploy", () => {
 });
 
 describe("codegen", () => {
-  /** The app on this repository's `bunvex`, with TypeScript, so its `_generated/` imports resolve and typecheck. */
+  /** The app on this repository's `@bunvex/*`, with TypeScript, so its `_generated/` imports resolve and typecheck. */
   const typed = (root: string) => {
     mkdirSync(join(root, "node_modules"), { recursive: true });
-    symlinkSync(resolve(import.meta.dir, "../../bunvex"), join(root, "node_modules/bunvex"));
+    mkdirSync(join(root, "node_modules/@bunvex"), { recursive: true });
+    for (const p of ["server", "values"])
+      symlinkSync(resolve(import.meta.dir, "../..", p), join(root, "node_modules/@bunvex", p));
     symlinkSync(resolve(import.meta.dir, "../../../node_modules/typescript"), join(root, "node_modules/typescript"));
-    write(root, { "package.json": JSON.stringify({ dependencies: { bunvex: "*" } }) });
+    write(root, { "package.json": JSON.stringify({ dependencies: { "@bunvex/server": "*", "@bunvex/values": "*" } }) });
   };
   const deployTyped = (root: string, url: string, r = io(root)) =>
     main(["deploy", "--url", url, "--admin-key", KEY, "--typecheck=enable"], r.it);
@@ -386,12 +388,12 @@ describe("bunvex codegen", () => {
     ).toContain("ComponentApi<");
   });
 
-  test("a component package's `_generated/` imports what its own package.json depends on, not the app's (STUDY-183)", async () => {
-    // An app on the private aggregate `bunvex` (the repo's examples) installs a component package written in
-    // TypeScript (a workspace one, `@bunvex/sharded-counter`): its committed `_generated/` stays on `@bunvex/*`.
+  test("a component package's `_generated/` imports the @bunvex/* packages, as the app's (STUDY-183)", async () => {
+    // An app installs a component package written in TypeScript (a workspace one, `@bunvex/sharded-counter`): its
+    // committed `_generated/` imports `@bunvex/*`, the same packages as the app's own files.
     const root = app();
     write(root, {
-      "package.json": JSON.stringify({ name: "app", dependencies: { bunvex: "*", "@acme/limiter": "*" } }),
+      "package.json": JSON.stringify({ name: "app", dependencies: { "@bunvex/server": "*", "@acme/limiter": "*" } }),
       "node_modules/@acme/limiter/package.json": JSON.stringify({
         name: "@acme/limiter",
         type: "module",
@@ -402,9 +404,8 @@ describe("bunvex codegen", () => {
     });
     expect(await main(["codegen", "--typecheck=disable"], io(root).it)).toBe(0);
     const generated = (dir: string, file: string) => readFileSync(join(root, dir, "_generated", file), "utf8");
-    const scoped = JSON.stringify(`@${["bunvex", "server"].join("/")}`);
     for (const file of ["component.ts", "server.ts", "api.ts"])
-      expect(generated("node_modules/@acme/limiter/src/component", file)).toContain(`from ${scoped}`);
+      expect(generated("node_modules/@acme/limiter/src/component", file)).toContain(`from ${SERVER}`);
     // The app's own component shares the app's package.json, and the app's files are as before.
     expect(generated("components/counter", "component.ts")).toContain(`from ${SERVER}`);
     expect(generated("bunvex", "server.js")).toContain(`from ${SERVER}`);
@@ -490,7 +491,9 @@ describe("bunvex run --component (DV-391)", () => {
       "components/counter/bad.ts": "export const n: number = 'not a number';\n",
     });
     mkdirSync(join(root, "node_modules"), { recursive: true });
-    symlinkSync(resolve(import.meta.dir, "../../bunvex"), join(root, "node_modules/bunvex"));
+    mkdirSync(join(root, "node_modules/@bunvex"), { recursive: true });
+    for (const p of ["server", "values"])
+      symlinkSync(resolve(import.meta.dir, "../..", p), join(root, "node_modules/@bunvex", p));
     symlinkSync(resolve(import.meta.dir, "../../../node_modules/typescript"), join(root, "node_modules/typescript"));
     const flags = ["deploy", "--url", d.url, "--admin-key", KEY, "--typecheck=enable"];
     expect(await main(["codegen", "--init", "--typecheck=disable"], io(root).it)).toBe(0);

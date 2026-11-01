@@ -32,7 +32,7 @@ export class DatabaseTimeoutError extends Error {
  * `DatabaseTimeoutError`, so a driver that calls it before each statement stops at the next one (a
  * transaction rolls back instead of sending its next statement or its COMMIT). Without that, the abandoned
  * attempt of a flush keeps going once the store answers again, and races the committer's retry of the same
- * group (STUDY-25 §3.5; MongoDB's `withTransaction` even reran its callback on a new transaction).
+ * group (STUDY-25 §3.5).
  */
 export function withTimeout<T>(
   store: string,

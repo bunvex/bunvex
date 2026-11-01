@@ -1,6 +1,6 @@
 // A text's embedding, from OpenAI's embeddings API (an action's `fetch`). OPENAI_BASE_URL points elsewhere
 // (the end-to-end test's stand-in).
-import { BunvexError } from "bunvex/values";
+import { BunvexError } from "@bunvex/values";
 
 /** A deployment variable the example needs: missing, a message saying how to set it (shown in the page). */
 function required(name: string): string {

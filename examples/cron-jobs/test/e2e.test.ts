@@ -1,4 +1,4 @@
-// The cron-jobs example end to end (STUDY-90): crons.ts clears the messages every 10 seconds, and a subscriber
+// The cron-jobs example end to end: crons.ts clears the messages every 10 seconds, and a subscriber
 // sees the list empty itself with nobody calling anything.
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { resolve } from "node:path";

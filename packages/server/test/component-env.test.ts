@@ -37,8 +37,8 @@ const dep = (path: string) => `./_componentDeps/${Buffer.from(path).toString("ba
 
 /** `envc` mounted twice: with its variables bound (a value, and the app's `APPKEY`), and with none. */
 const APP_DEFINITION = mod("bunvex.config.js", [
-  'import { defineApp } from "bunvex/server";',
-  'import { v } from "bunvex/values";',
+  'import { defineApp } from "@bunvex/server";',
+  'import { v } from "@bunvex/values";',
   `import envc from "${dep("envc")}";`,
   "const app = defineApp({ env: { APPKEY: v.optional(v.string()) } });",
   'app.use(envc, { env: { MODE: "fast", KEY: app.env.APPKEY } });',
@@ -51,7 +51,7 @@ const READ = [
   "const badRead = () => { try { return { value: process.env['not a name'] ?? null }; } catch (e) { return { threw: e.message }; } };",
 ];
 const APP = mod("app.js", [
-  'import { action, componentsGeneric, createFunctionHandle, mutation, query } from "bunvex/server";',
+  'import { action, componentsGeneric, createFunctionHandle, mutation, query } from "@bunvex/server";',
   ...READ,
   "const components = componentsGeneric();",
   "export const appEnv = query({ args: {}, handler: async () => read() });",
@@ -69,16 +69,16 @@ const APP = mod("app.js", [
 const ENVC = {
   definitionPath: "envc",
   definition: mod("bunvex.config.js", [
-    'import { defineComponent } from "bunvex/server";',
-    'import { v } from "bunvex/values";',
+    'import { defineComponent } from "@bunvex/server";',
+    'import { v } from "@bunvex/values";',
     'export default defineComponent("envc", { env: { MODE: v.optional(v.string()), KEY: v.optional(v.string()) } });',
   ]),
   dependencies: [] as string[],
   schema: null,
   functions: [
     mod("lib.js", [
-      'import { mutation, query } from "bunvex/server";',
-      'import { v } from "bunvex/values";',
+      'import { mutation, query } from "@bunvex/server";',
+      'import { v } from "@bunvex/values";',
       ...READ,
       "export const env = query({ args: {}, handler: async () => read() });",
       "export const envMut = mutation({ args: {}, handler: async () => read() });",

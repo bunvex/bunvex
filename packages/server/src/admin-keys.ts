@@ -14,10 +14,12 @@ export { aes128GcmSivOpen, aes128GcmSivSeal };
 
 /** Convex's ADMIN_KEY_VERSION: the first byte of a key, also the cipher's associated data. */
 export const ADMIN_KEY_VERSION = 1;
-/** The purpose the admin key cipher's key is derived for (Convex's `Purpose::ADMIN_KEY`). */
+// Convex's `Purpose::ADMIN_KEY`.
+/** The purpose the admin key cipher's key is derived for. */
 export const ADMIN_KEY_PURPOSE = "admin key";
 
-/** Convex's `DeploymentOp` (crates/keybroker/src/operations.rs), in its order. */
+// Convex's `DeploymentOp` (crates/keybroker/src/operations.rs), in its order.
+/** The operations an admin key can be allowed. */
 export const DEPLOYMENT_OPS = [
   "Deploy",
   "ViewEnvironmentVariables",
@@ -48,7 +50,8 @@ export const DEPLOYMENT_OPS = [
 ] as const;
 export type DeploymentOp = (typeof DEPLOYMENT_OPS)[number];
 
-/** Convex's `read_only_operations()`: what a read-only key may do. */
+// Convex's `read_only_operations()`.
+/** What a read-only key may do. */
 export const READ_ONLY_OPERATIONS: readonly DeploymentOp[] = [
   "ViewEnvironmentVariables",
   "ViewLogs",
@@ -69,7 +72,8 @@ export type AdminKeyIdentity =
   | { kind: "admin"; memberId: number; readOnly: boolean; allowedOps: readonly DeploymentOp[]; issuedS: number }
   | { kind: "system"; issuedS: number };
 
-/** The key was not issued for this instance, or is not a key at all. As Convex: 401 `BadAdminKey`. */
+// As Convex's.
+/** The key was not issued for this instance, or is not a key at all: 401 `BadAdminKey`. */
 export class BadAdminKeyError extends Error {
   readonly status = 401;
   readonly code = "BadAdminKey";
@@ -188,7 +192,8 @@ export type IssueOptions = {
   nonce?: Uint8Array;
 };
 
-/** Convex's `issue_key`: `name|hex(1 ‖ nonce ‖ sealed proto)`. */
+// Convex's `issue_key`.
+/** Issue an admin key: `name|hex(1 ‖ nonce ‖ sealed proto)`. */
 export function issueAdminKey(o: IssueOptions): string {
   const nonce = o.nonce ?? new Uint8Array(randomBytes(12));
   const proto = encodeAdminKeyProto({
@@ -204,10 +209,11 @@ export function issueAdminKey(o: IssueOptions): string {
   return `${o.instanceName}|${Buffer.from(bytes).toString("hex")}`;
 }
 
+// Convex's `check_admin_key`.
 /**
- * Convex's `check_admin_key`: the name before `|` (its type prefix stripped) or, without one, the name inside
- * the key must be this instance's; the key must decrypt and carry `issued_s` and an identity. Keys never
- * expire. Throws `BadAdminKeyError`.
+ * Check an admin key: the name before `|` (its type prefix stripped) or, without one, the name inside the key must be
+ * this instance's; the key must decrypt and carry `issued_s` and an identity. Keys never expire. Throws
+ * `BadAdminKeyError`.
  */
 export function checkAdminKey(key: string, instanceName: string, cipherKey: Uint8Array): AdminKeyIdentity {
   const bar = key.indexOf("|");

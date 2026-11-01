@@ -1,7 +1,7 @@
 // STUDY-168: the app module the measurements and escape tests run, both in today's executor (a `vm` code version)
 // and in the sandboxed child. Its functions are `sb:<name>`. Schema: bench/functions.ts (`items`, `counters`).
-import { action, mutation, query } from "bunvex/server";
-import { v } from "bunvex/values";
+import { action, mutation, query } from "@bunvex/server";
+import { v } from "@bunvex/values";
 
 // `nonce`: a distinct argument per call, so the benchmarks run the function instead of hitting the query cache.
 const nonce = v.optional(v.number());

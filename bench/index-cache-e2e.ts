@@ -11,7 +11,7 @@ import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { BunvexHttpClient } from "bunvex/browser";
+import { BunvexHttpClient } from "@bunvex/client";
 import postgres from "postgres";
 
 const env = (k: string, d: number) => Number(process.env[k] ?? d);
@@ -25,8 +25,8 @@ const SECS = env("SECS", 20);
 const ROUNDS = env("ROUNDS", 2);
 
 const ROOT = resolve(import.meta.dir, "..");
-const BACKEND = join(ROOT, "packages/bunvex/bin/local-backend.ts");
-const CLI = join(ROOT, "packages/bunvex/bin/bunvex.ts");
+const BACKEND = join(ROOT, "apps/local-backend/local-backend.ts");
+const CLI = join(ROOT, "packages/cli/bin/bunvex.ts");
 const APP = join(import.meta.dir, "index-cache-e2e");
 const state = mkdtempSync(join(tmpdir(), "bunvex-index-cache-e2e-"));
 const name = "index-cache-e2e";

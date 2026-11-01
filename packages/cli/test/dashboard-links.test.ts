@@ -21,8 +21,8 @@ import { memoryStore } from "./memory-store.ts";
 const SECRET = "5e".repeat(32);
 const NAME = "links-test";
 const KEY = issueAdminKey({ instanceName: NAME, cipherKey: adminKeyCipherKey(SECRET) });
-const SERVER = ["bunvex", "server"].join("/");
-const VALUES = ["bunvex", "values"].join("/");
+const SERVER = ["@bunvex", "server"].join("/");
+const VALUES = ["@bunvex", "values"].join("/");
 
 const stops: (() => unknown)[] = [];
 const dirs: string[] = [];

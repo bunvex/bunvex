@@ -9,12 +9,17 @@ export const SCHEDULED_JOBS_TABLE = "_scheduled_jobs";
 export type ReferenceTarget =
   | { to: "/files"; search: { file: string } }
   | { to: "/schedules/functions" }
-  | { to: "/database/$table"; params: { table: string }; search: { doc: string } };
+  | { to: "/database/$table"; params: { table: string }; search: { doc: string; component?: string } };
 
-/** Where `id`, a document of `table` (as `tableOfId` names it), opens; null for a system table no screen shows. */
-export function referenceTarget(table: string, id: string): ReferenceTarget | null {
+/**
+ * Where `id`, a document of `table` (as `tableOfId` names it) in `component`'s namespace (none: the app's), opens;
+ * null for a system table no screen shows. A component's files and scheduled runs are not on those screens yet
+ * (STUDY-152 §4): none for them.
+ */
+export function referenceTarget(table: string, id: string, component?: string): ReferenceTarget | null {
+  if (table.startsWith("_") && component !== undefined) return null;
   if (table === FILE_STORAGE_TABLE) return { to: "/files", search: { file: id } };
   if (table === SCHEDULED_JOBS_TABLE) return { to: "/schedules/functions" };
   if (table.startsWith("_")) return null;
-  return { to: "/database/$table", params: { table }, search: { doc: id } };
+  return { to: "/database/$table", params: { table }, search: { doc: id, component } };
 }

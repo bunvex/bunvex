@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { defineSchema, defineTable, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { v } from "@bunvex/values";
-import { CodeVersion, InvalidModulesError, type ModuleSource } from "../src/code-version.ts";
+import { CodeVersion, InvalidModulesError, LINKED_MODULES, type ModuleSource } from "../src/code-version.ts";
 import { Functions } from "../src/functions.ts";
 import { createServer } from "../src/server.ts";
 import { add, history, syncUrl, v1Client } from "./v1-client.ts";
@@ -99,12 +99,8 @@ describe("loading and analysis", () => {
     expect(version.moduleHashes.get("messages")).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  test("the umbrella's specifiers link to the same server modules", async () => {
-    const umbrella = ["bunvex", "server"].join("/");
-    const version = await load([
-      mod("u.js", `import { query } from "${umbrella}"; export const q = query(async () => 1);`),
-    ]);
-    expect(version.functions.has("u:q")).toBe(true);
+  test("only the @bunvex/* packages are linked: npm has no `bunvex` package (STUDY-40 L7)", () => {
+    expect([...LINKED_MODULES].sort()).toEqual(["@bunvex/server", "@bunvex/values"]);
   });
 
   test("a real bundle: Bun.build with splitting, bunvex/* external, shared chunks linked", async () => {

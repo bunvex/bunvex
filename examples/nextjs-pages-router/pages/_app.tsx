@@ -1,4 +1,4 @@
-import { BunvexProvider, BunvexReactClient } from "bunvex/react";
+import { BunvexProvider, BunvexReactClient } from "@bunvex/react";
 import type { AppProps } from "next/app";
 
 // `bunvex dev` writes the deployment's URL to .env.local as NEXT_PUBLIC_BUNVEX_URL.

@@ -1,7 +1,7 @@
 // `bun run example <name> [dev options]`: run an example (examples/<name>) against this repository's backend,
 // for developing bunvex. The example's own `bun run dev` downloads the latest released bunvex-local-backend, as a
 // user's app does; this runs the same `dev` with BUNVEX_LOCAL_BACKEND_BINARY pointing to a shim that runs
-// packages/bunvex/bin/local-backend.ts with Bun, so the example meets the code it is checked out with.
+// apps/local-backend/local-backend.ts with Bun, so the example meets the code it is checked out with.
 import { chmodSync, existsSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -21,7 +21,7 @@ if (!name || !names.includes(name)) {
 const shim = join(mkdtempSync(join(tmpdir(), "bunvex-repo-backend-")), "bunvex-local-backend");
 writeFileSync(
   shim,
-  `#!/bin/sh\n[ "$1" = --version ] && echo "bunvex-local-backend repository" && exit 0\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(join(ROOT, "packages/bunvex/bin/local-backend.ts"))} "$@"\n`,
+  `#!/bin/sh\n[ "$1" = --version ] && echo "bunvex-local-backend repository" && exit 0\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(join(ROOT, "apps/local-backend/local-backend.ts"))} "$@"\n`,
 );
 chmodSync(shim, 0o755);
 

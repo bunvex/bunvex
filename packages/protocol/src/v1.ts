@@ -7,7 +7,7 @@ import { ActingIdentityError, parseActingIdentity } from "./acting-identity.ts";
 
 export { ActingIdentityError, parseActingIdentity };
 
-/** A value in Convex's JSON form (`$integer`, `$float`, `$bytes`). */
+/** A value in its JSON form (`$integer`, `$float`, `$bytes`). */
 export type JSONValue = null | boolean | number | string | JSONValue[] | { [key: string]: JSONValue };
 
 export type QueryId = number;
@@ -62,7 +62,8 @@ export type Authenticate =
   | { type: "Authenticate"; tokenType: "Admin"; value: string; baseVersion: IdentityVersion; impersonating?: JSONValue }
   | { type: "Authenticate"; tokenType: "User"; value: string; baseVersion: IdentityVersion }
   | { type: "Authenticate"; tokenType: "None"; baseVersion: IdentityVersion };
-/** Client telemetry; the server accepts and ignores it (STUDY-23 P11). */
+// STUDY-23 P11.
+/** Client telemetry; the server accepts and ignores it. */
 export type ClientEvent = { type: "Event"; eventType: string; event: unknown };
 
 // Rooms (AD-42, STUDY-164 §3.6): beside the query set, never inside a Transition. `roomId` is chosen by the
@@ -186,7 +187,8 @@ export type ServerMessage =
 
 // ---------------------------------------------------------------- u64 timestamps
 
-/** base64 of the 8 little-endian bytes of an unsigned 64-bit integer (Convex's `longToU64`). */
+// Convex's `longToU64`.
+/** base64 of the 8 little-endian bytes of an unsigned 64-bit integer. */
 export function encodeU64(n: bigint): string {
   if (n < 0n || n > 0xffffffffffffffffn) throw new RangeError(`not a u64: ${n}`);
   const b = new Uint8Array(8);

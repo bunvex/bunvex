@@ -148,7 +148,7 @@ async function oneComponent(
     const appFile = join(root, "bunvex.config.ts");
     writeFileSync(
       appFile,
-      `import { defineApp } from "${["bunvex", "server"].join("/")}";\nimport component from ${JSON.stringify(file)};\nconst app = defineApp();\napp.use(component, { name: "exampleComponentInstance" });\nexport default app;\n`,
+      `import { defineApp } from "${["@bunvex", "server"].join("/")}";\nimport component from ${JSON.stringify(file)};\nconst app = defineApp();\napp.use(component, { name: "exampleComponentInstance" });\nexport default app;\n`,
     );
     const found = await findComponents(root, { appFile });
     // Every local definition's modules must bundle; only the component's own files are final.

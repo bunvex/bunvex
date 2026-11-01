@@ -1,4 +1,4 @@
-// The relational data modeling example end to end (STUDY-90): messages point to their channel by id, each
+// The relational data modeling example end to end: messages point to their channel by id, each
 // channel's list (read through an index, the channel joined in) is live and holds only its own messages.
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { resolve } from "node:path";

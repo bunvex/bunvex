@@ -176,14 +176,13 @@ describe("the text indexes' states", () => {
           if (ws.find((w) => w.table === e.table && w.name === e.name)?.ready) s.done(e);
         s.reconcilePending(declared(ws.filter((w) => w.pending)), 1n);
         const back = decodeSearchState(encodeSearchState(s));
-        const meta = (e: { readIndex: string; table: string; tablet: string; name: string; def: unknown }) => e;
         const strip = ({
           index: _i,
           log: _l,
           retainedFrom: _r,
           touched: _t,
           ...rest
-        }: ReturnType<SearchIndexes["all"]>[number]) => meta(rest);
+        }: ReturnType<SearchIndexes["all"]>[number]) => rest;
         expect(back.all()).toEqual(s.all().map(strip));
         expect(back.pendingAll()).toEqual(s.pendingAll().map(strip));
         for (const w of ws) {

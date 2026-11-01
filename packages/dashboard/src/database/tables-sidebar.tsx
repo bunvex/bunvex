@@ -11,6 +11,7 @@ import type { TableInfo } from "../data-source.ts";
 import { DashLink, tableRoute } from "../router.tsx";
 import { formatCount } from "../screens/stats.ts";
 import { SECTION_ITEM, SectionColumn } from "../shell/section-column.tsx";
+import { ComponentPicker, useComponentSearch, useSelectedComponent } from "./components.tsx";
 import { CreateTable } from "./create-table.tsx";
 import { useCanViewSystemTables, useShowSystemTables, useSystemTables } from "./system-table.tsx";
 
@@ -26,13 +27,17 @@ export function TablesSidebar(props: { tables: TableInfo[]; current: string; can
   const shown = sorted.filter((t) => matches(t.name));
   // the system tables (STUDY-131 AD-24): behind a switch, for a credential that may view data; an open
   // system table keeps them listed
-  const canViewSystem = useCanViewSystemTables();
+  // the system tables are the app's (STUDY-131 AD-24): not listed in a component
+  const { component } = useComponentSearch();
+  const inComponent = useSelectedComponent() !== null;
+  const canViewSystem = useCanViewSystemTables() && !inComponent;
   const [showSystem, setShowSystem] = useShowSystemTables();
   const systemListed = canViewSystem && (showSystem || current.startsWith("_"));
   const systemTables = useSystemTables(systemListed).filter((t) => matches(t.name));
   const systemSwitchId = useId();
   return (
     <>
+      <ComponentPicker className="border-b px-4 py-2 lg:hidden" />
       {sorted.length > 0 && (
         <div className="flex items-center gap-2 border-b px-4 py-2 lg:hidden">
           <span id={pickerLabel} className="text-sm text-muted-foreground">
@@ -41,7 +46,9 @@ export function TablesSidebar(props: { tables: TableInfo[]; current: string; can
           <Select
             items={sorted.map((t) => ({ value: t.name, label: t.name }))}
             value={current}
-            onValueChange={(v) => navigate({ to: "/database/$table", params: { table: v as string } })}
+            onValueChange={(v) =>
+              navigate({ to: "/database/$table", params: { table: v as string }, search: { component } })
+            }
           >
             <SelectTrigger aria-labelledby={pickerLabel} className="min-w-40 flex-1">
               <SelectValue />
@@ -58,6 +65,7 @@ export function TablesSidebar(props: { tables: TableInfo[]; current: string; can
       )}
       <SectionColumn title="Database" widthKey={WIDTH_KEY} from="lg">
         <nav aria-label="Tables">
+          <ComponentPicker className="px-3 pt-3" />
           <div className="px-3 pt-3">
             <label htmlFor={searchId} className="sr-only">
               Search tables
@@ -83,7 +91,10 @@ export function TablesSidebar(props: { tables: TableInfo[]; current: string; can
           <ul>
             {shown.map((t) => (
               <li key={t.name}>
-                <DashLink link={{ to: "/database/$table", params: { table: t.name } }} className={SECTION_ITEM}>
+                <DashLink
+                  link={{ to: "/database/$table", params: { table: t.name }, search: { component } }}
+                  className={SECTION_ITEM}
+                >
                   <Table2 className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
                   <span className="min-w-0 flex-1 truncate">
                     {t.name}

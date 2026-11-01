@@ -14,7 +14,7 @@ provideProcessExecutor(createProcessExecutor);
 const sandbox = process.argv[2] === "process" ? "process" : "vm";
 
 // The pushed module's import, built so the dependency rules do not read it as this package's own.
-const SERVER = JSON.stringify(["bunvex", "server"].join("/"));
+const SERVER = JSON.stringify(["@bunvex", "server"].join("/"));
 const SOURCE = `
 import { httpRouter, httpActionGeneric as httpAction } from ${SERVER};
 const MiB = 1024 * 1024;

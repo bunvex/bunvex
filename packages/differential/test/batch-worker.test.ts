@@ -82,16 +82,6 @@ async function tables(b: Backend): Promise<unknown> {
   return JSON.parse(JSON.parse(out.trim()) as string);
 }
 
-/**
- * A known server gap, not the package's: a caller that catches a nested call's argument validation error sees the
- * message end with one newline on Convex and two on bunvex (`ValidatorError.args`, `packages/server/src/errors.ts`).
- * Every other word is compared. Remove this once the server matches.
- */
-const withoutExtraNewline = (r: unknown) => {
-  const error = (r as { error?: string }).error;
-  return error?.startsWith("ArgumentValidationError: ") && error.endsWith("\n\n") ? { error: error.slice(0, -1) } : r;
-};
-
 describe.skipIf(!ready)("the batch worker: Convex with @convex-dev/batch-worker 0.3.6, bunvex with ours", () => {
   test("a queue and a cursor-driven worker drain to the same batches, status, cursor and component rows", async () => {
     await both("mutation", "worker:enqueue", { values: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] });
@@ -114,7 +104,7 @@ describe.skipIf(!ready)("the batch worker: Convex with @convex-dev/batch-worker 
     ];
     const results: { convex: unknown[]; bunvex: unknown[] } = { convex: [], bunvex: [] };
     for (const [fn, args] of cases) {
-      const [c, x] = (await both("mutation", "worker:call", { fn, args })).map(withoutExtraNewline);
+      const [c, x] = await both("mutation", "worker:call", { fn, args });
       results.convex.push({ fn, result: c });
       results.bunvex.push({ fn, result: x });
     }

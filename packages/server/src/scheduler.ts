@@ -73,16 +73,17 @@ import { type ComponentRuntime, type Functions, type SourcedCaller, THROTTLED } 
 /** A function to schedule: a reference (`api.module.fn`) or its name (`"module:fn"`). */
 export type SchedulableFunction = AnyFunctionReference | string;
 
-/** A mutation or action to schedule, as Convex's `SchedulableFunctionReference`. */
-/** A reference the scheduler takes: a mutation or an action, either kind of reference (Convex 1.48). */
+// Convex's `SchedulableFunctionReference` (Convex 1.48).
+/** A reference the scheduler takes: a mutation or an action, either kind of reference. */
 export type SchedulableFunctionReference =
   | FunctionReference<"mutation" | "action", "public" | "internal">
   | FunctionReference_future<"mutation" | "action", "public" | "internal">;
 type ScheduledId = GenericId<"_scheduled_functions">;
 
+// Convex's `Scheduler`.
 /**
- * `ctx.scheduler`, as Convex's `Scheduler`: a reference's arguments are typed (none may be left out when
- * it takes some); a plain name (`"module:fn"`) is untyped.
+ * `ctx.scheduler`: a reference's arguments are typed (none may be left out when it takes some); a plain name
+ * (`"module:fn"`) is untyped.
  */
 export interface Scheduler {
   runAfter<F extends SchedulableFunctionReference>(
@@ -255,7 +256,8 @@ async function parentJob(db: Tx, id: string, ns: string | null): Promise<JobDoc 
   return (await inNamespace(db, ns, here)) ?? here();
 }
 
-/** Convex's knobs, from the environment where Convex reads them. */
+// Convex's knobs, from the environment where Convex reads them.
+/** The scheduler's knobs, from the environment. */
 export type SchedulerOptions = {
   /** SCHEDULED_JOB_EXECUTION_PARALLELISM: jobs run at once (8). */
   parallelism?: number;
@@ -429,10 +431,10 @@ export class ScheduledJobExecutor {
     w?.();
   }
 
+  // Convex's `stream_jobs_to_run`.
   /**
-   * The first `limit` jobs due at `now` across the namespaces, by `(nextTs, namespace)` (Convex's
-   * `stream_jobs_to_run`), each with its arguments read at the same snapshot; a job whose arguments cannot be read
-   * fails its attempt as a system error.
+   * The first `limit` jobs due at `now` across the namespaces, by `(nextTs, namespace)`, each with its arguments read
+   * at the same snapshot; a job whose arguments cannot be read fails its attempt as a system error.
    */
   private async dueJobs(db: Tx, now: number, limit: number) {
     const order = new Map(this.namespaces().map((ns, i) => [ns, i]));
@@ -536,17 +538,19 @@ export class ScheduledJobExecutor {
     return this.running.size;
   }
 
+  // Convex's `scheduled_job_backlog_seconds`.
   /**
-   * Convex's `scheduled_job_backlog_seconds`: how long the oldest runnable job has waited, 0 with none. It
-   * keeps growing while the loop does not run again, so a stalled executor shows.
+   * How long the oldest runnable job has waited, 0 with none. It keeps growing while the loop does not run again, so
+   * a stalled executor shows.
    */
   backlogSeconds(now = this.engine.runtime.now()): number {
     return this.oldestReady === null ? 0 : Math.max(0, now - this.oldestReady) / 1000;
   }
 
+  // Convex's `log_scheduled_job_stats`.
   /**
-   * Convex's scheduler stats for the app metrics (`log_scheduled_job_stats`): logged when the next ready
-   * time moves by 30 s or more, appears or goes, and every 30 s while a job is overdue.
+   * The scheduler's stats for the app metrics: logged when the next ready time moves by 30 s or more, appears or goes,
+   * and every 30 s while a job is overdue.
    */
   private logStats(ready: number | null, now: number) {
     const last = this.lastReady;
@@ -571,17 +575,16 @@ export class ScheduledJobExecutor {
     }
   }
 
-  /** Re-read the job in its namespace: an attempt goes ahead only if nothing changed it since it was picked (Convex). */
+  // As Convex's.
+  /** Re-read the job in its namespace: an attempt goes ahead only if nothing changed it since it was picked. */
   private async unchanged(db: Tx, job: Queued) {
     const { ns, ...doc } = job;
     const now = await inNamespace(db, ns, () => getJob(db, job._id));
     return now !== null && stringifyValue(now) === stringifyValue(doc);
   }
 
-  /**
-   * Traced (STUDY-131 AD-26), each run is a `scheduler/run` trace of its own, with the function's execution
-   * under it (Convex's scheduler opens a root span per job too).
-   */
+  // STUDY-131 AD-26; Convex's scheduler opens a root span per job too.
+  /** Traced, each run is a `scheduler/run` trace of its own, with the function's execution under it. */
   private execute(job: Queued, args: Value[] | { error: string }): Promise<void> {
     const tracer = this.engine.tracer;
     if (!tracer.on) return this.executeJob(job, args);
@@ -627,7 +630,8 @@ export class ScheduledJobExecutor {
     }
   }
 
-  /** Records a job's end; `source` is the commit's write source, as Convex names it (app metrics, OCC). */
+  // `source` as Convex names it.
+  /** Records a job's end; `source` is the commit's write source (app metrics, OCC). */
   private async finish(job: Queued, state: JobDoc["state"], source: string) {
     await this.engine.mutation(async (db) => {
       if (await this.unchanged(db, job))
@@ -742,12 +746,13 @@ export class ScheduledJobExecutor {
     else this.stats.failed++;
   }
 
+  // Convex's `ScheduledJobGarbageCollector` and its loop over `namespaces_for_name`. With none completed, Convex waits
+  // for one to be; here a window from now, as no job completing meanwhile leaves it sooner.
   /**
-   * Delete the jobs completed before the retention window, a batch a transaction, as Convex's
-   * `ScheduledJobGarbageCollector`: after a batch, the next one `gcDelayMs` later; with none to delete, when the
-   * oldest completed job leaves the window. With none completed, Convex waits for one to be: here a window from
-   * now (at least `gcDelayMs`), as no job completing meanwhile leaves it sooner. After an error, a backoff that a
-   * success resets. Every namespace's, in turn (Convex's loop over `namespaces_for_name`).
+   * Delete the jobs completed before the retention window, a batch a transaction: after a batch, the next one
+   * `gcDelayMs` later; with none to delete, when the oldest completed job leaves the window; with none completed, a
+   * window from now (at least `gcDelayMs`). After an error, a backoff that a success resets. Every namespace's, in
+   * turn.
    */
   private scheduleGc(delayMs: number, failures = 0) {
     if (this.stopped) return;

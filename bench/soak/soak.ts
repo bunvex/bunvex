@@ -30,8 +30,8 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { BunvexClient, BunvexHttpClient } from "bunvex/browser";
-import { anyApi } from "bunvex/server";
+import { BunvexClient, BunvexHttpClient } from "@bunvex/client";
+import { anyApi } from "@bunvex/server";
 import {
   exitCode,
   type JobRecord,
@@ -91,8 +91,8 @@ mkdirSync(OUT, { recursive: true });
 
 const BENCH = resolve(import.meta.dir, "..");
 const ROOT = resolve(BENCH, "..");
-const BACKEND = join(ROOT, "packages/bunvex/bin/local-backend.ts");
-const CLI = join(ROOT, "packages/bunvex/bin/bunvex.ts");
+const BACKEND = join(ROOT, "apps/local-backend/local-backend.ts");
+const CLI = join(ROOT, "packages/cli/bin/bunvex.ts");
 const api = anyApi;
 
 // ---- The backend -----------------------------------------------------------------------------------------------

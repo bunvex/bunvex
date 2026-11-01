@@ -18,7 +18,15 @@ import {
   type ValidateLinkOptions,
 } from "@tanstack/react-router";
 import type { ComponentProps, ComponentType, ReactNode } from "react";
-import { documentsQuery, functionsQuery, logsQuery, type QueryScope, tablesQuery } from "./data/queries.ts";
+import {
+  componentScope,
+  componentsQuery,
+  documentsQuery,
+  functionsQuery,
+  logsQuery,
+  type QueryScope,
+  tablesQuery,
+} from "./data/queries.ts";
 import { type DataSourceError, toDataSourceError } from "./data-source.ts";
 import { decodeFilter } from "./database/filter-url.ts";
 import { guarded } from "./extensions/guard.tsx";
@@ -35,8 +43,17 @@ export type DashboardRouterContext = { queryClient: QueryClient; scope: QuerySco
 
 // ------------------------------------------------------------------ search params
 
+/**
+ * The Database screen's component (STUDY-152 §4): its `_components` id, as Convex's `?component=`; none for the
+ * app's tables.
+ */
+export type ComponentSearch = { component?: string };
+export const validateComponentSearch = (input: Record<string, unknown>): ComponentSearch => ({
+  component: str(input.component),
+});
+
 /** The Database screen's URL state (UI-01 §12.3): the applied filter, the open document, the open panel. */
-export type TableSearch = {
+export type TableSearch = ComponentSearch & {
   filter?: string;
   doc?: string;
   panel?: "schema" | "indexes" | "add" | "columns" | "metrics";
@@ -65,7 +82,7 @@ export function validateFunctionsSearch(input: Record<string, unknown>): Functio
 /** Invalid options are dropped, not rejected: a hand-edited URL still opens the screen. */
 export function validateTableSearch(input: Record<string, unknown>): TableSearch {
   // every key, `undefined` when invalid: the router keeps a raw param the validator leaves out
-  const out: TableSearch = { filter: undefined, doc: undefined, panel: undefined };
+  const out: TableSearch = { ...validateComponentSearch(input), filter: undefined, doc: undefined, panel: undefined };
   const filter = str(input.filter);
   const doc = str(input.doc);
   if (filter) out.filter = filter;
@@ -236,13 +253,29 @@ export const healthRedirectRoute = createRoute({
   },
 });
 
+/** The scope of the Database screen's component (the app's for none or an unknown one), its list read first. */
+async function databaseScope(queryClient: QueryClient, scope: QueryScope, component: string | undefined) {
+  const components = await queryClient.ensureQueryData(componentsQuery(scope));
+  return componentScope(scope, components, component);
+}
+
 export const databaseRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "database",
-  loader: async ({ context: { queryClient, scope } }) => {
-    const tables = await queryClient.ensureQueryData(tablesQuery(scope));
+  validateSearch: validateComponentSearch,
+  loaderDeps: ({ search }) => ({ component: search.component }),
+  loader: async ({ context: { queryClient, scope }, deps }) => {
+    const tables = await queryClient.ensureQueryData(
+      tablesQuery(await databaseScope(queryClient, scope, deps.component)),
+    );
     const first = tables.map((t) => t.name).sort()[0];
-    if (first !== undefined) throw redirect({ to: "/database/$table", params: { table: first }, replace: true });
+    if (first !== undefined)
+      throw redirect({
+        to: "/database/$table",
+        params: { table: first },
+        search: { component: deps.component },
+        replace: true,
+      });
   },
   // reached only when there is no table to open
   component: EmptyDatabase,
@@ -252,8 +285,9 @@ export const tableRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "database/$table",
   validateSearch: validateTableSearch,
-  loaderDeps: ({ search }) => ({ filter: search.filter }),
-  loader: async ({ context: { queryClient, scope }, params, deps }) => {
+  loaderDeps: ({ search }) => ({ filter: search.filter, component: search.component }),
+  loader: async ({ context: { queryClient, scope: app }, params, deps }) => {
+    const scope = await databaseScope(queryClient, app, deps.component);
     const tables = await queryClient.ensureQueryData(tablesQuery(scope));
     if (!tables.some((t) => t.name === params.table)) return;
     const filter = decodeFilter(deps.filter) ?? undefined;

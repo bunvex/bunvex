@@ -1,4 +1,4 @@
-// The tutorial end to end (STUDY-90): deployed to a bunvex-local-backend, used through the public client.
+// The tutorial end to end: deployed to a bunvex-local-backend, used through the public client.
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { resolve } from "node:path";
 import { build, type Deployment, deploy, until } from "bunvex-examples-harness";

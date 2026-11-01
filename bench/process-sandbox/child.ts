@@ -4,7 +4,7 @@
 // sets, OCC, commit and the query cache stay on the host.
 //
 // Started by host.ts as `bun child.ts` (inside bubblewrap on Linux), with APP = the app module to load and
-// VALUES = the `bunvex/values` entry. Messages are those of wire.ts over Bun's IPC channel.
+// VALUES = the `@bunvex/values` entry. Messages are those of wire.ts over Bun's IPC channel.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { decode, encode, recorder, type ToChild, type ToHost, type Wire } from "./wire.ts";
 
@@ -43,7 +43,7 @@ function ran(e: Execution): number {
 }
 const executions = new AsyncLocalStorage<Execution>();
 
-// --- The app's view of `bunvex/server`: the builders only (validation runs on the host). ---
+// --- The app's view of `@bunvex/server`: the builders only (validation runs on the host). ---
 const builder =
   (kind: Def["kind"]) =>
   (def: Def["handler"] | { handler: Def["handler"] }): Def => ({
@@ -54,7 +54,7 @@ const values = await import(process.env.VALUES as string);
 Bun.plugin({
   name: "bunvex-sandbox",
   setup(build) {
-    build.module("bunvex/server", () => ({
+    build.module("@bunvex/server", () => ({
       loader: "object",
       exports: {
         query: builder("query"),
@@ -84,7 +84,7 @@ Bun.plugin({
         }),
       },
     }));
-    build.module("bunvex/values", () => ({ loader: "object", exports: values }));
+    build.module("@bunvex/values", () => ({ loader: "object", exports: values }));
   },
 });
 

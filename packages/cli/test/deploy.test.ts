@@ -101,8 +101,8 @@ function segments(mappings: string): number[][] {
 }
 
 // The app's imports, spelled so the dependency checker does not take them for this test's own.
-const SERVER = ["bunvex", "server"].join("/");
-const VALUES = ["bunvex", "values"].join("/");
+const SERVER = ["@bunvex", "server"].join("/");
+const VALUES = ["@bunvex", "values"].join("/");
 const APP: Record<string, string> = {
   "bunvex/schema.ts": `import { defineSchema, defineTable } from ${JSON.stringify(SERVER)};
 import { v } from ${JSON.stringify(VALUES)};
@@ -186,10 +186,12 @@ describe("bunvex deploy", () => {
     const d = await deployment();
     const app = tmp();
     mkdirSync(join(app, "node_modules"));
-    symlinkSync(resolve(import.meta.dir, "../../bunvex"), join(app, "node_modules/bunvex"));
+    mkdirSync(join(app, "node_modules/@bunvex"), { recursive: true });
+    for (const p of ["server", "values"])
+      symlinkSync(resolve(import.meta.dir, "../..", p), join(app, "node_modules/@bunvex", p));
     symlinkSync(resolve(import.meta.dir, "../../../node_modules/typescript"), join(app, "node_modules/typescript"));
     write(app, {
-      "bunvex/a.ts": `import { v } from ${JSON.stringify(["bunvex", "values"].join("/"))};
+      "bunvex/a.ts": `import { v } from ${JSON.stringify(["@bunvex", "values"].join("/"))};
 import { query } from "./_generated/server";
 export const q = query({ args: {}, returns: v.number(), handler: async (ctx) => (await ctx.db.query("t").collect()).length.toString() });`,
     });

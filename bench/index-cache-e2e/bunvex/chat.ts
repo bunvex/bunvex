@@ -1,7 +1,7 @@
 // STUDY-136's end-to-end benchmark app (bench/index-cache-e2e.ts): the in-process bench's chat, as deployed
 // functions. `list` takes the user as an argument, so the query cache keeps one result per user and channel,
 // as a query that reads ctx.auth does.
-import { v } from "bunvex/values";
+import { v } from "@bunvex/values";
 import { mutation, query } from "./_generated/server";
 
 export const list = query({

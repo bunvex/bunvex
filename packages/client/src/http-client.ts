@@ -23,7 +23,8 @@ import { VERSION } from "./version.ts";
 
 export const STATUS_CODE_OK = 200;
 export const STATUS_CODE_BAD_REQUEST = 400;
-/** What Convex's hosted backend answers for a function error (bunvex answers 200 with `status: "error"`). */
+// What Convex's hosted backend answers.
+/** The HTTP status some backends answer for a function error (bunvex answers 200 with `status: "error"`). */
 export const STATUS_CODE_UDF_FAILED = 560;
 
 let specifiedFetch: typeof globalThis.fetch | undefined;
@@ -100,7 +101,8 @@ export class BunvexHttpClient {
     this.auth = value;
   }
 
-  /** @internal An admin key, optionally acting as a user (sent as `Authorization: Bunvex …`, STUDY-26 H2). */
+  // STUDY-26 H2.
+  /** @internal An admin key, optionally acting as a user (sent as `Authorization: Bunvex …`). */
   setAdminAuth(token: string, actingAsIdentity?: Record<string, unknown>) {
     this.clearAuth();
     if (actingAsIdentity === undefined) {
@@ -136,7 +138,8 @@ export class BunvexHttpClient {
     return this.fetch ?? specifiedFetch ?? fetch;
   }
 
-  /** POST a call and read Convex's `UdfResponse`: the value, or the function's error (with its data). */
+  // Convex's `UdfResponse`.
+  /** POST a call and read its response: the value, or the function's error (with its data). */
   private async call(endpoint: string, body: Record<string, unknown>, type: UdfType, name: string): Promise<unknown> {
     const response = await this.localFetch()(`${this.address}/api/${endpoint}`, {
       ...this.fetchOptions,
@@ -174,9 +177,11 @@ export class BunvexHttpClient {
     )) as FunctionReturnType<Q>;
   }
 
+  // Deprecated in Convex for that reason; kept for parity.
   /**
    * Run a query at the timestamp of this client's first `consistentQuery`: all of them read one snapshot.
-   * (Deprecated in Convex, since a long-lived client ends up reading old data; kept for parity.)
+   *
+   * @deprecated A long-lived client ends up reading old data.
    */
   async consistentQuery<Q extends Ref<"query">>(
     query: Q | string,
@@ -256,10 +261,11 @@ export class BunvexHttpClient {
     )) as FunctionReturnType<A>;
   }
 
+  // Convex's `function` (`/api/function`).
   /**
-   * @internal Run any function by its own kind, internal ones included (Convex's `function`, `/api/function`):
-   * the server requires an admin key (`setAdminAuth`). Its arguments are sent as the object itself, not in an
-   * array. `componentPath` names a component's function; bunvex has none (STUDY-62), so only the root's.
+   * @internal Run any function by its own kind, internal ones included: the server requires an admin key
+   * (`setAdminAuth`). Its arguments are sent as the object itself, not in an array. `componentPath` names a component's
+   * function.
    */
   async function<F extends Ref<"query" | "mutation" | "action">>(
     anyFunction: F | string,

@@ -1,4 +1,4 @@
-import { v } from "bunvex/values";
+import { v } from "@bunvex/values";
 import { mutation, query } from "./_generated/server";
 
 /** Every channel, oldest first. */

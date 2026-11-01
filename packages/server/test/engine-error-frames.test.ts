@@ -15,8 +15,8 @@ import { createServer } from "../src/server.ts";
 const SECRET = "4361726e697461732c206c69746572616c6c79206d65616e696e6720226c6974";
 const NAME = "carnitas";
 const KEY = issueAdminKey({ instanceName: NAME, cipherKey: adminKeyCipherKey(SECRET) });
-const SERVER = JSON.stringify(["bunvex", "server"].join("/"));
-const VALUES = JSON.stringify(["bunvex", "values"].join("/"));
+const SERVER = JSON.stringify(["@bunvex", "server"].join("/"));
+const VALUES = JSON.stringify(["@bunvex", "values"].join("/"));
 const REPO = resolve(import.meta.dir, "../../..");
 const stops: (() => unknown)[] = [];
 afterEach(async () => {

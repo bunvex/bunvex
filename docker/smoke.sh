@@ -35,14 +35,14 @@ LOGS=$(compose logs backend)
 APP=$(mktemp -d)
 mkdir "$APP/bunvex"
 cat >"$APP/bunvex/items.ts" <<'TS'
-import { mutation, query } from "bunvex/server";
+import { mutation, query } from "@bunvex/server";
 export const add = mutation(async ({ db }, { n }: { n: number }) => {
   await db.insert("items", { n });
 });
 export const all = query(async ({ db }) => (await db.query("items").collect()).map((d) => d.n));
 export const site = query(async () => process.env.BUNVEX_SITE_URL ?? null);
 TS
-cli() { (cd "$APP" && BUNVEX_SELF_HOSTED_URL="http://127.0.0.1:$PORT" BUNVEX_SELF_HOSTED_ADMIN_KEY="$KEY" bun "$ROOT/packages/bunvex/bin/bunvex.ts" "$@"); }
+cli() { (cd "$APP" && BUNVEX_SELF_HOSTED_URL="http://127.0.0.1:$PORT" BUNVEX_SELF_HOSTED_ADMIN_KEY="$KEY" bun "$ROOT/packages/cli/bin/bunvex.ts" "$@"); }
 cli deploy --typecheck=disable >/dev/null 2>&1 || fail "deploy failed"
 cli run items:add '{ n: 42 }' >/dev/null 2>&1 || fail "run failed"
 [ "$(cli run items:all 2>/dev/null | tr -d ' \n')" = "[42]" ] || fail "unexpected data"

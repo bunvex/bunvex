@@ -8,7 +8,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { BunvexClient } from "bunvex/browser";
+import { BunvexClient } from "@bunvex/client";
 import { ConvexClient } from "convex/browser";
 import { type Backend, ORACLE_BIN, startAll, startBunvex, startConvex } from "../harness/backends.ts";
 import { errorText } from "../harness/compare.ts";

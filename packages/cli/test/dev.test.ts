@@ -15,7 +15,7 @@ import { memoryStore } from "./memory-store.ts";
 const SECRET = "34".repeat(32);
 const NAME = "dev-test";
 const KEY = issueAdminKey({ instanceName: NAME, cipherKey: adminKeyCipherKey(SECRET) });
-const SERVER = ["bunvex", "server"].join("/");
+const SERVER = ["@bunvex", "server"].join("/");
 
 const stops: (() => unknown)[] = [];
 const dirs: string[] = [];
@@ -320,7 +320,7 @@ describe("bunvex dev", () => {
   test("required variables unset (bunvex.config.ts): Convex's message and commands, then a push once they are set", async () => {
     const d = await deployment();
     const app = tmp();
-    const values = ["bunvex", "values"].join("/");
+    const values = ["@bunvex", "values"].join("/");
     write(app, {
       "bunvex/hello.ts": hello("configured"),
       "bunvex/bunvex.config.ts": `import { defineApp } from ${JSON.stringify(SERVER)};
@@ -355,7 +355,7 @@ export default defineApp({ env: { API_KEY: v.string(), REGION: v.string() } });`
   test("a schema its documents fail: Convex's message, then a push once the table changes (STUDY-120)", async () => {
     const d = await deployment();
     const app = tmp();
-    const values = ["bunvex", "values"].join("/");
+    const values = ["@bunvex", "values"].join("/");
     write(app, {
       "bunvex/messages.ts": `import { mutation } from ${JSON.stringify(SERVER)};
 export const add = mutation(async ({ db }) => { await db.insert("messages", { body: 1 }); });

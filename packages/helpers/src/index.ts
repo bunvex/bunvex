@@ -3,10 +3,11 @@
 // signatures, behaviour and messages. Written for bunvex; an app moves by importing `@bunvex/helpers`.
 // biome-ignore-all lint/suspicious/noExplicitAny: the public signatures are convex-helpers', `any` included
 
+// convex-helpers' `asyncMap`.
 /**
- * Apply an async function to every item of a list, all at once, and wait for every result (in the list's order).
- * The list may be any iterable (an array, a `Set`, `Object.keys(…)`) or a promise of one. Every call starts before
- * any is awaited, so the transforms run concurrently, as convex-helpers' `asyncMap`.
+ * Apply an async function to every item of a list, all at once, and wait for every result (in the list's order). The
+ * list may be any iterable (an array, a `Set`, `Object.keys(…)`) or a promise of one. Every call starts before any is
+ * awaited, so the transforms run concurrently.
  */
 export async function asyncMap<FromType, ToType>(
   list: Iterable<FromType> | Promise<Iterable<FromType>>,
@@ -67,10 +68,12 @@ export function withoutSystemFields<T extends Record<string, any>>(obj: T) {
 }
 
 declare const errorBrand: unique symbol;
-/** A string type that reads as an error message where a type does not fit (convex-helpers' `ErrorMessage`). */
+// convex-helpers' `ErrorMessage`.
+/** A string type that reads as an error message where a type does not fit. */
 export type ErrorMessage<Reason extends string> = Reason & { __error: typeof errorBrand };
 
-/** An object with no keys (as Convex's `EmptyObject`). */
+// Convex's `EmptyObject`.
+/** An object with no keys. */
 export type EmptyObject = Record<string, never>;
 
 /**

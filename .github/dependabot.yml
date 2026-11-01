@@ -1,0 +1,80 @@
+# Dependency updates (owner, 2026-10-30). One `bun.lock` at the root covers every workspace (packages, components,
+# apps, examples, bench), so one entry per ecosystem. Updates come grouped by family, once a week, so a week brings a
+# handful of PRs, not dozens; security updates come as they are found (enabled in the repository's settings).
+#
+# Left out on purpose:
+# - `convex`, `@convex-dev/*`, `convex-helpers` and `convex-test`: the differential suite's oracles and the references
+#   of @bunvex/helpers and @bunvex/testing, pinned in docs/parity/upstream.md and moved with a study, never on their own;
+# - `@tanstack/react-query`: one version across the repository (a second copy of query-core breaks the types against
+#   @bunvex/react-query), moved by hand everywhere at once;
+# - `expo`, `react-native` and Expo's packages: moved together with an Expo SDK (`bunx expo install --fix`);
+# - `fast-check`: pinned, so a property test's shrinking does not change under a seed.
+#
+# The groups take minor and patch updates only: a major version (TypeScript 7, Changesets 3, …) comes in a PR of its
+# own, so one that breaks does not hold back the safe ones (#978 grouped four majors with ten safe updates).
+version: 2
+updates:
+  - package-ecosystem: bun
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: deps
+    ignore:
+      - dependency-name: convex
+      - dependency-name: "@convex-dev/*"
+      - dependency-name: convex-helpers
+      - dependency-name: convex-test
+      - dependency-name: "@tanstack/react-query"
+      - dependency-name: "@tanstack/react-query-devtools"
+      - dependency-name: expo
+      - dependency-name: "expo-*"
+      - dependency-name: "@expo/*"
+      - dependency-name: react-native
+      - dependency-name: "react-native-*"
+      - dependency-name: fast-check
+      # Majors that need a study first (owner, 2026-11-01): TypeScript 7 is the native compiler, and the publish
+      # script, rule 8, the dashboard's editor types and `bunvex typecheck` use TypeScript's JavaScript API (#1000);
+      # Changesets 3 rewrites the prerelease state and leaves the private apps/local-backend unversioned (#999).
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@changesets/cli"
+        update-types: ["version-update:semver-major"]
+    groups:
+      react:
+        update-types: [minor, patch]
+        patterns: [react, react-dom, "@types/react", "@types/react-dom"]
+      tanstack:
+        update-types: [minor, patch]
+        patterns: ["@tanstack/*"]
+      vite:
+        update-types: [minor, patch]
+        patterns: [vite, "@vitejs/*", "@tailwindcss/*", tailwindcss]
+      nextjs:
+        update-types: [minor, patch]
+        patterns: [next, "eslint-config-next"]
+      database-drivers:
+        update-types: [minor, patch]
+        patterns: [postgres, mysql2]
+      auth:
+        update-types: [minor, patch]
+        patterns: [jose, "@auth0/*", "@clerk/*"]
+      dev-tools:
+        dependency-type: development
+        update-types: [minor, patch]
+        patterns: ["*"]
+      minor-and-patch:
+        update-types: [minor, patch]
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: ci
+    groups:
+      actions:
+        patterns: ["*"]

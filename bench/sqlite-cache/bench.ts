@@ -1,5 +1,5 @@
 // STUDY-174 Q6: does SQLite's default page cache (Convex's: no pragma, 2 000 KiB) read slower than the 256 MiB
-// bunvex set, on a store the OS page cache cannot hold? The real local backend (packages/bunvex/bin/local-backend.ts,
+// bunvex set, on a store the OS page cache cannot hold? The real local backend (apps/local-backend/local-backend.ts,
 // on SQLite) serves the app of ./app; a closed-loop driver sends point gets by id, index range reads and paginated
 // queries over HTTP, and records each call's latency, the throughput and the backend's memory.
 //
@@ -18,8 +18,8 @@ import { randomBytes } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { BunvexHttpClient } from "bunvex/browser";
-import { anyApi } from "bunvex/server";
+import { BunvexHttpClient } from "@bunvex/client";
+import { anyApi } from "@bunvex/server";
 
 const { values: flags, positionals } = parseArgs({
   allowPositionals: true,
@@ -40,8 +40,8 @@ const { values: flags, positionals } = parseArgs({
 const cmd = positionals[0];
 const STATE = resolve(flags.state ?? ".data/sqlite-cache");
 const ROOT = resolve(import.meta.dir, "../..");
-const BACKEND = join(ROOT, "packages/bunvex/bin/local-backend.ts");
-const CLI = join(ROOT, "packages/bunvex/bin/bunvex.ts");
+const BACKEND = join(ROOT, "apps/local-backend/local-backend.ts");
+const CLI = join(ROOT, "packages/cli/bin/bunvex.ts");
 const api = anyApi;
 const GROUPS = 1000;
 /** The hot set: 20 of the 1 000 groups, ~2 % of the store (on 5 M documents ~120 MB of rows and index). */

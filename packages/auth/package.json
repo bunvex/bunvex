@@ -1,6 +1,6 @@
 {
   "name": "@bunvex/auth",
-  "version": "0.1.0-alpha.1",
+  "version": "0.1.0-alpha.2",
   "description": "Identity for bunvex functions: JWT / OIDC verification and provider integrations.",
   "license": "Apache-2.0",
   "type": "module",
@@ -13,7 +13,7 @@
     "directory": "packages/auth"
   },
   "dependencies": {
-    "jose": "^6.2.12",
+    "jose": "^6.2.14",
     "@bunvex/values": "workspace:*"
   },
   "publishConfig": {

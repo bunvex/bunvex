@@ -1,4 +1,4 @@
-// The rooms-cursors example end to end (STUDY-90, AD-42): two clients in a room see each other's cursor and a wave.
+// The rooms-cursors example end to end: two clients in a room see each other's cursor and a wave.
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { resolve } from "node:path";
 import { build, type Deployment, deploy, until } from "bunvex-examples-harness";

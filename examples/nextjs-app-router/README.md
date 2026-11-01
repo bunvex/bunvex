@@ -2,9 +2,9 @@
 
 A counter in a Next.js App Router app (`app/`):
 
-- `app/page.tsx`, a Server Component, reads the counter with `preloadQuery` from `bunvex/nextjs`: the value is
+- `app/page.tsx`, a Server Component, reads the counter with `preloadQuery` from `@bunvex/nextjs`: the value is
   in the HTML from the first byte;
-- `app/Counter.tsx`, a Client Component, takes it with `usePreloadedQuery` from `bunvex/react` and keeps it
+- `app/Counter.tsx`, a Client Component, takes it with `usePreloadedQuery` from `@bunvex/react` and keeps it
   live; its button calls `useMutation(api.counters.increment)`;
 - `app/server-only/page.tsx` uses only Server Components and a Server Action (`fetchQuery`, `fetchMutation`):
   not live, no client JavaScript;

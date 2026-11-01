@@ -1,8 +1,8 @@
 # @bunvex/client
 
-The bunvex sync client (STUDY-26): one WebSocket that reconnects by itself, every subscription of the
-client advancing together, mutations that resolve once their write is visible, and optimistic updates. It
-speaks Convex's sync protocol v1 (STUDY-23), so the official `convex` client also works against a bunvex
+The bunvex sync client: one WebSocket that reconnects by itself, every subscription of the client advancing
+together, mutations that resolve once their write is visible, and optimistic updates. It speaks the sync protocol
+(v1) of Convex's official `convex` client, so an app moving from Convex can also keep that client against a bunvex
 server; `packages/sync-e2e` checks both.
 
 ```ts

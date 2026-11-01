@@ -134,9 +134,10 @@ export class BunvexClient {
     return Object.assign(props.unsubscribe, props) as Unsubscribe<FunctionReturnType<Q>>;
   }
 
+  // Experimental in Convex too.
   /**
-   * Call `callback` with every new result of a paginated query: `{ results, status, loadMore }`, the loaded
-   * pages as one list. Experimental, as Convex's: the API may change.
+   * Call `callback` with every new result of a paginated query: `{ results, status, loadMore }`, the loaded pages as
+   * one list. Experimental: the API may change.
    */
   onPaginatedUpdate_experimental<Q extends Ref<"query">>(
     query: Q | string,

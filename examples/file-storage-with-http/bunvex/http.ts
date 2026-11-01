@@ -1,4 +1,4 @@
-import { httpRouter } from "bunvex/server";
+import { httpRouter } from "@bunvex/server";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { httpAction } from "./_generated/server";

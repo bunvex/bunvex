@@ -16,7 +16,8 @@ export function normalizeMethod(method: RoutableMethod | "HEAD"): RoutableMethod
 export type HttpActionCtx = ActionCtx;
 export type HttpActionHandler = (ctx: HttpActionCtx, request: Request) => Promise<Response> | Response;
 
-/** An HTTP action, as Convex's `PublicHttpAction`: callable (it warns), marked, with its handler. */
+// Convex's `PublicHttpAction`.
+/** An HTTP action: callable (it warns), marked, with its handler. */
 export type PublicHttpAction = ((ctx: HttpActionCtx, request: Request) => Promise<Response> | Response) & {
   isHttp: true;
   _handler: HttpActionHandler;
@@ -38,9 +39,11 @@ export function httpActionGeneric(handler: HttpActionHandler): PublicHttpAction 
 /** The same builder, for apps without codegen (`_generated/server` re-exports it as `httpAction`). */
 export const httpAction = httpActionGeneric;
 
-/** A route on an exact path (Convex's `RouteSpecWithPath`). */
+// Convex's `RouteSpecWithPath`.
+/** A route on an exact path. */
 export type RouteSpecWithPath = { path: string; method: RoutableMethod; handler: PublicHttpAction };
-/** A route on every path under a prefix ending in `/` (Convex's `RouteSpecWithPathPrefix`). */
+// Convex's `RouteSpecWithPathPrefix`.
+/** A route on every path under a prefix ending in `/`. */
 export type RouteSpecWithPathPrefix = { pathPrefix: string; method: RoutableMethod; handler: PublicHttpAction };
 export type RouteSpec = RouteSpecWithPath | RouteSpecWithPathPrefix;
 

@@ -8,7 +8,7 @@
  * @module
  */
 
-import { anyApi } from "bunvex/server";
+import { anyApi } from "@bunvex/server";
 
 /**
  * A utility for referencing bunvex functions in your app's API.

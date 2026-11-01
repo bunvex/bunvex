@@ -54,6 +54,7 @@ import {
   encodeEntries,
   encodeGlobalWrite,
   encodeIndexPrunes,
+  encodeTabletPurge,
   message,
   SQLITE_BUSY_TIMEOUT_MS,
   SqliteWriter,
@@ -372,6 +373,12 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
   pruneDocuments(entries: DocPrune[]): number | Promise<number> {
     this.assertWriter();
     return this.write(WriteOp.PruneDocuments, encodeDocumentPrunes(entries)) as number | Promise<number>;
+  }
+
+  /** PERSIST-01 C18, Convex's `DELETE_TABLE_DOCUMENTS` (and the tablet's index rows first): one transaction. */
+  purgeTablet(table: TabletId, indexes: IndexId[], limit: number): number | Promise<number> {
+    this.assertWriter();
+    return this.write(WriteOp.PurgeTablet, encodeTabletPurge(table, indexes, limit)) as number | Promise<number>;
   }
 
   /** PERSIST-01 C14. */

@@ -55,6 +55,14 @@ function mockSource() {
     // ?nodes=4: a leader and three followers on the Topology screen (UI-01 §22); one node by default, as today
     nodes: Number(params.get("nodes") ?? 1),
     ...(params.has("tasks") && { documents: { tasks: Number(params.get("tasks")) } }),
+    // ?components=1: an app using components, for the Database screen's component picker (STUDY-152 §4)
+    ...(params.get("components") === "1" && {
+      components: [
+        { path: "rateLimiter", tables: { rateLimits: [{ name: "send", value: 3, ts: 0 }] } },
+        { path: "rateLimiter/shards", tables: { shards: [{ n: 0 }, { n: 1 }] } },
+        { path: "oldCounter", state: "unmounted" as const, tables: { counters: [{ name: "visits", value: 42 }] } },
+      ],
+    }),
   });
   // ?validate=pass|fail: as if a schema had just been pushed, checked against the documents (UI-01 §21.4)
   const validate = params.get("validate");

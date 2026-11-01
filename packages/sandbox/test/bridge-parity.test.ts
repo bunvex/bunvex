@@ -20,10 +20,10 @@ provideProcessExecutor(createProcessExecutor);
 // Functions run in UTC, as `bunvex-local-backend` sets it (STUDY-171 §10); the child's is always UTC.
 process.env.TZ = "UTC";
 
-const SERVER = JSON.stringify(["bunvex", "server"].join("/"));
+const SERVER = JSON.stringify(["@bunvex", "server"].join("/"));
 /** An event of the log stream, as a sink gets it (log-events.ts). */
 type LogEvent = { timestamp: number; event: { topic: string } & Record<string, unknown> };
-const VALUES = JSON.stringify(["bunvex", "values"].join("/"));
+const VALUES = JSON.stringify(["@bunvex", "values"].join("/"));
 
 /** Query cases: `ctx` is a query's, `a` the call's argument. */
 const QUERY_CASES = `{

@@ -1,7 +1,7 @@
 // One million checkboxes (after atrakh/one-million-checkboxes, as the sharded counter's own example): every box live,
 // 4,000 to a document and one query per document, and the number checked from the sharded counter. A click flips
 // its box and the count at once (an optimistic update), then the server confirms both.
-import { useMutation, useQueries, useQuery } from "bunvex/react";
+import { useMutation, useQueries, useQuery } from "@bunvex/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { type CellComponentProps, Grid } from "react-window";
 import { api } from "../bunvex/_generated/api";

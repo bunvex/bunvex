@@ -1,15 +1,17 @@
 # Batch worker
 
-`@bunvex/batch-worker` running two named workers on one component, after Convex's example of
+`@bunvex/batch-worker` running three named workers on one component, after Convex's example of
 [`@convex-dev/batch-worker`](https://github.com/get-convex/batch-worker):
 
 - **Work queue** ([example.ts](bunvex/example.ts)): batch and sum events, deleting what was processed.
 - **Live scoreboard** ([aggregates.ts](bunvex/aggregates.ts)): one writer folds scores into per-team totals, so
   scorers never conflict.
+- **Rate-limited LLM batches** ([rateLimited.ts](bunvex/rateLimited.ts)): prompts go out five at a time, each batch
+  when a `@bunvex/rate-limiter` token budget allows it; the answers' tokens come out of the same budget. The model
+  call is stubbed.
 
-Both resume from a `v.commitTs()` cursor that the work query returns: the component commits it with the batch and
-passes it back, so each scan starts where the last one stopped. Convex's third worker, rate-limited LLM batches, comes
-with `@bunvex/rate-limiter`.
+Each resumes from a `v.commitTs()` cursor that the work query returns: the component commits it with the batch and
+passes it back, so each scan starts where the last one stopped.
 
 ## Run
 

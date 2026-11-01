@@ -12,7 +12,7 @@ import { provideProcessExecutor } from "@bunvex/server/executor";
 import { v } from "@bunvex/values";
 import { createProcessExecutor, ProcessExecutor } from "../src/executor.ts";
 
-const SERVER = JSON.stringify(["bunvex", "server"].join("/"));
+const SERVER = JSON.stringify(["@bunvex", "server"].join("/"));
 const MODULE = `
 import { query, mutation } from ${SERVER};
 export const busy = query(async (ctx, { iterations }) => { let x = 0; for (let i = 0; i < iterations; i++) x = (x + i * 7) % 1000003; return x; });

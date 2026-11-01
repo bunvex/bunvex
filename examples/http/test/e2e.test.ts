@@ -1,4 +1,4 @@
-// The HTTP actions example end to end (STUDY-90): messages posted and read over HTTP on the deployment's site
+// The HTTP actions example end to end: messages posted and read over HTTP on the deployment's site
 // origin, alongside the sync client.
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { resolve } from "node:path";

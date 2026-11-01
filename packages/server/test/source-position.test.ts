@@ -16,7 +16,7 @@ afterEach(() => {
 });
 
 // The app's import, spelled so the dependency checker does not take it for this test's own.
-const SERVER = JSON.stringify(["bunvex", "server"].join("/"));
+const SERVER = JSON.stringify(["@bunvex", "server"].join("/"));
 
 /** `files` bundled as the CLI bundles them (ESM, chunks under `_deps/`, external source maps). */
 async function bundle(files: Record<string, string>, entries: string[]): Promise<ModuleSource[]> {
@@ -34,7 +34,7 @@ async function bundle(files: Record<string, string>, entries: string[]): Promise
     target: "browser",
     sourcemap: "external",
     minify: { syntax: true },
-    external: ["bunvex", "bunvex/*"],
+    external: ["@bunvex/server", "@bunvex/values"],
     naming: { entry: "[dir]/[name].js", chunk: "_deps/[hash].js" },
   });
   if (!r.success) throw new Error(r.logs.join("\n"));

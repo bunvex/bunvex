@@ -4,7 +4,7 @@
 //   bun bench/process-sandbox/example-workload.ts <vm|bwrap|process> [concurrency] [seconds] [poolSize]
 import { Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
-import { createServer, Functions } from "bunvex/server";
+import { createServer, Functions } from "@bunvex/server";
 import schema from "../../examples/pagination/bunvex/schema.ts";
 import { CodeVersion } from "../../packages/server/src/code-version.ts";
 import { SandboxedDeployment } from "./host.ts";

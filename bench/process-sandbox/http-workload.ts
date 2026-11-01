@@ -1,7 +1,7 @@
 // STUDY-168: a realistic workload over HTTP: a bunvex server with app/sb.ts in a mode, and a load generator in the
 // same script (one machine), 80 % listByTenant queries (convex-bench's) and 20 % insertItem mutations.
 //   bun bench/process-sandbox/http-workload.ts <vm|bwrap> [concurrency] [seconds]
-import { createServer } from "bunvex/server";
+import { createServer } from "@bunvex/server";
 import { type Mode, setup } from "./setup.ts";
 
 const mode = (process.argv[2] ?? "vm") as Mode;

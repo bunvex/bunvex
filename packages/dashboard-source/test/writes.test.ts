@@ -10,7 +10,7 @@ import { dataWrites, UNDEFINED_PLACEHOLDER, writeError } from "../src/writes.ts"
 type Call = { path: string; args: Record<string, unknown> };
 
 /** The writes over a fake connection: each mutation answers `answer(call)`. */
-function fake(answer: (c: Call) => unknown, tableNames: string[] = ["t"]) {
+function fake(answer: (c: Call) => unknown, tableNames: string[] = ["t"], componentId: string | null = null) {
   const calls: Call[] = [];
   const posts: { path: string; body: unknown }[] = [];
   const sync = {
@@ -33,7 +33,7 @@ function fake(answer: (c: Call) => unknown, tableNames: string[] = ["t"]) {
       return new Response(null);
     },
   } as unknown as AdminHttp;
-  const tables = { tableNames: async () => [...tableNames] } as unknown as Tables;
+  const tables = { tableNames: async () => [...tableNames], componentId } as unknown as Tables;
   return { writes: dataWrites(sync, http, tables), calls, posts };
 }
 const ok = () => ({ success: true });
@@ -69,6 +69,13 @@ describe("what the writes send (Convex's dashboard calls)", () => {
     ]);
     expect(calls[0]!.args.componentId).toBeNull();
     expect(UNDEFINED_PLACEHOLDER.startsWith("__BUNVEX_PLACEHOLDER_undefined_")).toBe(true);
+  });
+
+  test("a component's writes carry its componentId (STUDY-152 §4)", async () => {
+    const { writes, calls } = fake(ok, ["t"], "comp1");
+    await writes.insertDocuments("t", [{ x: 1 }]);
+    await writes.createTable("u");
+    expect(calls.map((c) => c.args.componentId)).toEqual(["comp1", "comp1"]);
   });
 
   test("patchAllDocuments is one patchDocumentsFields without ids (Convex's Edit all); its refusal's words", async () => {

@@ -5,11 +5,12 @@
   "fixed": [
     [
       "@bunvex/*",
-      "bunvex",
       "!@bunvex/helpers",
       "!@bunvex/sharded-counter",
       "!@bunvex/batch-worker",
-      "!@bunvex/rate-limiter"
+      "!@bunvex/rate-limiter",
+      "!@bunvex/workpool",
+      "!@bunvex/resend"
     ]
   ],
   "linked": [],
@@ -29,7 +30,6 @@
     "@bunvex/persistence-conformance",
     "@bunvex/site",
     "@bunvex/sync-e2e",
-    "@bunvex/testing",
     "@bunvex/ui",
     "bunvex-example-*",
     "bunvex-examples-*"

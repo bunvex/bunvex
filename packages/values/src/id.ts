@@ -97,7 +97,8 @@ export function encodeId(tableNumber: number, internalId: Uint8Array): string {
   return String.fromCharCode(...codes);
 }
 
-/** Decode a document id, throwing `IdDecodeError` with Convex's messages when it is not one. */
+// With Convex's messages.
+/** Decode a document id, throwing `IdDecodeError` with what is wrong when it is not one. */
 export function decodeId(s: string): DecodedId {
   if (s.length < MIN_LEN || s.length > MAX_LEN)
     throw new IdDecodeError(`Unable to decode ID: Invalid ID length ${s.length}`);

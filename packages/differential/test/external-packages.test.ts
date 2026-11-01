@@ -184,7 +184,7 @@ describe.skipIf(!ready)("external packages, against Convex's backend", () => {
   test("a push of the Node module installs its packages", async () => {
     for (const b of [convex, bunvex]) {
       let source = readFileSync(join(APP, "later/ext.ts"), "utf8");
-      if (b.name === "bunvex") source = source.replaceAll('"convex/server"', '"bunvex/server"');
+      if (b.name === "bunvex") source = source.replaceAll('"convex/server"', '"@bunvex/server"');
       writeFileSync(join(projects[b.name]!, b.name, "ext.ts"), source);
     }
     registry.requests.length = 0;

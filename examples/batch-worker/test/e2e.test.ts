@@ -1,5 +1,6 @@
-// The batch-worker example end to end (STUDY-196 B-2): the component package installed from the workspace, two
-// named workers draining their queues on the deployment's own scheduler, and the totals and statuses following live.
+// The batch-worker example end to end (STUDY-196 B-2): the component package installed from the workspace, three
+// named workers draining their queues on the deployment's own scheduler, and the totals and statuses following live, the
+// third paced by @bunvex/rate-limiter.
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { resolve } from "node:path";
 import { build, type Deployment, deploy, until } from "bunvex-examples-harness";
@@ -50,5 +51,29 @@ test("the scoreboard folds every score into its team's total", async () => {
   );
   expect(data!.totals).toEqual(expected);
 });
+
+test("LLM requests go out in batches, each when the token budget allows it", async () => {
+  type Request = { prompt: string; state: string; response: string | null };
+  let requests: Request[] | undefined;
+  d.client().onUpdate(api.rateLimited.listRequests, {}, (r) => {
+    requests = r;
+  });
+  await until(() => requests !== undefined, "the first answer");
+  // Six requests of 100 tokens: the first batch (five, 500 tokens) overdraws the 300-token budget by 200, which it
+  // earns back at 60 tokens a second, so its call waits about 3.3 s. Without the budget it would go after the
+  // second's debounce.
+  const start = Date.now();
+  const prompts = Array.from({ length: 6 }, (_, i) => `prompt ${i}`);
+  await Promise.all(
+    prompts.map((prompt) => d.http.mutation(api.rateLimited.submitRequest, { prompt, inputTokens: 100 })),
+  );
+  // Longer than `until` waits: the second batch waits for the budget too.
+  while (requests?.filter((r) => r.state === "finished").length !== 6) {
+    if (Date.now() - start > 60_000) throw new Error("timed out waiting for every request answered");
+    await Bun.sleep(50);
+  }
+  expect(Date.now() - start).toBeGreaterThan(3_000);
+  expect(requests!.map((r) => r.response).sort()).toEqual(prompts.map((p) => `Echo: ${p}`).sort());
+}, 90_000);
 
 test("the front end typechecks and builds", () => build(DIR), 120_000);
