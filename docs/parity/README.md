@@ -50,7 +50,7 @@ then grow outwards.** Each item becomes one or more PRs, each with its study.
 **Where it stands (checked against the parity rows on 2026-10-28):** phases 0, 1 and 2 are done. Phase 3 is done
 except built-in auth (item 13), whose prerequisites are built: `ctx.auth.signJwt` (STUDY-192), `@bunvex/batch-worker`
 (STUDY-196) and `@bunvex/rate-limiter` (STUDY-197). In phase 4, search, vector search, log streaming, metrics,
-streaming export and Node's `externalPackages` are done; components remain (steps 1–7 built, step 8 at four of
+streaming export and Node's `externalPackages` are done; components remain (steps 1–7 built, step 8 at five of
 bunvex's own components).
 
 ### Phase 0 — correctness bugs in what already exists
@@ -157,8 +157,9 @@ containers up, deploy functions, see them work) before the remaining platform it
 - full-text search (STUDY-45, STUDY-111: all 10 rows done, platform §6) and vector search (STUDY-51: all 6
   done, §7) — done;
 - components (§11; DV-55, plan in STUDY-62) — open: steps 1–7 built; step 8, bunvex's own components:
-  `@bunvex/sharded-counter` (STUDY-183), `@bunvex/batch-worker` (STUDY-196), `@bunvex/rate-limiter` (STUDY-197)
-  and `@bunvex/workpool` (STUDY-199) built, aggregate and migrations left; step 9, the dashboard, started (#932, #936);
+  `@bunvex/sharded-counter` (STUDY-183), `@bunvex/batch-worker` (STUDY-196), `@bunvex/rate-limiter` (STUDY-197),
+  `@bunvex/workpool` (STUDY-199) and `@bunvex/resend` (STUDY-200) built, aggregate and migrations left; step 9, the
+  dashboard, started (#932, #936);
 - Node actions: `"use node"` runs in Bun (DV-87) — done; `node.externalPackages` — done (STUDY-148; DV-470–DV-473
   decided by the owner, 2026-10-12);
 - log streaming (STUDY-47, STUDY-59, STUDY-70) and metrics (§20: 14 done; insights is cloud-only, *n/a*) —
@@ -187,7 +188,7 @@ gaps.
    [STUDY-183](../study/STUDY-183-sharded-counter.md); `@bunvex/batch-worker`,
    [STUDY-196](../study/STUDY-196-batch-worker.md); `@bunvex/rate-limiter`,
    [STUDY-197](../study/STUDY-197-rate-limiter.md); `@bunvex/workpool`,
-   [STUDY-199](../study/STUDY-199-workpool.md)), the dashboard (step 9, started: the system functions in a
+   [STUDY-199](../study/STUDY-199-workpool.md); `@bunvex/resend`, [STUDY-200](../study/STUDY-200-resend.md)), the dashboard (step 9, started: the system functions in a
    component, #932, and the Database screen's component picker, #936) and export/import (step 10). Until step 8 is
    done, an app on the other `@convex-dev/*` components (aggregate, migrations, auth, …) has no package to
    install.

@@ -9,7 +9,8 @@
       "!@bunvex/sharded-counter",
       "!@bunvex/batch-worker",
       "!@bunvex/rate-limiter",
-      "!@bunvex/workpool"
+      "!@bunvex/workpool",
+      "!@bunvex/resend"
     ]
   ],
   "linked": [],
