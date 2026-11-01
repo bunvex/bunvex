@@ -42,7 +42,7 @@
     "@stryker-mutator/core": "10.0.0",
     "@types/bun": "^1.2.0",
     "fast-check": "4.10.2",
-    "typescript": "^5.9.0"
+    "typescript": "^7.0.2"
   },
   "patchedDependencies": {
     "object-inspect@1.13.4": "patches/object-inspect@1.13.4.patch"
