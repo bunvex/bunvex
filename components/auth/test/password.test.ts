@@ -4,7 +4,7 @@
 // as the root app. Upstream's interoperability tests call its WASM crate in the test's process; here the hashes are the
 // component's own, set and checked through its mutations, and `hash-wasm` checks them the other way.
 // biome-ignore-all lint/suspicious/noExplicitAny: the component's references are untyped
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { join } from "node:path";
 import { componentsGeneric } from "@bunvex/server";
 import { bunvexTest, type TestBunvex } from "@bunvex/testing";
@@ -19,6 +19,8 @@ const open: TestBunvex[] = [];
 afterEach(async () => {
   for (const t of open.splice(0)) await t.close();
 });
+// Each test pushes a deployment of its own; under a full `bun run check` a push can take past the default 5 s.
+setDefaultTimeout(60_000);
 
 function setup(): TestBunvex {
   const t = bunvexTest();

@@ -1,7 +1,7 @@
 // The username component's suite (STUDY-201 §3.4), upstream's `components/username/username.test.ts` ported: its
 // functions pushed as an app's (fixtures/username), so `t.run` reads its table.
 // biome-ignore-all lint/suspicious/noExplicitAny: the app's api and the inline functions' ctx are untyped
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { join } from "node:path";
 import { anyApi } from "@bunvex/server";
 import { bunvexTest, type TestBunvex } from "@bunvex/testing";
@@ -12,6 +12,8 @@ const open: TestBunvex[] = [];
 afterEach(async () => {
   for (const t of open.splice(0)) await t.close();
 });
+// Each test pushes a deployment of its own; under a full `bun run check` a push can take past the default 5 s.
+setDefaultTimeout(60_000);
 
 function setup(): TestBunvex {
   const t = bunvexTest({ cwd: join(import.meta.dir, "fixtures", "username") });

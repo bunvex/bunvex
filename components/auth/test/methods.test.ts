@@ -2,7 +2,7 @@
 // (fixtures/app), wired as an app wires them (`setupAuth`, `setupUsernamePassword`, `setupAnonymous`). Upstream checks
 // these flows in its examples' suites, ported with the examples; these check each result arm and its order here.
 // biome-ignore-all lint/suspicious/noExplicitAny: the app's api is untyped
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { join } from "node:path";
 import { anyApi } from "@bunvex/server";
 import { bunvexTest, type TestBunvex } from "@bunvex/testing";
@@ -16,6 +16,8 @@ const open: TestBunvex[] = [];
 afterEach(async () => {
   for (const t of open.splice(0)) await t.close();
 });
+// Each test pushes a deployment of its own; under a full `bun run check` a push can take past the default 5 s.
+setDefaultTimeout(60_000);
 
 function setup(): TestBunvex {
   const t = bunvexTest({ cwd: join(import.meta.dir, "fixtures", "app") });
