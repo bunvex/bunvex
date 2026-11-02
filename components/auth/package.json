@@ -2,6 +2,9 @@
   "name": "@bunvex/auth",
   "version": "0.1.0-alpha.2",
   "description": "Built-in auth for bunvex: accounts, sessions with rotating refresh tokens and leaked-token detection, access tokens signed by the deployment, and sign-in methods as components.",
+  "scripts": {
+    "test:react": "cd test-react && bun test"
+  },
   "license": "Apache-2.0",
   "type": "module",
   "keywords": [
@@ -14,6 +17,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./server": "./src/server/index.ts",
+    "./browser": "./src/browser/index.ts",
     "./methods/username-password": "./src/methods/username-password/index.ts",
     "./methods/username-password/server": "./src/methods/username-password/server.ts",
     "./methods/anonymous/server": "./src/methods/anonymous/server.ts",
@@ -83,6 +87,7 @@
     "@bunvex/values": "workspace:^"
   },
   "devDependencies": {
+    "@happy-dom/global-registrator": "^21.0.4",
     "hash-wasm": "^4.12.0",
     "@bunvex/testing": "workspace:*",
     "jose": "^6.2.14"

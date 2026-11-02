@@ -5,7 +5,8 @@ Built-in auth for bunvex, as components. It is bunvex's version of [Convex Auth 
 results, defaults, messages and log lines, so a Convex export of its data imports unchanged.
 
 > **Work in progress.** This version ships the server side: the components, `setupAuth`, the username + password and
-> anonymous methods, `getAuthUserId` and the provider for `auth.config.ts`. The React and browser clients come next.
+> anonymous methods, `getAuthUserId` and the provider for `auth.config.ts`; and the browser's session manager
+> (`@bunvex/auth/browser`). The React bindings come next.
 
 ## Setup
 
@@ -113,6 +114,20 @@ Each mounts from `@bunvex/auth/components/<name>/bunvex.config.js`; the methods 
 
 `@bunvex/auth/components/<name>/test` mounts each in a test deployment (`registerPasswordProvider`,
 `registerUsername`, `registerAnonymousProvider`).
+
+## The browser client
+
+`@bunvex/auth/browser` holds the session on the client, without React (the React bindings build on it):
+
+- `AuthClient` keeps the tokens a sign-in returned, hands the access token to your bunvex client, refreshes it under a
+  lock shared across tabs (the Web Locks API) when asked, follows the other tabs, and reports `{ isLoading,
+  isAuthenticated, token }` through `subscribe` / `getSnapshot`. In a single-page app it holds the refresh token; behind
+  a server-rendering host, an httpOnly cookie does.
+- Tokens are stored in `localStorage` by default (`defaultStorage()`), under `__bunvexAuthJWT_<namespace>` and
+  `__bunvexAuthRefreshToken_<namespace>`, the namespace being your deployment's URL with only its letters and digits.
+  Any `TokenStorage` will do, synchronous or not (`sessionStorage` for a session per tab, a secure store on React
+  Native); without `localStorage` the session is kept in memory, with a warning.
+- A sign-out the server fails still signs out locally.
 
 ## Testing
 

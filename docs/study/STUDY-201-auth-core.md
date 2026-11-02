@@ -798,7 +798,14 @@ Everything §1.14 lists is in bunvex, with the file that provides it, except two
      `auth.config.ts`), every row of the components' and the app's tables, the access token's header and claims, and a
      hash Convex's side stored verified by bunvex's verifier. Component tables are read with the dashboard's
      `paginatedTableDocuments`: bunvex's `data --component` is still refused (DV-224, stale since components).
-5. The clients: `./react`, `./browser`, the methods' React hooks (and the inert `oauth()` ambient sign-in, C-5).
+5. The clients: `./react`, `./browser`, the methods' React hooks (and the inert `oauth()` ambient sign-in, C-5). In two PRs:
+   - 5a. `./browser` (the token storage, the refresh lock, the retry, `AuthClient` in both models, the ambient sign-ins'
+     contract) and the OAuth client `oauth()`, inert until a callback carries its parameters (built: upstream's
+     `storage`, `keyedStore`, `retry`, `sessionManager` and OAuth client suites ported to `components/auth/test-react`,
+     happy-dom preloaded, plus a sign-out the server fails still signing out locally (§2.6), and both refusals of a
+     session of the wrong shape). One difference no browser shows: a `navigator.locks` that is `null` (happy-dom) is
+     taken as absent (the in-process queue), where v2's would call `null.request`;
+   - 5b. `./react` and the methods' React hooks.
 6. The examples: username + password, and anonymous.
 7. Later: the `init` CLI (C-8).
 
