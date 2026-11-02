@@ -805,7 +805,11 @@ Everything §1.14 lists is in bunvex, with the file that provides it, except two
      happy-dom preloaded, plus a sign-out the server fails still signing out locally (§2.6), and both refusals of a
      session of the wrong shape). One difference no browser shows: a `navigator.locks` that is `null` (happy-dom) is
      taken as absent (the in-process queue), where v2's would call `null.request`;
-   - 5b. `./react` and the methods' React hooks.
+   - 5b. `./react` and the methods' React hooks (built: `BunvexAuthProvider`, `useAuthActions`, `useAuthToken`, `useAuth` for
+     `BunvexProviderWithAuth`, the methods' hooks; upstream's `react/client`, `index`, `methods` and the methods' hook
+     suites ported, the default `oauth()` checked through its published value since `useOauth` comes with OAuth, and a
+     failed anonymous sign-in rejecting; a component may now import `@bunvex/client` (its HTTP client, as v2 uses
+     `convex/browser`), `scripts/check-deps.ts`).
 6. The examples: username + password, and anonymous.
 7. Later: the `init` CLI (C-8).
 

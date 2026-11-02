@@ -4,9 +4,9 @@ Built-in auth for bunvex, as components. It is bunvex's version of [Convex Auth 
 (`@convex-dev/auth` 2.0.0-beta), with the same component names, tables and indexes, function paths, arguments,
 results, defaults, messages and log lines, so a Convex export of its data imports unchanged.
 
-> **Work in progress.** This version ships the server side: the components, `setupAuth`, the username + password and
-> anonymous methods, `getAuthUserId` and the provider for `auth.config.ts`; and the browser's session manager
-> (`@bunvex/auth/browser`). The React bindings come next.
+> **Work in progress.** This version ships the server side (the components, `setupAuth`, the username + password and
+> anonymous methods, `getAuthUserId`, the provider for `auth.config.ts`) and the clients (`@bunvex/auth/browser`,
+> `@bunvex/auth/react` and the methods' hooks). Server rendering (Next.js) and more methods come later.
 
 ## Setup
 
@@ -63,6 +63,35 @@ export const createUser = internalMutation({
   returns: v.id("users"),
   handler: async (ctx) => await ctx.db.insert("users", {}),
 });
+```
+
+In the browser, put `BunvexAuthProvider` in place of `BunvexProvider` and sign in with a method's hooks:
+
+```tsx
+import { BunvexAuthProvider, useAuthActions } from "@bunvex/auth/react";
+import { useSignInWithUsernamePassword } from "@bunvex/auth/methods/username-password/react";
+import { BunvexReactClient, useBunvexAuth } from "@bunvex/react";
+import { api } from "../bunvex/_generated/api";
+
+const bunvex = new BunvexReactClient(import.meta.env.VITE_BUNVEX_URL);
+
+export function Root({ children }: { children: React.ReactNode }) {
+  return (
+    <BunvexAuthProvider client={bunvex} api={{ refreshSession: api.auth.refreshSession, signOut: api.auth.signOut }}>
+      {children}
+    </BunvexAuthProvider>
+  );
+}
+
+function SignIn() {
+  const { signIn, pending } = useSignInWithUsernamePassword(api.auth);
+  // `await signIn({ username, password })`: `{ status: "complete" }`, or `{ status: "error", userError }`.
+}
+
+function Account() {
+  const { isAuthenticated } = useBunvexAuth();
+  const { signOut } = useAuthActions();
+}
 ```
 
 Then, in any query, mutation or action, `await getAuthUserId(ctx)` (from `@bunvex/auth/server`) is the signed-in user's
