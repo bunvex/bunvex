@@ -1043,6 +1043,69 @@ What it changes in the plan:
     - versions are sent again;
     - the app is installed without its module loads.
 
+### 10.5.7 iv, as built (2026-11-02)
+
+- **Where queries go.** A server starts query workers (`server/src/query-workers.ts`) when:
+  - its store describes a reader (a SQLite file);
+  - it runs under `vm` and the process's own clock;
+  - `executionWorkers` (default `MAX_ISOLATE_WORKERS`, else the core count; the local backend reads its own
+    environment) is above 0.
+
+  A call goes to a worker when it is a client's query whose code has sources, with no system identity and no tracer
+  on. The query's arguments then cross as text. `callSpec` binds the code epoch they were checked against (§10.3),
+  and a ready worker must exist; otherwise the call runs in-thread as before.
+- **What a worker gets first.** The dispatcher posts what the chosen worker lacks:
+  - the request's metadata epoch (0d's message, a window of four per worker);
+  - the code epoch (iii's messages, the last four kept per worker).
+
+  The call's text is `<code epoch>:<request>`. Every commit's written keys go to every worker as it becomes visible
+  (`Engine.postCommits`, 0d's `encodeCommits`).
+- **The worker's engine** (`Engine.follow`; `server/src/execution-worker.ts`) is not `init`ed and never writes.
+  - It reads its own `SqliteStoreReader` at each request's ts, with the epoch's catalog and text index states.
+  - Its index cache is checked against `WriteLogCopy`.
+  - Its run-state and variables caches are fed by the commits it hears (`Committer.followed`), and nothing before
+    its start counts as known (`unknownBefore`).
+  - It also adopts the newest metadata catalog as its own, where those caches look their tables up.
+  - Counts and searches are ops to the main thread (`core/src/follower-ops.ts`), which pins the counts at the
+    request's ts for the call. A search answers its hits and the index's size, charged per search (DV-317's
+    `textQueryBytes`). A wait for an answer counts as in-flight work and is not user time, as a store call's is.
+  - A failure the transaction treats as the system's crosses as its own class.
+  - Progress for the stuck check (i) is marked each time a call resumes after a store call (`onUserTimeResume`).
+- **Outcomes.** The worker's outcome text is decoded on the main thread, and its report replayed where an in-thread
+  run's would be. The value is parsed from the result's text. A worker that dies fails the call as a system error. The
+  call that never yielded fails with "Function execution timed out (maximum duration: …)".
+- **Caches split (Q9).** The store's own connection keeps half of the page cache it was opened with (AD-46). Each
+  worker gets the other half divided by the cap, and the main thread's index cache divided by the cap.
+- **The differential check.** Under the tests (`checkWorkerOutcomes`, in the root preload beside Q7's codec), every
+  query a worker runs also runs in-thread on the same request text. The two outcomes are compared field by field:
+  result, error, log lines and figures, read set interval by interval, counters. Only what measures time is left
+  out (user time, a line's timestamp). A difference fails the call. Every suite that runs a deployable server on a
+  SQLite file therefore checks the workers.
+- **What the check found on `main`,** fixed in their own PR (`fix/unrecorded-table-use`): two ways a query's
+  outcome depended on whether a cache was warm.
+  - `Tx.unrecorded` dropped its intervals but kept the tables it had used marked as used. A cold run-state or
+    variables cache therefore made the query lose the table mapping read (STUDY-187 X22).
+  - A cold variables cache counted its rows in the table figures.
+- **Proof** (`server/test/query-workers.test.ts`):
+  - Seeded programs of writes, deletes and queries: collect in both orders, index ranges, `take`, `filter`, `count`,
+    two pages of `paginate`, text search, `unique`, `normalizeId` and `get`, variables, the clock, logs, a
+    `BunvexError` and a `TypeError`. Each query is checked against in-thread, and most of them ran on a worker.
+  - A commit while a worker's count is held is not seen, and the query's next run sees it.
+  - A query that waited for its permit reads at the snapshot it was given, though its worker heard a later commit.
+  - A push during 200 queries: none fails, and each answers from v1 or v2.
+  - The page cache halved.
+  - A worker terminated mid-call: the call fails as a system error and the next succeeds on a new worker.
+  - `for (;;) {}` times out at 1 s while another worker answers.
+  - Sabotages, each caught:
+    - the worker reads at its newest commit instead of the request's ts;
+    - the worker drops an interval;
+    - the worker keeps no catalog of its own (the run-state reads lost).
+- **Not yet:**
+  - the function log's and `/metrics`' worker counts (the pool counts started, answered, failed starts, died,
+    stuck);
+  - a worker's index cache on a commit stream larger than its log (purges follow the main thread's);
+  - a lazy parse of the result for the HTTP API (the spike's 2.1× against 1.8×), to measure first in vi.
+
 ### 10.6 Owner questions for 2b
 
 Decided by the owner on 2026-10-27, as recommended.

@@ -32,6 +32,7 @@ import { type BlobStore, blobStoreFromEnv, LocalBlobStore, s3OptionsFromEnv } fr
 import { ADDRESS_SCREENS, type AddressScreen, DEFAULT_ADDRESS_SCREEN } from "./address-screen.ts";
 import { adminKeyCipherKey, issueAdminKey } from "./admin-keys.ts";
 import { type ArgSpec, type CommandSpec, errorText, ipv4Error, parseCommand, portError } from "./command-line.ts";
+import { maxExecutionWorkers } from "./execution-workers.ts";
 import {
   FUNCTION_SANDBOXES,
   type FunctionSandbox,
@@ -362,6 +363,8 @@ export async function startLocalBackend(f: LocalBackendFlags, io: LocalBackendIo
   const app = createServer({
     engine,
     functions: new Functions(engine),
+    // The backend's own environment, as its other settings (DV-574, AD-47).
+    executionWorkers: maxExecutionWorkers(io.env),
     port: f.port,
     sitePort: f.sitePort,
     hostname: f.hostname,

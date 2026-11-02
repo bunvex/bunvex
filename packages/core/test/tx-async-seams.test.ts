@@ -5,8 +5,8 @@ import { expect, test } from "bun:test";
 import { v } from "@bunvex/values";
 import { Engine } from "../src/engine.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
-import type { SearchIndexEntry, SearchIndexes } from "../src/search-indexes.ts";
 import { defineSchema, defineTable } from "../src/schema.ts";
+import type { SearchIndexEntry, SearchIndexes } from "../src/search-indexes.ts";
 import { TableSummariesUnavailableError } from "../src/table-summaries.ts";
 import type { Tx } from "../src/tx.ts";
 

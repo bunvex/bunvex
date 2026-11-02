@@ -102,6 +102,8 @@ export type ExecutionWorkersOptions = {
 /** What the pool has done, for `/metrics`. */
 export type ExecutionWorkerCounts = {
   started: number;
+  /** Calls a worker answered with an outcome. */
+  answered: number;
   failedStarts: number;
   died: number;
   stuck: number;
@@ -118,7 +120,7 @@ export class ExecutionWorkers {
   private loggedAt = Number.NEGATIVE_INFINITY;
   private readonly entry: string;
   private readonly log: (line: string) => void;
-  readonly counts: ExecutionWorkerCounts = { started: 0, failedStarts: 0, died: 0, stuck: 0 };
+  readonly counts: ExecutionWorkerCounts = { started: 0, answered: 0, failedStarts: 0, died: 0, stuck: 0 };
 
   constructor(private readonly options: ExecutionWorkersOptions) {
     this.entry = options.entry ?? EXECUTION_WORKER_ENTRY;
@@ -218,8 +220,11 @@ export class ExecutionWorkers {
       if (!p) return this.malformed(t, `an answer to call ${id}, which it does not have`);
       t.calls.delete(id);
       if (t.calls.size === 0) t.worker.unref();
-      if (head === "o") p.resolve(m.slice(colon + 1));
-      else p.reject(new ExecutionWorkerError("failed", `the execution worker failed the call: ${m.slice(colon + 1)}`));
+      if (head === "o") {
+        this.counts.answered++;
+        p.resolve(m.slice(colon + 1));
+      } else
+        p.reject(new ExecutionWorkerError("failed", `the execution worker failed the call: ${m.slice(colon + 1)}`));
       return;
     }
     if (head === "q") {

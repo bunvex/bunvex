@@ -578,7 +578,10 @@ export class Engine {
   /** Sends a worker the metadata epoch a request names, unless it has it (it keeps as many as `EpochWindow`). */
   private prepareWorker(w: WorkerSink, epoch: number) {
     let sent = w.memo.get(Engine.SENT_METADATA) as EpochWindow | undefined;
-    if (!sent) w.memo.set(Engine.SENT_METADATA, (sent = new EpochWindow()));
+    if (!sent) {
+      sent = new EpochWindow();
+      w.memo.set(Engine.SENT_METADATA, sent);
+    }
     if (sent.has(epoch)) return;
     sent.add(epoch);
     w.post(encodeMetadata(epoch, this.catalog, this.searchIndexes));

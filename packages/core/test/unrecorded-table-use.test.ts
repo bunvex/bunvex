@@ -45,3 +45,20 @@ test("a table first used in an unrecorded read still reads the table mapping whe
   });
   expect(read).toContain(tablesIndex);
 });
+
+test("a function's table figures are the same whether the variables' cache is cold or warm", async () => {
+  const e = await engine();
+  await e.mutation(async (db) => {
+    await e.environment.update(db, [{ name: "FOO", value: "bar" }]);
+  });
+  const figures = () =>
+    e.query(async (db) => {
+      const read = await e.environment.reader(db);
+      read("FOO");
+      await db.query("t").collect();
+      return JSON.stringify([...db.tableStats]);
+    });
+  const cold = await figures();
+  const warm = await figures();
+  expect(cold).toBe(warm);
+});

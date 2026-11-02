@@ -2,6 +2,11 @@
 // ready worker, none ready → in-thread (null); a worker that ends or never yields is replaced and its calls fail;
 // a worker that cannot start is retried later; close ends them all.
 import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { defineSchema, Engine, type StoreReader } from "@bunvex/core";
+import { SqlitePersistence } from "@bunvex/core/persistence/sqlite";
 import {
   EXECUTION_WORKER_ENTRY,
   ExecutionWorkerError,
@@ -10,6 +15,7 @@ import {
   maxExecutionWorkers,
   type WorkerLink,
 } from "../src/execution-workers.ts";
+import type { QueryWorkerInit } from "../src/query-workers.ts";
 
 const ENTRY = new URL("./fixtures/execution-test-worker.ts", import.meta.url).href;
 
@@ -86,11 +92,39 @@ describe("execution workers", () => {
     await a;
   });
 
-  test("the worker module bunvex ships starts", async () => {
-    const { p } = pool({ max: 1, entry: EXECUTION_WORKER_ENTRY });
-    expect(p.call("x", 1000)).toBeNull();
-    await until(() => p.ready === 1);
-    expect(p.counts.failedStarts).toBe(0);
+  test("the worker module bunvex ships starts on a store's reader, and fails a start it cannot open", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "bunvex-workers-"));
+    try {
+      const store = new SqlitePersistence(join(dir, "db.sqlite"), { durable: false });
+      const engine = await new Engine(defineSchema({}), store).init();
+      const init = (reader: unknown): QueryWorkerInit => ({
+        store: reader as StoreReader,
+        cacheBytes: 1 << 20,
+        indexCacheBytes: 0,
+        start: engine.followerStart(),
+        filesOrigin: null,
+        builtinEnv: {},
+        userTimeoutMs: 1000,
+        systemTimeoutMs: 15000,
+      });
+      const { p } = pool({ max: 1, entry: EXECUTION_WORKER_ENTRY, init: () => JSON.stringify(init(store.reader())) });
+      expect(p.call("x", 1000)).toBeNull();
+      await until(() => p.ready === 1);
+      expect(p.counts.failedStarts).toBe(0);
+      const missing = { driver: "sqlite", path: join(dir, "missing.sqlite") };
+      const { p: q, lines } = pool({
+        max: 1,
+        entry: EXECUTION_WORKER_ENTRY,
+        init: () => JSON.stringify(init(missing)),
+      });
+      expect(q.call("x", 1000)).toBeNull();
+      await until(() => q.counts.failedStarts === 1);
+      expect(lines[0]).toStartWith("An execution worker could not start: ");
+      await Promise.all([p.close(), q.close()]);
+      await engine.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("0: no worker ever starts", () => {

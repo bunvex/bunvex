@@ -164,6 +164,8 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
   private group = new WireWriter();
   /** Opened with `allowReadOnly`: the lock is taken even while the store is marked read-only. */
   private allowReadOnly: boolean;
+  /** The page cache it was opened with, in bytes (AD-46): what execution workers share with it (STUDY-194 Q9). */
+  readonly cacheBytes: number;
 
   constructor(
     private path: string,
@@ -174,7 +176,8 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     } & OpenOptions,
   ) {
     // Checked before the file is touched: a bad setting fails the start and leaves the store as it was.
-    const cacheKiB = Math.ceil((opts.cacheBytes ?? sqliteCacheBytes()) / 1024);
+    this.cacheBytes = opts.cacheBytes ?? sqliteCacheBytes();
+    const cacheKiB = Math.ceil(this.cacheBytes / 1024);
     this.allowReadOnly = !!opts.allowReadOnly;
     if (!this.inMemory) this.lock = ProcessLock.tryTake(path);
     // Everything after the lock gives it back if it throws: a path SQLite cannot open, a store that is not one, or

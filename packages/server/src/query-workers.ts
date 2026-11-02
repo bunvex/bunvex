@@ -8,7 +8,6 @@
 // executor and the process's own clock; the server checks those (§10.4).
 import type { Engine, Persistence, StoreReader } from "@bunvex/core";
 import { decodeCallOutcome, formatDuration, workerOutcomesChecked } from "@bunvex/core";
-import { sqliteCacheBytes } from "@bunvex/core/persistence/sqlite";
 import { type CodeHeld, CodeShipper, newCodeHeld } from "./execution-code.ts";
 import { ExecutionWorkerError, ExecutionWorkers } from "./execution-workers.ts";
 import type { CodeSources, Functions } from "./functions.ts";
@@ -52,7 +51,7 @@ export function startQueryWorkers(o: {
   if (!store || o.max <= 0) return null;
   const { engine, functions } = o;
   // AD-46's page cache is the deployment's: the store's own connection keeps half, the workers share the rest.
-  const cacheBytes = store.driver === "sqlite" ? sqliteCacheBytes() : 0;
+  const cacheBytes = (o.persistence as { cacheBytes?: number }).cacheBytes ?? 0;
   const workerCache = Math.max(1, Math.floor(cacheBytes / 2 / o.max));
   (o.persistence as { setCacheBytes?(bytes: number): void }).setCacheBytes?.(Math.floor(cacheBytes / 2));
   const indexCacheBytes = Math.floor((engine.indexCache?.maxBytes ?? 0) / o.max);
@@ -84,7 +83,10 @@ export function startQueryWorkers(o: {
       const sent = pool.call(`${code.epoch}:${text}`, timeoutMs, (w) => {
         prepare(w);
         let memo = w.memo.get(CODE_HELD) as WorkerCodeMemo | undefined;
-        if (!memo) w.memo.set(CODE_HELD, (memo = { held: newCodeHeld(), order: [] }));
+        if (!memo) {
+          memo = { held: newCodeHeld(), order: [] };
+          w.memo.set(CODE_HELD, memo);
+        }
         const messages = shipper.prepare(code.epoch, code.sources, memo.held);
         if (!messages) throw new Error("a code version that cannot be sent to an execution worker");
         if (messages.length) {
