@@ -26,13 +26,59 @@
       "types": "./src/component/_generated/component.ts"
     },
     "./test": "./src/test.ts",
+    "./components/password/bunvex.config": {
+      "@bunvex/component-source": "./src/components/password/bunvex.config.ts",
+      "bunvex": "./src/components/password/bunvex.config.ts",
+      "default": "./src/components/password/bunvex.config.ts"
+    },
+    "./components/password/bunvex.config.js": {
+      "@bunvex/component-source": "./src/components/password/bunvex.config.ts",
+      "bunvex": "./src/components/password/bunvex.config.ts",
+      "default": "./src/components/password/bunvex.config.ts"
+    },
+    "./components/password/_generated/component.js": {
+      "types": "./src/components/password/_generated/component.ts"
+    },
+    "./components/password/test": "./src/testing/password.ts",
+    "./components/username/bunvex.config": {
+      "@bunvex/component-source": "./src/components/username/bunvex.config.ts",
+      "bunvex": "./src/components/username/bunvex.config.ts",
+      "default": "./src/components/username/bunvex.config.ts"
+    },
+    "./components/username/bunvex.config.js": {
+      "@bunvex/component-source": "./src/components/username/bunvex.config.ts",
+      "bunvex": "./src/components/username/bunvex.config.ts",
+      "default": "./src/components/username/bunvex.config.ts"
+    },
+    "./components/username/_generated/component.js": {
+      "types": "./src/components/username/_generated/component.ts"
+    },
+    "./components/username/test": "./src/testing/username.ts",
+    "./components/anonymous/bunvex.config": {
+      "@bunvex/component-source": "./src/components/anonymous/bunvex.config.ts",
+      "bunvex": "./src/components/anonymous/bunvex.config.ts",
+      "default": "./src/components/anonymous/bunvex.config.ts"
+    },
+    "./components/anonymous/bunvex.config.js": {
+      "@bunvex/component-source": "./src/components/anonymous/bunvex.config.ts",
+      "bunvex": "./src/components/anonymous/bunvex.config.ts",
+      "default": "./src/components/anonymous/bunvex.config.ts"
+    },
+    "./components/anonymous/_generated/component.js": {
+      "types": "./src/components/anonymous/_generated/component.ts"
+    },
+    "./components/anonymous/test": "./src/testing/anonymous.ts",
     "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "@bunvex/rate-limiter": "workspace:^"
   },
   "peerDependencies": {
     "@bunvex/server": "workspace:^",
     "@bunvex/values": "workspace:^"
   },
   "devDependencies": {
+    "hash-wasm": "^4.12.0",
     "@bunvex/testing": "workspace:*",
     "jose": "^6.2.14"
   },
