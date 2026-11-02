@@ -1139,6 +1139,34 @@ go to workers only then (§10.4).
   lead suspect is `callSpec` making the arguments' text and the code's sources for a query that the cache then
   answers. That should be measured, and if needed only done when a worker is about to run the query.
 
+### 10.5.9 vi, the costs removed (2026-11-02)
+
+Three more rounds on new `c-4` pairs (`bench/results/cloud/2026-11-02-s194-vi/round2`–`round4-cached`), with `main`
+pushed too (a local commit adding `BENCH_DEPLOY`):
+
+- **A server with registered functions paid for workers it could not use.** Once a pool existed (any server on a
+  SQLite file), every query made its request's text, pinned the counts and wrote the identity as text before the
+  dispatcher found no worker would run it. Now the engine asks first (`QueryWorkers.wants`: the call's code has
+  sources and a worker is ready, else one starts for the calls after). A query's arguments become text only for a
+  worker (`Call.argsText`).
+- **0b's report was text in-thread too.** Every call's console lines, audit lines and figures were made JSON and parsed
+  back by the dispatcher. A bisection of the branch put that at about 2% of an insert in-process. The report is now a
+  value in the thread (`CallLocal.report`) and becomes text only when an outcome crosses.
+- **After both (round 3, each side twice):**
+  - registered: uncached 1929 · 2017 against `main`'s 1938 · 1953, cached the same, insert 2273 · 2191 against
+    2258 · 2309;
+  - pushed with 0 workers: 1716 · 1720 / 7946 · 7959 / 2078 · 2038 against `main` pushed 1741 · 1764 / 7901 · 8009 /
+    2113 · 2071;
+  - pushed with 2 workers: uncached **3201 (1.83× `main` pushed)**, inserts 2057.
+
+  What is left without workers is about 1–2% on inserts, inside the runs' spread, not tied to one function in a
+  profile.
+- **Cached with workers** looked 10–14% lower in rounds 1 and 3, equal in round 2. Round 4 alternated 0 and 2 workers on
+  the cached scenario alone, 5 repeats each: 9417 · 9851 against 10209 · 9865 · 9164. Equal. In-process the cache's hits
+  are the same with and without workers (about 320k/s).
+- **Pushed code against registered, on `main`:** uncached −9%, insert −8% (`main` pushed against registered). Every
+  real deployment runs pushed code; this is outside 2b.
+
 ### 10.6 Owner questions for 2b
 
 Decided by the owner on 2026-10-27, as recommended.

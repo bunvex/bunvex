@@ -23,3 +23,25 @@ Medians, req/s (p99 ms):
 | branch, push, 2 workers | 3128 · 3074 (47–51) | 7122 · 6905 (19) | 2160 · 2204 (60–69) |
 
 STUDY-194 §10.5.8 reads them.
+
+## Round 2 (`round2/`, after `wants` at `a2b0b410`) and round 3 (`round3/`, after the report change at `8a26b776`)
+
+`main` pushed is `main` `804443bc` with `BENCH_DEPLOY` added in a local commit (`8243ffe7`, not pushed). Round 3, on new
+droplets, each side twice, medians req/s:
+
+| | uncached | cached | insert |
+|---|--:|--:|--:|
+| main, registered | 1938 · 1953 | 7364 · 8163 | 2258 · 2309 |
+| branch, registered | 1929 · 2017 | 8420 · 8042 | 2273 · 2191 |
+| main, pushed | 1741 · 1764 | 7901 · 8009 | 2113 · 2071 |
+| branch, pushed, 0 workers | 1716 · 1720 | 7946 · 7959 | 2078 · 2038 |
+| branch, pushed, 2 workers | 3201 | 6805 | 2057 |
+
+Round 2 (`a2b0b410`): main registered 1925 / 7153 / 2648, branch registered 1831 · 1900 / 7102 · 7294 / 2435 · 2508,
+main pushed 1752 / 7186 / 2317, branch pushed 0 workers 1664 / 7118 / 2155, 2 workers 3107 · 3178 / 6997 · 7089 /
+2158 · 2101.
+
+## Round 4 (`round4-cached/`): cached only, 5 repeats, 0 and 2 workers alternated
+
+0 workers 9417 · 9851 (the first 0-worker run did not start: the seed raced the push, fixed in `serve.ts`); 2 workers
+10209 · 9865 · 9164. The same.

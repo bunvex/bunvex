@@ -67,6 +67,15 @@ async function ready(port: number, proc: Bun.Subprocess) {
     if (proc.exitCode !== null) throw new Error(`server on ${port} exited with ${proc.exitCode}`);
     try {
       await fetch(`http://${local}:${port}/version`);
+      // BENCH_DEPLOY: the code is pushed after the server listens; ready once a function answers.
+      if (process.env.BENCH_DEPLOY === "1") {
+        const r = await fetch(`http://${local}:${port}/api/query`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ path: "bench:listCached", args: {} }),
+        });
+        if (((await r.json()) as { status?: string }).status !== "success") throw new Error("not deployed yet");
+      }
       return;
     } catch {
       await Bun.sleep(100);
