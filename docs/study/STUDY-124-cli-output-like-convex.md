@@ -114,7 +114,7 @@ Other changes that follow Convex:
 
 bunvex's own refusals keep their text with the new prefix and exit code:
 
-- `--component` gives `error: --component: bunvex does not have components yet.` (DV-224).
+- `--component` gave `error: --component: bunvex does not have components yet.` (DV-224); since 2026-11-02 it works as Convex's (STUDY-43 §3.1).
 - The bunvex-only checks have no Convex counterpart: admin-key's options, and dev's port check, which gives
   "Not a port number.".
 

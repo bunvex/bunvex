@@ -146,9 +146,7 @@ test("bunvex data: tables, documents in each format, the limit warning, _storage
   );
   await usageError(["alpha", "beta"], "too many arguments for 'data'. Expected 1 argument but got 2.");
   await usageError(["--limt", "3"], "unknown option '--limt'\n(Did you mean --limit?)");
-  expect((await t.run(["alpha", "--component", "x"])).err).toEqual([
-    "error: --component: bunvex does not have components yet.",
-  ]);
+  await usageError(["alpha", "--component"], "option '--component <path>' argument missing");
 });
 
 test("bunvex data --system: every system table with its description; a private one's documents", async () => {
