@@ -102,7 +102,12 @@ export class EnvironmentVariables {
   async snapshot(db: Tx): Promise<Map<string, string>> {
     const c = this.cache;
     if (c && this.lastWriteTs <= db.snapshot && this.lastWriteTs <= c.ts) return c.vars;
+    // Its rows are not counted in the table's figures either: a function's are the same whether the cache served it.
+    const stats = db.tableStats.get(ENVIRONMENT_VARIABLES_TABLE);
+    const saved = stats && { ...stats };
     const vars = new Map((await db.unrecorded(() => this.rows(db))).map((r) => [r.name, r.value]));
+    if (saved) db.tableStats.set(ENVIRONMENT_VARIABLES_TABLE, saved);
+    else db.tableStats.delete(ENVIRONMENT_VARIABLES_TABLE);
     if (this.lastWriteTs <= db.snapshot) this.cache = { ts: db.snapshot, vars };
     return vars;
   }
