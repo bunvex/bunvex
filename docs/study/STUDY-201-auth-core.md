@@ -741,6 +741,18 @@ Everything §1.14 lists is in bunvex, with the file that provides it, except two
   seeded stream, as v2 draws it, so the PHC string is v2's byte for byte (checked: the same salt gives the same
   string as `argon2id-wasm`). The runtime answers it only to `authPassword`'s functions; the context stays closed
   otherwise (no `Bun`, no `node:` modules). `argon2id-wasm` is not a dependency.
+  Built (PR 3): `authPassword` imports `hashPassword(password, salt)` and `verifyPassword(password, hash)` from
+  `@bunvex/server/password`, a module the runtime links as it links `@bunvex/server` (`code-version.ts`), never
+  bundled. They answer where the running function's scope carries a hasher (`function-handles.ts`), which
+  `Functions.invoke` gives only to a mutation of a component whose definition is named `authPassword` (the name
+  from its `_component_definitions` row); anyone else gets "hashPassword can only be called from a mutation of the
+  authPassword component". Under the process sandbox a mutation's child forwards the call as a `password`
+  operation, and the host answers it in the mutation's scope, so the check is the host's. Each hash is work in
+  flight for the mutation's runner (`Tx.track`) and its time, on the thread pool, is not the function's
+  (`pausingUserTime`), as a store call's. Verification follows the stored string (argon2id, argon2i, argon2d, its
+  `m`, `t`, `p` and tag length; no version is 0x13), as the Rust crate's; a version other than 0x13 is refused
+  (Bun's argon2 computes only 0x13, and v2 writes only 0x13). The name identifies the component, it does not
+  authenticate it: any pushed component may call itself `authPassword`, which only opens a hasher to it.
 
 ### 3.4 Tests
 
@@ -763,7 +775,8 @@ Everything §1.14 lists is in bunvex, with the file that provides it, except two
 1. The rename (§3.2).
 2. `t.jwks()` in `@bunvex/testing` (C-6).
 3. The native hasher's runtime operation (AD-49), in the function context and the process sandbox, with tests
-   against `argon2id-wasm`'s strings (a test dependency only) and the check that only `authPassword` may call it.
+   against `argon2id-wasm`'s strings (a test dependency only) and the check that only `authPassword` may call it
+   (built: `packages/server/test/password.test.ts`, `packages/testing/test/password.test.ts`).
 4. The server side: the four components, `setupAuth`, the two methods' server code, `bunvexAuthProvider`,
    `getAuthUserId`, with the ported tests and the differential test.
 5. The clients: `./react`, `./browser`, the methods' React hooks (and the inert `oauth()` ambient sign-in, C-5).

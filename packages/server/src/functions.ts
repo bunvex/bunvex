@@ -218,6 +218,7 @@ import {
   withSubFunction,
 } from "./logs.ts";
 import { withNodeProcessErrors } from "./node-process-errors.ts";
+import { PASSWORD_COMPONENT, passwordHasher } from "./password.ts";
 import { setOperationTracker } from "./pending-ops.ts";
 import type { GenericActionCtx, GenericMutationCtx, GenericQueryCtx, VectorSearchQuery } from "./registration.ts";
 import { snapshotOnSettle } from "./result-snapshot.ts";
@@ -256,6 +257,8 @@ export const registryKey = (name: string) => {
 export type ComponentRuntime = {
   id: string;
   path: string;
+  /** Its definition's name (`defineComponent(name)`), when known. */
+  definitionName?: string | null;
   env: ReadonlyMap<string, { type: "value"; value: string } | { type: "envVar"; name: string }>;
   httpPrefix: string | null;
 };
@@ -2402,8 +2405,16 @@ export class Functions {
       : this.deployedFns.has(f)
         ? () => db.watch(handler, neverResolves)
         : handler;
+    const scope = {
+      db,
+      engine: this.engine,
+      resolve: (ref: unknown) => this.resolveCall(ref, component, db, false),
+      // `@bunvex/server/password` (AD-49): only the `authPassword` component's mutations hash.
+      password:
+        f.kind === "mutation" && component?.definitionName === PASSWORD_COMPONENT ? passwordHasher(db) : undefined,
+    };
     return notAQuery(
-      inHandleScope({ db, engine: this.engine, resolve: (ref) => this.resolveCall(ref, component, db, false) }, () =>
+      inHandleScope(scope, () =>
         component
           ? this.inComponentRun(db, component, run)
           : // The app's function called from a component (through a handle, STUDY-155): back in the app's namespace.

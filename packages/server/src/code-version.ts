@@ -146,6 +146,8 @@ export const REPL_WRAPPERS = "bunvex:/_system/repl/wrappers.js";
 /** The `@bunvex/*` modules a bundle leaves external, each linked to the server's own. */
 export const BUNVEX_MODULES: Record<string, () => Promise<Record<string, unknown>>> = {
   "@bunvex/server": () => import("./index.ts"),
+  // `authPassword`'s hasher (AD-49): linked, so it runs in the server, where only that component's mutations reach it.
+  "@bunvex/server/password": () => import("./password-api.ts"),
   "@bunvex/values": () => import("@bunvex/values"),
 };
 // As Convex bundles everything but its own linked modules (STUDY-158 G1).
