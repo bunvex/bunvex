@@ -747,7 +747,8 @@ describe("listSessions", () => {
         expiresAt: rotated.refreshTokenExpiresAt,
       },
     ]);
-    // A `_creationTime` is the commit's time, with a fraction that keeps it unique (convex-test's is `Date.now()`).
+    // A `_creationTime` is its transaction's start time, the next float up for each further insert (as Convex's
+    // backend; convex-test's is `Date.now()`).
     expect(Math.floor(sessions[0].lastRefreshedAt)).toBe(refreshedAt);
     expect(rotated.refreshTokenExpiresAt).toBeGreaterThan(bundle.refreshTokenExpiresAt);
   });
@@ -895,7 +896,7 @@ describe("token lifetime configuration", () => {
       refreshTokenTtlSeconds: oneHourSeconds,
     });
     expect(bundle.refreshTokenExpiresAt).toBeGreaterThanOrEqual(before + oneHourMs);
-    // A transaction's time is pinned at or after its snapshot, so it may be a millisecond past the clock's.
+    // A transaction's time is its start, floored at its snapshot (as Convex's), so it may be a millisecond past the clock's.
     expect(bundle.refreshTokenExpiresAt).toBeLessThanOrEqual(t.now() + oneHourMs + 1000);
 
     // The rotated token gets the configured lifetime too.

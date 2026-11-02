@@ -4,9 +4,9 @@ Built-in auth for bunvex, as components. It is bunvex's version of [Convex Auth 
 (`@convex-dev/auth` 2.0.0-beta), with the same component names, tables and indexes, function paths, arguments,
 results, defaults, messages and log lines, so a Convex export of its data imports unchanged.
 
-> **Work in progress.** This version ships the core component, `auth`. The sign-in methods (username + password,
-> anonymous), `setupAuth`, `getAuthUserId`, the provider for `auth.config.ts` and the React and browser clients come
-> next.
+> **Work in progress.** This version ships the core component, `auth`, and the components the sign-in methods use:
+> `authPassword`, `authUsername` and `authAnonymous`. The methods' server code, `setupAuth`, `getAuthUserId`, the
+> provider for `auth.config.ts` and the React and browser clients come next.
 
 ## The core component
 
@@ -36,6 +36,23 @@ export default app;
 Its functions are only callable from your app (`components.auth.public.*`): `signUp`, `signIn`,
 `signUpWithoutSession`, `refresh`, `signOut`, `getUserIdByAccount`, `getSession`, `listSessions` and
 `revokeSessions`.
+
+## The method components
+
+Each mounts from `@bunvex/auth/components/<name>/bunvex.config.js`; the methods call them from your app.
+
+- **`authPassword`** stores and checks passwords by user id. Hashes are argon2id (16 MiB, 3 passes, 1 lane) PHC
+  strings, computed by your deployment off the JavaScript thread. A new password is 10 to 100 characters, with no
+  leading or trailing whitespace, and not one of the 3000 most frequent passwords (any case); passwords compare in
+  their NFC form. Checks are rate limited per user: 5 attempts, then one a minute. It mounts
+  [`@bunvex/rate-limiter`](../rate-limiter) as `rateLimiter`.
+- **`authUsername`** gives each user at most one username, unique across users whatever its case or Unicode
+  normalization form, and kept as the user spelled it. Control, invisible and bidirectional characters, unusual spaces
+  and a leading combining mark are refused.
+- **`authAnonymous`** creates anonymous accounts, each a random UUID.
+
+`@bunvex/auth/components/<name>/test` mounts each in a test deployment (`registerPasswordProvider`,
+`registerUsername`, `registerAnonymousProvider`).
 
 ## Testing
 
