@@ -12,6 +12,11 @@
     "sessions"
   ],
   "exports": {
+    ".": "./src/index.ts",
+    "./server": "./src/server/index.ts",
+    "./methods/username-password": "./src/methods/username-password/index.ts",
+    "./methods/username-password/server": "./src/methods/username-password/server.ts",
+    "./methods/anonymous/server": "./src/methods/anonymous/server.ts",
     "./bunvex.config": {
       "@bunvex/component-source": "./src/component/bunvex.config.ts",
       "bunvex": "./src/component/bunvex.config.ts",
