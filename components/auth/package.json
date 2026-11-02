@@ -1,0 +1,56 @@
+{
+  "name": "@bunvex/auth",
+  "version": "0.1.0-alpha.2",
+  "description": "Built-in auth for bunvex: accounts, sessions with rotating refresh tokens and leaked-token detection, access tokens signed by the deployment, and sign-in methods as components.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "keywords": [
+    "bunvex",
+    "component",
+    "auth",
+    "authentication",
+    "sessions"
+  ],
+  "exports": {
+    "./bunvex.config": {
+      "@bunvex/component-source": "./src/component/bunvex.config.ts",
+      "bunvex": "./src/component/bunvex.config.ts",
+      "default": "./src/component/bunvex.config.ts"
+    },
+    "./bunvex.config.js": {
+      "@bunvex/component-source": "./src/component/bunvex.config.ts",
+      "bunvex": "./src/component/bunvex.config.ts",
+      "default": "./src/component/bunvex.config.ts"
+    },
+    "./_generated/component.js": {
+      "types": "./src/component/_generated/component.ts"
+    },
+    "./test": "./src/test.ts",
+    "./package.json": "./package.json"
+  },
+  "peerDependencies": {
+    "@bunvex/server": "workspace:^",
+    "@bunvex/values": "workspace:^"
+  },
+  "devDependencies": {
+    "@bunvex/testing": "workspace:*",
+    "jose": "^6.2.14"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bunvex/bunvex",
+    "directory": "components/auth"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src",
+    "!src/**/*.test.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "bun": ">=1.4.2"
+  }
+}

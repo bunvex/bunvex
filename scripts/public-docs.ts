@@ -23,6 +23,7 @@ export const CHECKED = [
   "packages/server",
   "packages/testing",
   "packages/helpers",
+  "components/auth",
   "components/batch-worker",
   "components/rate-limiter",
   "components/resend",

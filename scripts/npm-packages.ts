@@ -48,6 +48,7 @@ export const INDEPENDENT = [
   "components/workpool",
   "components/rate-limiter",
   "components/resend",
+  "components/auth",
 ];
 
 /** Every published package, in dependency order. */

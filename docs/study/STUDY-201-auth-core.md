@@ -778,7 +778,13 @@ Everything §1.14 lists is in bunvex, with the file that provides it, except two
    against `argon2id-wasm`'s strings (a test dependency only) and the check that only `authPassword` may call it
    (built: `packages/server/test/password.test.ts`, `packages/testing/test/password.test.ts`).
 4. The server side: the four components, `setupAuth`, the two methods' server code, `bunvexAuthProvider`,
-   `getAuthUserId`, with the ported tests and the differential test.
+   `getAuthUserId`, with the ported tests and the differential test. In PRs (owner, 2026-11-02):
+   - 4a. the `auth` component, `@bunvex/auth/test` and the ported `core.test.ts` (built: `components/auth`; the
+     suite runs the component's functions as an app's, as upstream's; its callbacks' spies are a table, the fake
+     timers the deployment's virtual clock);
+   - 4b. `authPassword`, `authUsername`, `authAnonymous`;
+   - 4c. `setupAuth`, the methods' server code, `getAuthUserId`, `bunvexAuthProvider`;
+   - 4d. the differential test.
 5. The clients: `./react`, `./browser`, the methods' React hooks (and the inert `oauth()` ambient sign-in, C-5).
 6. The examples: username + password, and anonymous.
 7. Later: the `init` CLI (C-8).

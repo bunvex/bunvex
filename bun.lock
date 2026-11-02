@@ -92,6 +92,18 @@
         "postgres": "^3.4.9",
       },
     },
+    "components/auth": {
+      "name": "@bunvex/auth",
+      "version": "0.1.0-alpha.2",
+      "devDependencies": {
+        "@bunvex/testing": "workspace:*",
+        "jose": "^6.2.14",
+      },
+      "peerDependencies": {
+        "@bunvex/server": "workspace:^",
+        "@bunvex/values": "workspace:^",
+      },
+    },
     "components/batch-worker": {
       "name": "@bunvex/batch-worker",
       "version": "0.1.1-alpha.0",
@@ -1362,6 +1374,8 @@
     "@biomejs/cli-win32-arm64": ["@biomejs/cli-win32-arm64@2.6.4", "", { "os": "win32", "cpu": "arm64" }, "sha512-eCsqt8Ma3eVap+oyJCDnJZH60SIU464B66n3y38EUTJdM1T/HfZol1FJC9vb+sHToX0ix8XzqPcwJnOzyAJz0g=="],
 
     "@biomejs/cli-win32-x64": ["@biomejs/cli-win32-x64@2.6.4", "", { "os": "win32", "cpu": "x64" }, "sha512-pYsMy5AThiHFOZAsngg8qN4PurM6nInKBhVX7sbj3eNpRQqo1Hb0MgCwPL7VqVMrmcEEMj9Ks3qbkallR65e8g=="],
+
+    "@bunvex/auth": ["@bunvex/auth@workspace:components/auth"],
 
     "@bunvex/batch-worker": ["@bunvex/batch-worker@workspace:components/batch-worker"],
 
