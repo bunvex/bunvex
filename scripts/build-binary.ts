@@ -12,11 +12,14 @@ const ROOT = resolve(import.meta.dir, "..");
 const ENTRY = join(ROOT, "apps/local-backend/local-backend.ts");
 /**
  * The Workers the backend starts, each an entry point of its own in the executable (Bun bundles a Worker's module
- * only when it is one). A module of the executable starts a Worker at `new URL("./<file>", import.meta.url)`,
- * which inside it is `/$bunfs/root/<file>`: `--root` at the Workers' directory embeds them there.
+ * only when it is one). With `--root` at `packages/`, each is embedded at its path under it
+ * (`/$bunfs/root/core/src/persistence/sqlite-writer-thread.ts`), where `threadEntry` (core) looks for it: inside
+ * the executable every module's `import.meta.url` is `/$bunfs/root/<executable>`.
  */
-const WORKERS_DIR = join(ROOT, "packages/core/src/persistence");
-const WORKERS = [join(WORKERS_DIR, "sqlite-writer-thread.ts")];
+const WORKERS_ROOT = join(ROOT, "packages");
+const WORKERS = ["core/src/persistence/sqlite-writer-thread.ts", "server/src/execution-worker.ts"].map((f) =>
+  join(WORKERS_ROOT, f),
+);
 export const EXE = "bunvex-local-backend";
 
 /** Convex's targets, and the Bun target that builds each. */
@@ -67,7 +70,7 @@ for (const target of targets) {
     `--target=${TARGETS[target]}`,
     "--minify-syntax",
     `--define=BUNVEX_BUILD_VERSION=${JSON.stringify(version)}`,
-    `--root=${WORKERS_DIR}`,
+    `--root=${WORKERS_ROOT}`,
     ENTRY,
     ...WORKERS,
     "--outfile",

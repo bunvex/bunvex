@@ -43,6 +43,7 @@ function known(): Map<string, ErrorClass> {
     ...exported(require("./code-version.ts")),
     ...exported(require("./component-tree.ts")),
     ...exported(require("./definition-eval.ts")),
+    ...exported(require("./execution-workers.ts")),
     ...exported(require("./exports.ts")),
     ...exported(require("./external-deps.ts")),
     ...exported(require("./function-executor.ts")),

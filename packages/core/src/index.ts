@@ -478,6 +478,7 @@ export {
 export { APP_VISIBLE_SYSTEM_TABLES, SystemReader } from "./system-reader.ts";
 export { TableReader, TableWriter } from "./table-scope.ts";
 export { TableSummaries, TableSummariesUnavailableError, type TableSummary } from "./table-summaries.ts";
+export { threadEntry } from "./thread-entry.ts";
 export {
   type AttributeValue,
   CommitSpans,

@@ -9,6 +9,7 @@
 // sent as one character per byte.
 import type { Database, Statement } from "bun:sqlite";
 import { internalIdBytes } from "../internal-id.ts";
+import { threadEntry } from "../thread-entry.ts";
 import type { DocPrune, DocWrite, IndexEntryAt, IndexId, IndexPrune, IndexWrite, TabletId } from "./index.ts";
 
 /** A tablet's or an index's bytes, by id: few distinct ones, bound on every statement. */
@@ -393,7 +394,9 @@ export class WriterThread {
   constructor(private init: { path: string; durable: boolean; cacheKiB: number }) {}
 
   private start(): ThreadWorker {
-    const w = new Worker(new URL("./sqlite-writer-thread.ts", import.meta.url).href) as ThreadWorker;
+    const w = new Worker(
+      threadEntry(import.meta.url, "core/src/persistence", "sqlite-writer-thread.ts"),
+    ) as ThreadWorker;
     w.unref();
     w.onmessage = (e: MessageEvent<string>) => this.answer(e.data);
     w.addEventListener("error", (e) => {

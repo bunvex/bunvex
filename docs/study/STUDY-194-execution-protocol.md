@@ -843,7 +843,7 @@ Each one is green on its own. 0a–0d change nothing observable and run under th
 | 0b | the outcome carries errors, console and audit lines, the function log's figures; the retention check after a run (§10.3) | every suite through the codec; sabotage: the codec drops `BunvexError` data, or one line |
 | 0c | `Functions` reaches the engine through a narrow `FunctionsHost`; one registry per code version; a code epoch | push and component suites |
 | 0d | the catalog and search-state codec, and the epoch window (lifted from `packages/sandbox/src/host-call.ts`) | a property test; in tests the in-thread runner reads the catalog through the codec; sabotage: drop `staged` |
-| i | the worker runtime: `init`, `ready`/`failed`, `alive`, `close`; lazy start up to `MAX_ISOLATE_WORKERS`; a dead or stuck worker replaced (Q3); the compiled binary's entry | kill and restart; a stuck worker terminated (first proving `Worker.terminate` stops a tight loop in Bun) |
+| i | the worker runtime: `init`, `ready`/`failed`, `alive` (built as a shared counter, §10.5.4), `close`; lazy start up to `MAX_ISOLATE_WORKERS`; a dead or stuck worker replaced (Q3); the compiled binary's entry | kill and restart; a stuck worker terminated (first proving `Worker.terminate` stops a tight loop in Bun) |
 | ii | the SQLite reader in a worker | PERSIST-01's reads through the worker; a commit after `ts` is invisible |
 | iii | `version`, `release`, `epoch` | the worker's registry resolves as the main thread's for every example app |
 | iv | queries dispatched to workers on SQLite; `count` and `search` ops | the differential test, in-thread vs workers, on result text, errors, lines and read sets interval by interval; snapshot isolation; a push under load; retention; death; stuck; sabotage: run at `visibleTs`, drop an interval |
@@ -934,6 +934,43 @@ What it changes in the plan:
   created by an insert is a new epoch (sabotage: no in-place count → the query misses the table), and one where a
   query on a staged index through the codec still fails as staged (sabotage: the codec drops `staged` → it answers
   "backfilling").
+
+### 10.5.4 i, as built (2026-11-02)
+
+- **`Worker.terminate` stops a function that never yields,** measured first (Bun 1.4.4): a Worker in `for (;;) {}`,
+  and one in `for (;;) await null`, end within 12 ms of `terminate()`, and the process's CPU drops to nothing. An
+  uncaught error, or a rejection no one handles, ends a Bun Worker too (its `close` event, code 1 or 0): `close` is
+  the one sign of a death.
+- **The pool** (`server/src/execution-workers.ts`) and the worker's side (`server/src/execution-thread.ts`), with the
+  messages of §4.3 that i needs: the start (a shared buffer and the init text), `r` ready, `f` failed, a call `c` and
+  its outcome `o` (or `e`, failed in the worker itself), `x` close. `MAX_ISOLATE_WORKERS` is read by
+  `maxExecutionWorkers()` (the core count by default, DV-574; 0 starts none, AD-47). Dispatch and lazy starts as
+  §4.13; a call made while no worker is ready answers null, for the caller to run in-thread (§10.4). Nothing calls
+  it yet: iv dispatches to it, and adds its counts (started, failed starts, died, stuck) to `/metrics`.
+- **Stuck by a shared counter, not `alive` messages.** §4.12 had each worker send `alive`. That cannot tell a busy
+  worker from a stuck one: a query whose store reads are synchronous (SQLite in the worker) resumes on microtasks
+  only, so no timer of the worker fires until it ends, and it would look silent. Instead the worker adds to a counter
+  in a `SharedArrayBuffer` each time a call starts or resumes (`running(id)`, which iv calls where the user timer
+  resumes, `pausingUserTime`), and from a 10 ms timer while it has calls, which fires only when its event loop is
+  free; it also writes the id of the call that ran last. The main thread's watchdog (every 25 ms while calls are in
+  flight) terminates a worker whose counter has not moved for the longest user time limit of its calls plus 50 ms
+  (the sandbox's backstop slack); the call named in the buffer fails with "Function execution timed out (maximum
+  duration: …)", the others as system errors. A follower process (§4.15) has no shared memory and will need a
+  message after all; that is for then. One case this cannot tell: a single store statement that blocks the worker
+  longer than the limit (user time is paused there, so it is not a timeout on Convex). Whether that happens is for
+  iv's measurements.
+- **A failed start** (the store cannot open, or no answer within 30 s) is logged at most once a minute; the pool
+  waits 1 s before starting another, doubling up to 60 s, and calls run in-thread meanwhile.
+- **The executable.** `scripts/build-binary.ts` embeds every Worker module with `--root` at `packages/`, so each is at
+  its path under it; inside the executable every module's `import.meta.url` is the executable's own path at that
+  root, so `threadEntry` (core) finds a Worker module beside its starter in the sources and at
+  `<dir>/<file>` in the executable. Checked with `scripts/smoke-binary.sh` (the SQLite writer thread) and an
+  executable that starts `server/src/execution-worker.ts`.
+- **Proof** (`server/test/execution-workers.test.ts`): lazy starts and the cap, the least busy worker, 0; a worker that
+  exits or throws, and the next call on a new one; `for (;;) {}` and `for (;;) await null` time out while the other
+  worker answers; a call past its limit that keeps resuming, and one waiting idle, are not stopped; a failed and a
+  silent start; close. Sabotages, each caught: no watchdog; a dead worker kept; no idle tick; `running` without
+  progress; the first ready worker instead of the least busy; the stuck call not named.
 
 ### 10.6 Owner questions for 2b
 
