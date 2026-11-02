@@ -972,6 +972,37 @@ What it changes in the plan:
   silent start; close. Sabotages, each caught: no watchdog; a dead worker kept; no idle tick; `running` without
   progress; the first ready worker instead of the least busy; the stuck call not named.
 
+### 10.5.5 ii, as built (2026-11-02)
+
+- **The reads, in one module.** `core/src/persistence/sqlite-reads.ts` (`SqliteReads`) holds every statement that
+  reads the store: the scan, `get`, `getVersions`, `maxTs`, the document log and the globals. `SqlitePersistence`
+  reads through it on its connection, and so does a worker's reader on its own: the same statements either way.
+- **The reader.** `SqliteStoreReader` (`core/src/persistence/sqlite.ts`) opens the file read-only, with a page cache of
+  the size it is given. It takes no lock, runs no DDL and starts no writer thread. It cannot create the file, and it
+  changes nothing in it. Its writes throw. No read is wrapped in a transaction: every row is versioned by its ts, a
+  read names its ts, and the connection sees a group only once the writer thread committed it, which is before the
+  commit's ts becomes visible.
+- **The description.** `Persistence.reader()` says how another thread opens the store (`StoreReader`, plain data for
+  the worker's init): a SQLite file gives its absolute path, a store in memory gives none. Wrappers do not forward
+  it, so they keep running in-thread (§10.2). The server's `openStoreReader` opens one; v adds Postgres and MySQL
+  there.
+- **The page cache split (Q9)** is the caller's: the reader takes its size. iv sets it when the server starts workers
+  (half of `BUNVEX_SQLITE_CACHE_SIZE` for the main connection, the other half shared by the workers).
+- **Proof.**
+  - `core/test/sqlite-store-reader.test.ts`: the reader answers as the writer's connection at every ts of a random
+    history, both scan directions; a commit after a read's ts is not seen at that ts, and is seen at its own once
+    flushed. It also checks the globals, no lock, no file created, nothing changed, writes refused, and the cache
+    size.
+  - PERSIST-01 through a Worker (`bench/drivers/sqlite-worker-reads.ts`, in `bench/conformance.test.ts`): the
+    suite's writes go to the writer. Its reads (`get`, `getVersions`, `scan`, `maxTs`, `getGlobal`) cross to a
+    Worker that opened the reader from `reader()`, as an execution worker will. This runs K1, K2, K8 and K9, and the
+    engines of K3–K5 and K24 run on it too. All pass.
+- **Sabotages,** each caught:
+  - a reader that reads at its newest state instead of `ts` (K2, K8, K9 and K3 fail through the Worker; the unit
+    test too);
+  - a reader that takes the store's lock;
+  - a reader that may create the file.
+
 ### 10.6 Owner questions for 2b
 
 Decided by the owner on 2026-10-27, as recommended.

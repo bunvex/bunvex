@@ -355,6 +355,7 @@ export {
   ReadOnlyError,
   type ReadOnlyFlag,
   type RetentionStore,
+  type StoreReader,
   type TabletId,
   UnsureCommitError,
 } from "./persistence/index.ts";
