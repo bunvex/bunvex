@@ -751,7 +751,11 @@ Everything §1.14 lists is in bunvex, with the file that provides it, except two
   flight for the mutation's runner (`Tx.track`) and its time, on the thread pool, is not the function's
   (`pausingUserTime`), as a store call's. Verification follows the stored string (argon2id, argon2i, argon2d, its
   `m`, `t`, `p` and tag length; no version is 0x13), as the Rust crate's; a version other than 0x13 is refused
-  (Bun's argon2 computes only 0x13, and v2 writes only 0x13). The name identifies the component, it does not
+  (Bun's argon2 computes only 0x13, and v2 writes only 0x13). A stored string's costs are bounded (owner, 2026-11-02): over 64 MiB
+  (`m` > 65536) or 10 passes, verification throws ("memory cost over 65536 KiB", "time cost over 10") before any
+  work. v2's WASM runs in the function's isolate, whose memory is bounded (`ISOLATE_MAX_USER_HEAP_SIZE`,
+  `ISOLATE_MAX_ARRAY_BUFFER_TOTAL_SIZE`, 64 MiB each, `crates/common/src/knobs.rs:1165,1174`), so an outsized `m` fails
+  that one function; here it would be allocated in the deployment's process. v2 writes `m=16384,t=3`. The name identifies the component, it does not
   authenticate it: any pushed component may call itself `authPassword`, which only opens a hasher to it.
 
 ### 3.4 Tests

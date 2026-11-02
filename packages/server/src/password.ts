@@ -22,6 +22,13 @@ const PARALLELISM = 1;
 const TAG_BYTES = 32;
 /** argon2's shortest salt (RFC 9106 §3.1). */
 const MIN_SALT_BYTES = 8;
+// A stored string's costs, bounded (AD-49, owner 2026-11-02): v2's WASM runs in the function's isolate, whose memory is
+// bounded, so an outsized `m` fails that function; here it would be allocated in the deployment's own process. v2 writes
+// m=16384, t=3.
+/** The most memory a stored hash may ask for, in KiB (64 MiB). */
+export const MAX_MEMORY_KIB = 65536;
+/** The most passes a stored hash may ask for. */
+export const MAX_PASSES = 10;
 
 type Algorithm = "argon2id" | "argon2i" | "argon2d";
 const ALGORITHMS: readonly string[] = ["argon2id", "argon2i", "argon2d"];
@@ -93,6 +100,8 @@ function parsePhc(text: string): Phc | string {
   const parallelism = params.get("p");
   if (memory === undefined || passes === undefined || parallelism === undefined || params.size !== 3)
     return "the parameters must be m, t and p";
+  if (memory > MAX_MEMORY_KIB) return `memory cost over ${MAX_MEMORY_KIB} KiB`;
+  if (passes > MAX_PASSES) return `time cost over ${MAX_PASSES}`;
   const salt = unb64(parts[i + 1]!);
   const tag = unb64(parts[i + 2]!);
   if (!salt || !tag) return "invalid base64";
