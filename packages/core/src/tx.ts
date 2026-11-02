@@ -1099,6 +1099,7 @@ export class Tx {
    */
   async unrecorded<T>(fn: () => Promise<T>): Promise<T> {
     const n = this.reads.length;
+    const depended = this.dependedOn.size;
     this.notCounting++;
     try {
       return await fn();
@@ -1106,6 +1107,8 @@ export class Tx {
       this.notCounting--;
       void this.reads; // settle the scans it made
       this.readList.length = n;
+      // The tables it used were not read either: the next recorded use of one reads it, and the table mapping, then.
+      if (this.dependedOn.size > depended) this.dependedOn = new Set([...this.dependedOn].slice(0, depended));
     }
   }
 
