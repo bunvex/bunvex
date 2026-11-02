@@ -42,6 +42,7 @@
     - `issuer`: `https://convex.test`;
     - `tokenIdentifier`: `${issuer}|${subject}`.
   - `t.withRequestMetadata({ip?, userAgent?})`.
+  - `t.jwks()` (0.0.65, `ed7a5ce`): the public keys of a key generated per instance, which signs `ctx.auth.signJwt`.
   - `t.finishInProgressScheduledFunctions()`.
   - `t.finishAllScheduledFunctions(advanceTimers, maxIterations = 100)` (`:3713`) advances the timers and awaits the
     jobs in a loop.
@@ -186,6 +187,8 @@ There are two ways to get the app's functions into the engine.
 - **`t.fetch`.**
   - It calls the HTTP router in-process (`server/src/http-actions.ts:127`), with no port.
   - As in convex-test, the identity is `t`'s, and `Authorization` is not read.
+- **`t.jwks()`.** The engine's JWKS (`engine.deploymentJwtKeys`), as `/.well-known/jwks.json` serves it. Each test
+  deployment has an instance secret of its own (random), so, as each convex-test instance, it signs with its own key.
 - **Env.** `bunvexTest({env})` sets the deployment's variables, and `t.setEnv(name, value)` changes them (AD-34).
   `process.env` is not seen, as on a deployment. `vi.stubEnv` does not exist in `bun test` anyway.
 - **Runner.**
