@@ -503,7 +503,7 @@ providerAccountId: <uuid>, profile: {}})`. Every call creates a new account and 
 | `console.warn` from component mutations | `component/public.ts:657,693` | supported (function logs) |
 | Client: `ConvexProviderWithAuth` with `fetchAccessToken({forceRefreshToken})` and scheduled refresh; `ConvexHttpClient(url, {logger})`; `client.url`, `client.logger` | `react/index.tsx:122,159` | **supported**: `packages/react/src/auth.ts:40` (`BunvexProviderWithAuth`), `packages/client/src/authentication-manager.ts:250-269` (leeway 10 s, `base-client.ts:194`), `packages/client/src/http-client.ts:50,72,94`, `packages/react/src/client.ts:162,334` |
 | Web Locks, `localStorage`, `storage` events | `browser/` | browser APIs; nothing for the platform. bunvex's tests need a DOM-like environment (upstream runs `edge-runtime`, jsdom per file) |
-| Test harness: `registerComponent`, `withIdentity`, `t.jwks()` | `testing/*.ts`, tests | **partly different**: `@bunvex/testing` `registerComponent(name, definitionPath)` (`harness.ts:505`), not `(name, schema, modules)` (Bun has no `import.meta.glob`, STUDY-159); `signJwt` works under it (`packages/testing/test/sign-jwt.test.ts:28`); **`t.jwks()` is a gap**: nothing in `packages/testing/src` serves or returns the JWKS, and `component/core.test.ts` verifies every token against it |
+| Test harness: `registerComponent`, `withIdentity`, `t.jwks()` | `testing/*.ts`, tests | **partly different**: `@bunvex/testing` `registerComponent(name, definitionPath)` (`harness.ts:505`), not `(name, schema, modules)` (Bun has no `import.meta.glob`, STUDY-159); `signJwt` works under it (`packages/testing/test/sign-jwt.test.ts:28`); `t.jwks()` is built (C-6, `packages/testing/test/jwks.test.ts`), and `component/core.test.ts` verifies every token against it |
 | System env in components (`CONVEX_SITE_URL` with `httpPrefix`) | OAuth only | supported (`packages/server/src/functions.ts:265-298`); not needed by the core |
 | `@bunvex/batch-worker` | not the core at `db15c82e` | built (`components/batch-worker`); needed once the sweep lands |
 
@@ -734,7 +734,7 @@ higher version, so the name is reused on purpose; deprecating the old version on
 
 Everything §1.14 lists is in bunvex, with the file that provides it, except two things:
 - **`t.jwks()` in `@bunvex/testing`.** convex-test has it since 0.0.65 (`ed7a5ce`, "Support ctx.auth.signJwt in
-  mutations"), and upstream's `core.test.ts` verifies every token with it. It is parity with convex-test (STUDY-159), not an addition: built in its own small PR (C-6).
+  mutations"), and upstream's `core.test.ts` verifies every token with it. It is parity with convex-test (STUDY-159), not an addition: built in its own small PR (C-6); built (`packages/testing/test/jwks.test.ts`).
 - **The native hasher** (C-2, AD-49): an internal runtime operation, `argon2id(password, salt)` and its verify, that
   `authPassword`'s functions call and the server answers with Bun's `node:crypto` argon2 on its thread pool (in the
   host under the function sandbox, as `signJwt`'s signing is, DV-579). The salt is drawn in the mutation from its

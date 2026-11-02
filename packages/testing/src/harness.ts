@@ -12,6 +12,7 @@
 // It behaves as the real backend, not as convex-test's mock (DV-540): OCC, Convex's limits, real ids and storage
 // URLs, deterministic `Date` and `Math.random`. Functions see the env given to `bunvexTest` (DV-541, AD-34).
 
+import { randomBytes } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -19,6 +20,7 @@ import { bundleProject, pushRequest } from "@bunvex/cli/push-request";
 import {
   CRON_JOBS_TABLE,
   CRON_NEXT_RUN_TABLE,
+  type DeploymentJwks,
   defineSchema,
   Engine,
   resolveComponentPath,
@@ -53,9 +55,6 @@ import { BunvexError, fromJsonValue, isBunvexError, toJsonValue, type Value } fr
 provideProcessExecutor(createProcessExecutor);
 
 const INSTANCE_NAME = "bunvex-test";
-const INSTANCE_SECRET = "7e57".repeat(16);
-/** The test deployment's admin key: `t.fetch` acts as `withIdentity`'s user with it. */
-const ADMIN_KEY = issueAdminKey({ instanceName: INSTANCE_NAME, cipherKey: adminKeyCipherKey(INSTANCE_SECRET) });
 /** convex-test's default issuer, in bunvex's words (rule 5, DV-538). */
 const TEST_ISSUER = "https://bunvex.test";
 /** A reference to a child component's function, as `components.<name>` gives it. */
@@ -92,6 +91,11 @@ const nextMs = (j: Job) => Number((j.nextTs ?? 0n) / 1_000_000n);
 /** One test deployment: the engine, its server and its virtual clock, set up on first use. */
 class Backend {
   readonly runtime = new TestRuntime({ now: Date.now() });
+  // convex-test generates a signing key per instance (`generateDeploymentJwtKey`): so does a secret per deployment.
+  /** The deployment's instance secret, its own: it derives the admin key and the `signJwt` signing key. */
+  private readonly instanceSecret = randomBytes(32).toString("hex");
+  /** The test deployment's admin key: `t.fetch` acts as `withIdentity`'s user with it. */
+  readonly adminKey = issueAdminKey({ instanceName: INSTANCE_NAME, cipherKey: adminKeyCipherKey(this.instanceSecret) });
   private ready: Promise<{ functions: Functions; engine: Engine; siteUrl: string; stop: () => Promise<void> }> | null =
     null;
   private inline = 0;
@@ -130,7 +134,7 @@ class Backend {
   private async boot() {
     const engine = await new Engine(defineSchema({}), await MemoryPersistence.open(null, { durable: false }), {
       instanceName: INSTANCE_NAME,
-      instanceSecret: INSTANCE_SECRET,
+      instanceSecret: this.instanceSecret,
       storedSchema: true,
       runtime: this.runtime,
     }).init();
@@ -430,7 +434,7 @@ export class TestBunvex {
     if (this.identity && !headers.has("authorization"))
       headers.set(
         "authorization",
-        `Bunvex ${ADMIN_KEY}:${Buffer.from(JSON.stringify(this.identity)).toString("base64")}`,
+        `Bunvex ${this.backend.adminKey}:${Buffer.from(JSON.stringify(this.identity)).toString("base64")}`,
       );
     return fetch(`${siteUrl}${path}`, { ...init, headers });
   }
@@ -442,6 +446,22 @@ export class TestBunvex {
   async setEnv(name: string, value: string | null): Promise<void> {
     const { engine } = await this.backend.start();
     await engine.mutation((db) => engine.environment.update(db, [{ name, value }]));
+  }
+
+  // convex-test's `t.jwks()` (0.0.65).
+  /**
+   * The public keys that verify the tokens `ctx.auth.signJwt` signs, as the deployment serves them at
+   * `/.well-known/jwks.json`. Each test deployment signs with a key of its own, so they verify only its tokens.
+   *
+   * ```ts
+   * import { createLocalJWKSet, jwtVerify } from "jose";
+   *
+   * const { payload } = await jwtVerify(token, createLocalJWKSet(await t.jwks()));
+   * ```
+   */
+  async jwks(): Promise<DeploymentJwks> {
+    const { engine } = await this.backend.start();
+    return engine.deploymentJwtKeys.jwks();
   }
 
   /** The deployment's virtual clock (ms since the epoch); it moves only when scheduled functions are finished. */
