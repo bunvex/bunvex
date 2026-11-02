@@ -232,7 +232,8 @@ describe("loadCode", () => {
     );
     expect(bypass).toEqual([]);
     const callers = files.filter((f) => /\bloadCode\(/.test(readFileSync(join(src, f), "utf8"))).sort();
-    expect(callers).toEqual(["code-store.ts", "push.ts", "server.ts", "test-function.ts"]);
+    // `execution-code.ts` is an execution worker's: it loads with `vm`, the only executor workers run under.
+    expect(callers).toEqual(["code-store.ts", "execution-code.ts", "push.ts", "server.ts", "test-function.ts"]);
   });
 
   test("a module's namespace is read in the executor only (STUDY-171 §7.3b)", () => {

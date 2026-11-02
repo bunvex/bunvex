@@ -190,6 +190,7 @@ import {
 export { componentFunctionName, splitComponentFunctionName };
 
 import { decodeCallError, encodeCallError } from "./call-errors.ts";
+import type { LoadedCode } from "./code-version.ts";
 import {
   type CallerName,
   type CallFigures,
@@ -1074,8 +1075,26 @@ function systemArgsError(message: string): Error {
   return e;
 }
 
-/** A mounted component instance's code: its runtime, its modules' hashes and its router. */
-type ComponentCode = { runtime: ComponentRuntime; hashes: Map<string, string>; router: HttpRouter | undefined };
+/**
+ * A mounted component instance's code: its runtime, its modules' hashes and its router, and the loaded version they
+ * came from when they came from one (`installComponentVersion`).
+ */
+type ComponentCode = {
+  runtime: ComponentRuntime;
+  hashes: Map<string, string>;
+  router: HttpRouter | undefined;
+  code: LoadedCode | null;
+};
+
+// STUDY-194 §4.8 (2b step iii): what an execution worker loads to hold the same registry.
+/**
+ * Where a registry's functions came from, when every one came from a loaded version: the app's (none before the first
+ * push) and each mounted component's, with its runtime.
+ */
+export type CodeSources = {
+  app: LoadedCode | null;
+  components: { runtime: ComponentRuntime; code: LoadedCode }[];
+};
 
 // STUDY-194 §10.5 (2b commit 0c): what a worker will hold per code version, named by its epoch.
 /**
@@ -1099,6 +1118,10 @@ class CodeRegistry {
     // STUDY-37 E3.
     /** Whether the functions are pushed code, which sees the deployment's variables. */
     public deployed: boolean,
+    /** The loaded version the app's functions came from (`installVersion`); null before one, or when given as maps. */
+    public app: LoadedCode | null = null,
+    /** Whether some function or room was given as maps, not from a loaded version (`install`, `register`). */
+    public unsourced = false,
   ) {}
 
   static empty() {
@@ -1115,6 +1138,8 @@ class CodeRegistry {
       new Map(this.componentFns),
       new Map(this.componentRuntimes),
       this.deployed,
+      this.app,
+      this.unsourced,
     );
   }
 }
@@ -1197,7 +1222,71 @@ export class Functions {
         (moduleLoads.get(m) ?? [m]).map((p) => `${runtime.id}\0${p}`),
       );
     }
-    w.componentRuntimes.set(runtime.id, { runtime, hashes: new Map(moduleHashes), router });
+    w.componentRuntimes.set(runtime.id, { runtime, hashes: new Map(moduleHashes), router, code: null });
+  }
+
+  /** Install a component instance's loaded version (`installComponent`), remembering it as the functions' source. */
+  installComponentVersion(runtime: ComponentRuntime, code: LoadedCode) {
+    this.swap(() => {
+      this.installComponentIn(runtime, code.functions, code.moduleHashes, code.moduleLoads, code.router);
+      this.writing.componentRuntimes.get(runtime.id)!.code = code;
+    });
+  }
+
+  /**
+   * The loaded versions this registry's functions came from, or null when some came as maps (`register`, `install`,
+   * `installComponent`): only then can another thread load the same registry.
+   *
+   * @internal
+   */
+  codeSources(): CodeSources | null {
+    const c = this.code;
+    if (c.unsourced) return null;
+    const components: CodeSources["components"] = [];
+    for (const { runtime, code } of c.componentRuntimes.values()) {
+      if (!code) return null;
+      components.push({ runtime, code });
+    }
+    return { app: c.app, components };
+  }
+
+  /**
+   * What calls resolve against, as plain data: each function's kind, visibility, validators, name, module loads and
+   * component; the rooms, hashes, components and their routes. Two registries that describe alike resolve alike (an
+   * execution worker's, against the main thread's).
+   *
+   * @internal
+   */
+  describeCode(): unknown {
+    const c = this.code;
+    const sorted = <T>(m: Iterable<[string, T]>) => [...m].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    const fn = (f: FunctionDef) => ({
+      kind: f.kind,
+      visibility: f.visibility,
+      node: NODE_FUNCTIONS.has(f),
+      args: f.args ? JSON.stringify(f.args.json) : null,
+      returns: f.returns ? JSON.stringify(f.returns.json) : null,
+      name: this.names.get(f) ?? null,
+      loads: this.moduleLoads.get(f) ?? null,
+      component: this.componentOf.get(f)?.id ?? null,
+    });
+    return {
+      deployed: c.deployed,
+      fns: sorted(c.fns).map(([k, f]) => [k, fn(f)]),
+      rooms: sorted(c.rooms).map(([k, r]) => [k, r.kind]),
+      moduleHashes: sorted(c.moduleHashes),
+      componentFns: sorted(c.componentFns).map(([k, f]) => [k, fn(f)]),
+      components: sorted(c.componentRuntimes).map(([id, { runtime, hashes, router }]) => [
+        id,
+        {
+          path: runtime.path,
+          env: sorted(runtime.env),
+          httpPrefix: runtime.httpPrefix,
+          hashes: sorted(hashes),
+          routes: router ? router.getRoutes().map(([path, method]) => [path, method]) : null,
+        },
+      ]),
+    };
   }
 
   // Calling one is "not found", as on Convex.
@@ -1270,12 +1359,24 @@ export class Functions {
       w.fns = new Map(fns);
       w.rooms = new Map(rooms);
       w.moduleHashes = new Map(moduleHashes);
+      w.app = null;
+      w.unsourced = fns.size > 0 || rooms.size > 0;
       for (const [k, f] of fns) {
         const m = Functions.moduleOf(k);
         this.moduleLoads.set(f, moduleLoads.get(m) ?? [m]);
         this.deployedFns.add(f);
       }
       w.deployed = true;
+      return changed;
+    });
+  }
+
+  /** Install a loaded code version (`install`), remembering it as the app functions' source. */
+  installVersion(version: LoadedCode): Set<string> {
+    return this.swap(() => {
+      const changed = this.install(version.functions, version.moduleHashes, version.rooms, version.moduleLoads);
+      this.writing.app = version;
+      this.writing.unsourced = false;
       return changed;
     });
   }
@@ -1841,6 +1942,7 @@ export class Functions {
   register(module: string, fns: Record<string, FunctionDef | AnyRoomDef>) {
     this.swap(() => {
       const w = this.writing;
+      w.unsourced = true;
       for (const [n, f] of Object.entries(fns))
         if (isRoomDef(f)) w.rooms.set(`${module}:${n}`, f);
         else {

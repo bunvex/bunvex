@@ -1003,6 +1003,46 @@ What it changes in the plan:
   - a reader that takes the store's lock;
   - a reader that may create the file.
 
+### 10.5.6 iii, as built (2026-11-02)
+
+- **Where a registry came from.** 0c's registry now remembers the loaded versions its functions came from:
+  - the app's comes from `Functions.installVersion`;
+  - each component instance's comes from `installComponentVersion`, which the server's `installCodeVersion` now
+    calls.
+
+  Functions given as maps (`register`, `install`) mark it unsourced. `codeSources()` is null then: an embedded
+  server's calls stay in-thread (§10.4). `loadCode` records what each version was loaded from: its sources and its
+  load options (`loadInputsOf`).
+- **The messages** (`server/src/execution-code.ts`), each sent before the first call that needs it:
+  - `v<id>:<json>`: a version's sources, seed, timestamp, import-time variables, import timeout and `node_modules`
+    path. Each version is loaded once per worker, with the same loader (`loadCode`, `vm`).
+  - `k<epoch>:<json>`: a code epoch, which names the app's version and each mounted instance's, with its runtime
+    (id, path, variables, HTTP prefix).
+  - `f<epoch>`: forget an epoch. A version goes with the last epoch that holds it. This is §4.8's `release`, per
+    epoch: the main thread knows which epochs its calls in flight name, and it decides when to forget (iv).
+
+  `CodeShipper` numbers the versions and says what a worker lacks, keeping a `CodeHeld` per worker. `WorkerCode`
+  holds the versions and builds one `Functions` per epoch, so an older call keeps resolving against its own epoch
+  while a newer one runs.
+- **No `beside`.** A component's code is loaded beside the app's version only under `process`, in that version's
+  child. A worker loads with `vm`, which loads every version alike, so `beside` does not cross.
+- **Import-time variables** cross as they were when the version was loaded. That is what the main thread's modules
+  saw at their import; `process.env` inside an execution reads the deployment's variables from the store, which iv's
+  worker reads.
+- **Proof** (`server/test/execution-code.test.ts`):
+  - The corpus covers every example app and every load the server's pushed-code suites make (the sandbox's analysis
+    corpus). For each of its loads that succeeds, the worker's registry describes as the main thread's
+    (`Functions.describeCode`: each function's kind, visibility, validators, name, module loads and component; the
+    rooms, hashes, components and their routes).
+  - The same holds with an app and two component instances. A later epoch sends only what is new, and forgetting
+    drops exactly the versions no other epoch holds. A registry given as maps cannot be sent.
+  - Sabotages, each caught:
+    - the worker skips the components;
+    - `forget` keeps the versions;
+    - a component's path is wrong;
+    - versions are sent again;
+    - the app is installed without its module loads.
+
 ### 10.6 Owner questions for 2b
 
 Decided by the owner on 2026-10-27, as recommended.

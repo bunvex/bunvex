@@ -2362,7 +2362,7 @@ export function createServer(opts: ServerOptions) {
     const handles = new Map<string | null, string[]>([[null, []]]);
     // The swap: synchronous, and the functions' registry published as one version (STUDY-194 §10.5, 0c).
     const changed = functions.swap(() => {
-      const changed = functions.install(version.functions, version.moduleHashes, version.rooms, version.moduleLoads);
+      const changed = functions.installVersion(version);
       liveVersion = version;
       executor.installed?.(version);
       httpOptions.router = version.router;
@@ -2383,12 +2383,9 @@ export function createServer(opts: ServerOptions) {
             replaceComponentVersion(meta._id, null);
             continue;
           }
-          functions.installComponent(
+          functions.installComponentVersion(
             { id: meta._id, path: path.join("/"), env: new Map(meta.env), httpPrefix: meta.httpPrefix },
-            code.functions,
-            code.moduleHashes,
-            code.moduleLoads,
-            code.router,
+            code,
           );
           replaceComponentVersion(meta._id, code);
           // A handle row per function of the component, any visibility (Convex's `FunctionHandlesModel`, STUDY-155).
