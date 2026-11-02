@@ -1,9 +1,9 @@
 # STUDY-200 — `@bunvex/resend`
-<!-- index: `@bunvex/resend`, the fifth own component (STUDY-158's list extended) and the email sender of built-in auth (STUDY-191 A-7): a queue of emails sent in batches to Resend's API through two workpools and a rate limiter, webhooks verified with Svix signatures, statuses and delivery events, cleanups; written from get-convex/resend 0.2.10 | decided (owner, 2026-10-30): R-1–R-8 as recommended; DV-581, DV-582, AD-48; built: the package and its tests (§5) -->
+<!-- index: `@bunvex/resend`, the fifth own component (STUDY-158's list extended) and the email sender of built-in auth (STUDY-191 A-7): a queue of emails sent in batches to Resend's API through two workpools and a rate limiter, webhooks verified with Svix signatures, statuses and delivery events, cleanups; written from get-convex/resend 0.2.10 | decided (owner, 2026-10-30): R-1–R-8 as recommended; DV-581, DV-582, AD-48; built: the package and its tests (§5), the differential test and the example (R-8) -->
 
 - **Status:** decided (owner, 2026-10-30): R-1–R-8 as recommended (§7): DV-581 (R-2), DV-582 (R-3), AD-48 (R-7).
   Built (2026-10-30): AD-48's `outboundFetch` in `@bunvex/testing` (#980), then `components/resend/` and its tests
-  (§5). The differential test and `examples/resend` (R-8) are the next steps of §3.5.
+  (§5), the differential test (#985) and `examples/resend` (R-8, its e2e test without network).
 - **Convex source read:** get-convex/resend (now github.com/convex/resend) at `982bc63` (the tag commit of 0.2.10,
   2026-10-22), cloned at `../resend`. Paths are relative to that repository's root. Pinned (R-1).
 - **Consumer read:** Convex Auth v2 at `84ccfa8d` (`../convex-auth`), `packages/core` (§1.15).

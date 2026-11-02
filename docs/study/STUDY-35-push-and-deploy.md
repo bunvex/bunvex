@@ -251,6 +251,14 @@ and `/api/get_config_hashes`, with the `Deploy` operation, the same request and 
   - `_modules` rows (`path`, `sourcePackageId`, `sha256`, `analyzeResult`), the auth config, the crons diff
     (`applyCrons`), the schema made active and `finishCatalog`;
   - on commit, the server swaps the registry, the router, the auth verifier and the document validators;
+    every mounted component's code is loaded first, then the app's and the components' functions, routers and HTTP
+    routing are swapped in one step, with no await between them, so a run sees all of the old code or all of the
+    new, as Convex's one transaction gives (2026-11-01; before, the app's went live first and each component's
+    after a load, and a query in between ran the new app's code with an old component's). The crons the commit
+    wrote wait until the swap (`CronJobExecutor.hold`), so a cron due at once runs the code it names. Other runs
+    that start between the commit and the swap still run the old code against the new commit, as before; Convex
+    reads a run's code at its snapshot, so there is no such window. The per-version registry of STUDY-194 §10.5.1
+    (0c) is where that window can close;
   - it re-runs exactly the subscriptions whose module's hash changed, since a query cache entry is keyed by
     its module's hash;
   - environment variables changed meanwhile give `RaceDetected` (once they exist, item 9).

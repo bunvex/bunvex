@@ -1,0 +1,28 @@
+{
+  "name": "bunvex-example-resend",
+  "version": "0.0.0",
+  "private": true,
+  "description": "@bunvex/resend: emails queued and sent in batches, their statuses and Resend's webhook events, live.",
+  "type": "module",
+  "scripts": {
+    "dev": "bunvex dev --start 'vite --open'",
+    "build": "tsc --noEmit && vite build"
+  },
+  "dependencies": {
+    "@bunvex/resend": "workspace:*",
+    "@bunvex/react": "workspace:*",
+    "@bunvex/server": "workspace:*",
+    "@bunvex/values": "workspace:*",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@bunvex/cli": "workspace:*",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "bunvex-examples-harness": "workspace:*",
+    "typescript": "^5.9.0",
+    "vite": "^8.3.1"
+  }
+}
