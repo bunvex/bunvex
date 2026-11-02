@@ -10,7 +10,8 @@
       "bun": "./src/index.ts",
       "default": "./src/isomorphic.ts"
     },
-    "./executor": "./src/function-executor.ts"
+    "./executor": "./src/function-executor.ts",
+    "./password": "./src/password-api.ts"
   },
   "dependencies": {
     "@bunvex/auth": "workspace:*",
@@ -31,6 +32,7 @@
   },
   "devDependencies": {
     "@bunvex/persistence": "workspace:*",
+    "argon2id-wasm": "0.0.0-alpha.2",
     "jose": "^6.2.14",
     "typescript": "^5.9.0"
   },

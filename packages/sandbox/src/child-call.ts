@@ -613,6 +613,15 @@ class ChildCall extends ChildCallBase implements DbHost {
     if (m.created) this.created = new Map(m.created.map((t) => [t.name, t]));
   }
 
+  /** `@bunvex/server/password`'s hasher in a mutation: the host hashes, or refuses (AD-49). The salt crosses as bytes. */
+  private passwordHasher() {
+    return {
+      hash: (password: string, salt: Uint8Array) =>
+        this.op("password", ["hash", password, salt.slice().buffer]) as Promise<string>,
+      verify: (password: string, hash: string) => this.op("password", ["verify", password, hash]) as Promise<boolean>,
+    };
+  }
+
   private ctx(kind: "query" | "mutation") {
     const tx = new Tx(this, this.m.db);
     const db = this.m.db === "reader" ? readerOf(tx) : tx;
@@ -689,7 +698,15 @@ class ChildCall extends ChildCallBase implements DbHost {
       running.run(this, () =>
         captureLines(
           (line) => this.logLine(line),
-          () => inHandleScope({ create: (ref: unknown) => this.op("createFunctionHandle", [ref]) } as never, body),
+          () =>
+            inHandleScope(
+              {
+                create: (ref: unknown) => this.op("createFunctionHandle", [ref]),
+                // A mutation asks its host, which hashes only for the `authPassword` component (AD-49).
+                ...(kind === "mutation" && { password: this.passwordHasher() }),
+              } as never,
+              body,
+            ),
         ),
       );
     let outcome: Outcome;

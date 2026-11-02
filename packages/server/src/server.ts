@@ -12,6 +12,7 @@ import {
   applyEnvVarChanges,
   BackendIsNotRunningError,
   type Caller,
+  type ComponentDefinitionMeta,
   ComponentDeletionError,
   type ComponentMeta,
   checkIdentifier,
@@ -2383,7 +2384,13 @@ export function createServer(opts: ServerOptions) {
           continue;
         }
         functions.installComponent(
-          { id: meta._id, path: path.join("/"), env: new Map(meta.env), httpPrefix: meta.httpPrefix },
+          {
+            id: meta._id,
+            path: path.join("/"),
+            definitionName: definitionNameOf(components.routing.definitions.get(meta.definitionId)),
+            env: new Map(meta.env),
+            httpPrefix: meta.httpPrefix,
+          },
           code.functions,
           code.moduleHashes,
           code.moduleLoads,
@@ -2423,6 +2430,9 @@ export function createServer(opts: ServerOptions) {
    * child: STUDY-168 PR 7), and what the HTTP routing reads: nothing installed yet. An unmounted or deleted one is
    * not `live`; one with no code loads as null (its functions "not found").
    */
+  /** A child component definition's name (`defineComponent(name)`), as its row stores it. */
+  const definitionNameOf = (d: ComponentDefinitionMeta | undefined): string | null =>
+    d?.definitionType.type === "childComponent" ? d.definitionType.name : null;
   const readComponents = async (version: LoadedCode) => {
     const mounted = await engine.query((db) =>
       db.asSystem(async () => {

@@ -13,6 +13,7 @@ import {
   getFunctionName,
 } from "@bunvex/protocol";
 import type { FunctionReference_future } from "./api-types.ts";
+import type { PasswordHasher } from "./password.ts";
 import { trackedOperation } from "./pending-ops.ts";
 
 export const FUNCTION_HANDLE_PREFIX = "function://";
@@ -135,7 +136,10 @@ export async function resolveHandle(db: Tx, handle: string): Promise<string> {
     : componentFunctionName(row.component, row.path);
 }
 
-/** The running function, for `createFunctionHandle`: its transaction (null in an action) and the engine. */
+/**
+ * The running function, for `createFunctionHandle`: its transaction (null in an action) and the engine; and, for
+ * `@bunvex/server/password`, its password hasher where it may hash (AD-49).
+ */
 type Scope = {
   db: Tx | null;
   engine: Engine;
@@ -146,8 +150,12 @@ type Scope = {
   resolve?: (ref: unknown) => Promise<string>;
   /** Makes the handle elsewhere: the function sandbox's child asks its host, which runs this in its own scope. */
   create?: (ref: unknown) => Promise<string>;
+  /** Hashes and verifies passwords: only in a mutation of the `authPassword` component (or in its sandbox child). */
+  password?: PasswordHasher;
 };
 const scope = new AsyncLocalStorage<Scope>();
+/** The running function's scope, if any. */
+export const runningScope = (): Scope | undefined => scope.getStore();
 /** Run a function's handler where `createFunctionHandle` can find it. */
 export const inHandleScope = <T>(s: Scope, fn: () => T): T => scope.run(s, fn);
 /** Whether an action's (or an HTTP action's) handler is running: a scope with no transaction. */
