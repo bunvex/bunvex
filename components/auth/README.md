@@ -4,9 +4,69 @@ Built-in auth for bunvex, as components. It is bunvex's version of [Convex Auth 
 (`@convex-dev/auth` 2.0.0-beta), with the same component names, tables and indexes, function paths, arguments,
 results, defaults, messages and log lines, so a Convex export of its data imports unchanged.
 
-> **Work in progress.** This version ships the core component, `auth`, and the components the sign-in methods use:
-> `authPassword`, `authUsername` and `authAnonymous`. The methods' server code, `setupAuth`, `getAuthUserId`, the
-> provider for `auth.config.ts` and the React and browser clients come next.
+> **Work in progress.** This version ships the server side: the components, `setupAuth`, the username + password and
+> anonymous methods, `getAuthUserId` and the provider for `auth.config.ts`. The React and browser clients come next.
+
+## Setup
+
+Mount the components your methods use:
+
+```ts
+// bunvex/bunvex.config.ts
+import { defineApp } from "@bunvex/server";
+import auth from "@bunvex/auth/bunvex.config.js";
+import authPassword from "@bunvex/auth/components/password/bunvex.config.js";
+import authUsername from "@bunvex/auth/components/username/bunvex.config.js";
+
+const app = defineApp();
+app.use(auth);
+app.use(authPassword);
+app.use(authUsername);
+export default app;
+```
+
+Accept the tokens the auth component issues:
+
+```ts
+// bunvex/auth.config.ts
+import type { AuthConfig } from "@bunvex/server";
+import { bunvexAuthProvider } from "@bunvex/auth/server";
+
+export default { providers: [bunvexAuthProvider()] } satisfies AuthConfig;
+```
+
+Export the session functions and the methods' functions, with your `createUser` (and, optionally, `onSignIn`):
+
+```ts
+// bunvex/auth.ts
+import { setupAuth } from "@bunvex/auth/server";
+import { setupUsernamePassword } from "@bunvex/auth/methods/username-password/server";
+import { components, internal } from "./_generated/api";
+
+const auth = setupAuth({ component: components.auth });
+export const { signOut, refreshSession, isAuthenticated } = auth;
+
+export const { signUpWithUsernamePassword, signInWithUsernamePassword, changePassword } = setupUsernamePassword(auth, {
+  component: components.authPassword,
+  usernameComponent: components.authUsername,
+}).attachUserCallbacks({ createUser: internal.users.createUser });
+```
+
+```ts
+// bunvex/users.ts
+import { internalMutation } from "./_generated/server";
+import { v } from "@bunvex/values";
+
+export const createUser = internalMutation({
+  args: { provider: v.object({ name: v.string(), accountId: v.string(), profile: v.any() }) },
+  returns: v.id("users"),
+  handler: async (ctx) => await ctx.db.insert("users", {}),
+});
+```
+
+Then, in any query, mutation or action, `await getAuthUserId(ctx)` (from `@bunvex/auth/server`) is the signed-in user's
+id, or `null`. For anonymous sign-in, mount `authAnonymous` too and use `setupAnonymous` from
+`@bunvex/auth/methods/anonymous/server`.
 
 ## The core component
 
