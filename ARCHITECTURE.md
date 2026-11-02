@@ -98,7 +98,7 @@ bunvex/
 │   │   ├── s3                       S3 / R2 / MinIO / compatible, Bun's S3Client (STUDY-32)    ✅
 │   │   └── conformance              the suite every backend passes                             ✅
 │   │
-│   ├── auth/                        @bunvex/auth
+│   ├── identity/                    @bunvex/identity
 │   │   └── jwt                      verify JWT / OIDC (JWKS), STUDY-27                        ✅
 │   │
 │   ├── search/                      @bunvex/search   tokenizer, BM25, text and vector segments

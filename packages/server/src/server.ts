@@ -1,17 +1,11 @@
 // The transports: the HTTP one-shot API (Convex's `/api/{query,mutation,action}` shape) and the sync
 // protocol v1 at `/api/{version}/sync` (sync.ts, STUDY-23). One process: the committer is single by design.
-import {
-  type AuthConfig,
-  AuthenticationError,
-  type AuthInfo,
-  HTTP_CACHE_MAX_BYTES,
-  parseAuthConfig,
-  TokenVerifier,
-} from "@bunvex/auth";
+
 import {
   applyEnvVarChanges,
   BackendIsNotRunningError,
   type Caller,
+  type ComponentDefinitionMeta,
   ComponentDeletionError,
   type ComponentMeta,
   checkIdentifier,
@@ -44,6 +38,14 @@ import {
   Tracer,
 } from "@bunvex/core";
 import { type BlobStore, blobStoreFromEnv } from "@bunvex/file-storage";
+import {
+  type AuthConfig,
+  AuthenticationError,
+  type AuthInfo,
+  HTTP_CACHE_MAX_BYTES,
+  parseAuthConfig,
+  TokenVerifier,
+} from "@bunvex/identity";
 import { v1 } from "@bunvex/protocol";
 import { decodeId, TOO_NESTED_MESSAGE, type Value } from "@bunvex/values";
 import { withDefaultUserAgent } from "./action-fetch.ts";
@@ -2406,7 +2408,13 @@ export function createServer(opts: ServerOptions) {
             continue;
           }
           functions.installComponentVersion(
-            { id: meta._id, path: path.join("/"), env: new Map(meta.env), httpPrefix: meta.httpPrefix },
+            {
+              id: meta._id,
+              path: path.join("/"),
+              definitionName: definitionNameOf(components.routing.definitions.get(meta.definitionId)),
+              env: new Map(meta.env),
+              httpPrefix: meta.httpPrefix,
+            },
             code,
           );
           replaceComponentVersion(meta._id, code);
@@ -2448,6 +2456,9 @@ export function createServer(opts: ServerOptions) {
    * child: STUDY-168 PR 7), and what the HTTP routing reads: nothing installed yet. An unmounted or deleted one is
    * not `live`; one with no code loads as null (its functions "not found").
    */
+  /** A child component definition's name (`defineComponent(name)`), as its row stores it. */
+  const definitionNameOf = (d: ComponentDefinitionMeta | undefined): string | null =>
+    d?.definitionType.type === "childComponent" ? d.definitionType.name : null;
   const readComponents = async (version: LoadedCode) => {
     const mounted = await engine.query((db) =>
       db.asSystem(async () => {

@@ -7,8 +7,8 @@
 // again as the sandbox makes it (`packages/sandbox/src/host-call.ts` `appError`): its built-in class or `Error`, in
 // a realm of its own as under `vm`, with its name, message, stack and fields; a `BunvexError` with its data.
 import vm from "node:vm";
-import * as auth from "@bunvex/auth";
 import * as core from "@bunvex/core";
+import * as identity from "@bunvex/identity";
 import * as protocol from "@bunvex/protocol";
 import * as values from "@bunvex/values";
 import { ExecutorFailure, isError } from "./errors.ts";
@@ -33,7 +33,7 @@ function known(): Map<string, ErrorClass> {
     ...exported(core),
     ...exported(values),
     ...exported(protocol),
-    ...exported(auth),
+    ...exported(identity),
     ...exported(require("./errors.ts")),
     ...exported(require("./action-permits.ts")),
     ...exported(require("./action-timeout.ts")),

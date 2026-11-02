@@ -503,7 +503,7 @@ providerAccountId: <uuid>, profile: {}})`. Every call creates a new account and 
 | `console.warn` from component mutations | `component/public.ts:657,693` | supported (function logs) |
 | Client: `ConvexProviderWithAuth` with `fetchAccessToken({forceRefreshToken})` and scheduled refresh; `ConvexHttpClient(url, {logger})`; `client.url`, `client.logger` | `react/index.tsx:122,159` | **supported**: `packages/react/src/auth.ts:40` (`BunvexProviderWithAuth`), `packages/client/src/authentication-manager.ts:250-269` (leeway 10 s, `base-client.ts:194`), `packages/client/src/http-client.ts:50,72,94`, `packages/react/src/client.ts:162,334` |
 | Web Locks, `localStorage`, `storage` events | `browser/` | browser APIs; nothing for the platform. bunvex's tests need a DOM-like environment (upstream runs `edge-runtime`, jsdom per file) |
-| Test harness: `registerComponent`, `withIdentity`, `t.jwks()` | `testing/*.ts`, tests | **partly different**: `@bunvex/testing` `registerComponent(name, definitionPath)` (`harness.ts:505`), not `(name, schema, modules)` (Bun has no `import.meta.glob`, STUDY-159); `signJwt` works under it (`packages/testing/test/sign-jwt.test.ts:28`); **`t.jwks()` is a gap**: nothing in `packages/testing/src` serves or returns the JWKS, and `component/core.test.ts` verifies every token against it |
+| Test harness: `registerComponent`, `withIdentity`, `t.jwks()` | `testing/*.ts`, tests | **partly different**: `@bunvex/testing` `registerComponent(name, definitionPath)` (`harness.ts:505`), not `(name, schema, modules)` (Bun has no `import.meta.glob`, STUDY-159); `signJwt` works under it (`packages/testing/test/sign-jwt.test.ts:28`); `t.jwks()` is built (C-6, `packages/testing/test/jwks.test.ts`), and `component/core.test.ts` verifies every token against it |
 | System env in components (`CONVEX_SITE_URL` with `httpPrefix`) | OAuth only | supported (`packages/server/src/functions.ts:265-298`); not needed by the core |
 | `@bunvex/batch-worker` | not the core at `db15c82e` | built (`components/batch-worker`); needed once the sweep lands |
 
@@ -734,13 +734,29 @@ higher version, so the name is reused on purpose; deprecating the old version on
 
 Everything §1.14 lists is in bunvex, with the file that provides it, except two things:
 - **`t.jwks()` in `@bunvex/testing`.** convex-test has it since 0.0.65 (`ed7a5ce`, "Support ctx.auth.signJwt in
-  mutations"), and upstream's `core.test.ts` verifies every token with it. It is parity with convex-test (STUDY-159), not an addition: built in its own small PR (C-6).
+  mutations"), and upstream's `core.test.ts` verifies every token with it. It is parity with convex-test (STUDY-159), not an addition: built in its own small PR (C-6); built (`packages/testing/test/jwks.test.ts`).
 - **The native hasher** (C-2, AD-49): an internal runtime operation, `argon2id(password, salt)` and its verify, that
   `authPassword`'s functions call and the server answers with Bun's `node:crypto` argon2 on its thread pool (in the
   host under the function sandbox, as `signJwt`'s signing is, DV-579). The salt is drawn in the mutation from its
   seeded stream, as v2 draws it, so the PHC string is v2's byte for byte (checked: the same salt gives the same
   string as `argon2id-wasm`). The runtime answers it only to `authPassword`'s functions; the context stays closed
   otherwise (no `Bun`, no `node:` modules). `argon2id-wasm` is not a dependency.
+  Built (PR 3): `authPassword` imports `hashPassword(password, salt)` and `verifyPassword(password, hash)` from
+  `@bunvex/server/password`, a module the runtime links as it links `@bunvex/server` (`code-version.ts`), never
+  bundled. They answer where the running function's scope carries a hasher (`function-handles.ts`), which
+  `Functions.invoke` gives only to a mutation of a component whose definition is named `authPassword` (the name
+  from its `_component_definitions` row); anyone else gets "hashPassword can only be called from a mutation of the
+  authPassword component". Under the process sandbox a mutation's child forwards the call as a `password`
+  operation, and the host answers it in the mutation's scope, so the check is the host's. Each hash is work in
+  flight for the mutation's runner (`Tx.track`) and its time, on the thread pool, is not the function's
+  (`pausingUserTime`), as a store call's. Verification follows the stored string (argon2id, argon2i, argon2d, its
+  `m`, `t`, `p` and tag length; no version is 0x13), as the Rust crate's; a version other than 0x13 is refused
+  (Bun's argon2 computes only 0x13, and v2 writes only 0x13). A stored string's costs are bounded (owner, 2026-11-02): over 64 MiB
+  (`m` > 65536) or 10 passes, verification throws ("memory cost over 65536 KiB", "time cost over 10") before any
+  work. v2's WASM runs in the function's isolate, whose memory is bounded (`ISOLATE_MAX_USER_HEAP_SIZE`,
+  `ISOLATE_MAX_ARRAY_BUFFER_TOTAL_SIZE`, 64 MiB each, `crates/common/src/knobs.rs:1165,1174`), so an outsized `m` fails
+  that one function; here it would be allocated in the deployment's process. v2 writes `m=16384,t=3`. The name identifies the component, it does not
+  authenticate it: any pushed component may call itself `authPassword`, which only opens a hasher to it.
 
 ### 3.4 Tests
 
@@ -763,9 +779,25 @@ Everything §1.14 lists is in bunvex, with the file that provides it, except two
 1. The rename (§3.2).
 2. `t.jwks()` in `@bunvex/testing` (C-6).
 3. The native hasher's runtime operation (AD-49), in the function context and the process sandbox, with tests
-   against `argon2id-wasm`'s strings (a test dependency only) and the check that only `authPassword` may call it.
+   against `argon2id-wasm`'s strings (a test dependency only) and the check that only `authPassword` may call it
+   (built: `packages/server/test/password.test.ts`, `packages/testing/test/password.test.ts`).
 4. The server side: the four components, `setupAuth`, the two methods' server code, `bunvexAuthProvider`,
-   `getAuthUserId`, with the ported tests and the differential test.
+   `getAuthUserId`, with the ported tests and the differential test. In PRs (owner, 2026-11-02):
+   - 4a. the `auth` component, `@bunvex/auth/test` and the ported `core.test.ts` (built: `components/auth`; the
+     suite runs the component's functions as an app's, as upstream's; its callbacks' spies are a table, the fake
+     timers the deployment's virtual clock);
+   - 4b. `authPassword`, `authUsername`, `authAnonymous` (built: `components/auth/src/components/`, their suites
+     ported; `authPassword`'s is mounted as a component named `authPassword`, which the hasher answers, with test
+     functions for its rows; the common-password list regenerated by bunvex's own script from SecLists, identical to
+     v2's; a lone surrogate is refused at the wire, as on Convex's backend, where convex-test passes it);
+   - 4c. `setupAuth`, the methods' server code, `getAuthUserId`, `bunvexAuthProvider` (built: `components/auth/src/server/`, `src/methods/*/server.ts`, the rest of `lib/types.ts`; `ctx.bunvexAuth`, `BunvexAuthCtx`, `AuthApi` (C-4); the `setup`, `userId` and `authProvider` suites ported, the methods checked end to end in an app with the four components, `methods.test.ts`);
+   - 4d. the differential test (built: `packages/differential/test/auth.test.ts`, `auth-app/`, the pin built from the
+     clone by `harness/convex-auth.ts`, npm's 2.0.0-beta.0 predating it): every answer of a scenario (sign-up, sign-in,
+     the refusals in order, the rate limit, refresh with a lost answer and a dropped token's reuse, `changePassword`,
+     anonymous sign-in, sign-out, the caller's user and `isAuthenticated` with real access tokens verified through
+     `auth.config.ts`), every row of the components' and the app's tables, the access token's header and claims, and a
+     hash Convex's side stored verified by bunvex's verifier. Component tables are read with the dashboard's
+     `paginatedTableDocuments`: bunvex's `data --component` is still refused (DV-224, stale since components).
 5. The clients: `./react`, `./browser`, the methods' React hooks (and the inert `oauth()` ambient sign-in, C-5).
 6. The examples: username + password, and anonymous.
 7. Later: the `init` CLI (C-8).

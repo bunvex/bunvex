@@ -215,7 +215,7 @@ export const SYSTEM_TABLE_DESCRIPTIONS: Readonly<Record<string, string>> = {
   _schema_validation_progress: "The counters of each schema validation attempt.",
   _index_worker_metadata: "Search and vector index workers' state: the ts each index was fast-forwarded to.",
   _next_persistence_index_id: "The next index id to hand out.",
-  _components: "The deployment's components (only the root one: bunvex has no components yet).",
+  _components: "The deployment's components: the root and every one it mounts.",
   _component_definitions: "The deployment's component definitions (only the root app's).",
   _auth: "The deployed auth providers, one document per provider.",
   _db: "The database globals: the data version and the storage type pinned at the first start.",

@@ -28,7 +28,14 @@ export type VersionLoad = {
 /** A code epoch: the app's version (none before a push) and each mounted component's, by version id. */
 export type CodeEpoch = {
   app: number | null;
-  components: { id: string; path: string; env: [string, unknown][]; httpPrefix: string | null; version: number }[];
+  components: {
+    id: string;
+    path: string;
+    definitionName: string | null;
+    env: [string, unknown][];
+    httpPrefix: string | null;
+    version: number;
+  }[];
 };
 
 /** What a worker holds, as the main thread counts it: the epochs sent and not forgotten, and their versions. */
@@ -73,6 +80,7 @@ export class CodeShipper {
       components: sources.components.map(({ runtime, code }) => ({
         id: runtime.id,
         path: runtime.path,
+        definitionName: runtime.definitionName ?? null,
         env: [...runtime.env],
         httpPrefix: runtime.httpPrefix,
         version: this.idOf(code),
@@ -159,6 +167,7 @@ export class WorkerCode {
             const runtime: ComponentRuntime = {
               id: c.id,
               path: c.path,
+              ...(c.definitionName === null ? {} : { definitionName: c.definitionName }),
               env: new Map(c.env as [string, never][]),
               httpPrefix: c.httpPrefix,
             };

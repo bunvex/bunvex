@@ -10,7 +10,8 @@
       "!@bunvex/batch-worker",
       "!@bunvex/rate-limiter",
       "!@bunvex/workpool",
-      "!@bunvex/resend"
+      "!@bunvex/resend",
+      "!@bunvex/auth"
     ]
   ],
   "linked": [],

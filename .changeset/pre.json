@@ -2,7 +2,7 @@
   "mode": "pre",
   "tag": "alpha",
   "initialVersions": {
-    "@bunvex/auth": "0.1.0-alpha.0",
+    "@bunvex/identity": "0.1.0-alpha.0",
     "@bunvex/bench": "0.0.0",
     "@bunvex/cli": "0.1.0-alpha.0",
     "@bunvex/client": "0.1.0-alpha.0",

@@ -38,7 +38,7 @@ beforeAll(async () => {
   for (const dir of [
     "values",
     "core",
-    "auth",
+    "identity",
     "file-storage",
     "server",
     "client",

@@ -1,7 +1,7 @@
 # STUDY-43 — `bunvex data` (print tables and documents)
-<!-- index: `bunvex data`: the tables and a table's documents, as `npx convex data` (`_system/cli/tables`, `tableData`) | accepted: D1 as recommended (owner, 2026-10-02) -->
+<!-- index: `bunvex data`: the tables and a table's documents, as `npx convex data` (`_system/cli/tables`, `tableData`), with `--component` | accepted: D1 as recommended (owner, 2026-10-02); D1 resolved 2026-11-02 (`--component` built) -->
 
-- **Status:** accepted: D1 as recommended (owner, 2026-10-02)
+- **Status:** accepted: D1 as recommended (owner, 2026-10-02); D1 resolved 2026-11-02 (`--component`, §3.1)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **Related:** [STUDY-37](STUDY-37-cli-and-environment-variables.md) (the CLI), [STUDY-42](STUDY-42-import-export.md)
   (its sibling commands), [platform §CLI](../parity/platform.md).
@@ -54,11 +54,24 @@ two system queries and their operation (ViewData).
 - `bunvex data` in `packages/cli/src/data.ts`, with Convex's flags, output and messages ("`bunvex data`"
   in the truncation hint). The terminal width comes from `Io.columns`.
 
+### 3.1 `--component` (DV-224 resolved, 2026-11-02)
+
+Checked against Convex's local backend and CLI 1.48.0 (`packages/differential/test/data-component.test.ts`):
+- Convex's CLI runs `_system/cli/tables` and `_system/cli/tableData` as **subscriptions** (`runSystemQuery` over
+  `subscribe`), the `Add` carrying `componentPath`, and takes the first result. Over HTTP neither path works: `/api/query`
+  ignores a `componentPath` (on both backends it lists the app's tables, whatever the path), and `/api/function` finds no
+  `_system/` function ("Could not find function for '_system/cli/tables' in '<path>'"), on both.
+- So bunvex's CLI subscribes too, with its base client, as `run --watch` does, when `--component` is given (HTTP
+  otherwise, as before). The server runs a system query subscribed at a component's path in that component's namespace
+  (`Functions.queryBodyOf`), and `_system/cli/tables` lists the namespace it runs in.
+- A path no component has: `Component path '<path>' not found`, exit 1. Convex's CLI prints its client's uncaught error
+  with a stack; bunvex prints `bunvex data: <the message>`.
+
 ## 4. Divergences
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| D1 | `--component` is refused ("bunvex does not have components yet") | bunvex has no components (Phase 4; as DV-215) | accepted until components (owner, 2026-10-02); DV-224, waiting on components |
+| D1 | `--component` was refused ("bunvex does not have components yet") | bunvex had no components (Phase 4; as DV-215) | accepted until components (owner, 2026-10-02); **resolved** 2026-11-02: as Convex's (§3.1), DV-224 closed |
 
 ## 5. Tests
 

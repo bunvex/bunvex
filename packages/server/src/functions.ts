@@ -4,7 +4,6 @@
 // the engine (@bunvex/core); this layer only decides WHICH body runs and with what context.
 import { AsyncLocalStorage } from "node:async_hooks";
 import vm from "node:vm";
-import type { UserIdentity } from "@bunvex/auth";
 import {
   boolKnob,
   type Call,
@@ -50,6 +49,7 @@ import {
   wallClock,
   withUserTimer,
 } from "@bunvex/core";
+import type { UserIdentity } from "@bunvex/identity";
 import { type AnyFunctionReference, getFunctionAddress, getFunctionName } from "@bunvex/protocol";
 import {
   BunvexError,
@@ -225,6 +225,7 @@ import {
   withSubFunction,
 } from "./logs.ts";
 import { withNodeProcessErrors } from "./node-process-errors.ts";
+import { PASSWORD_COMPONENT, passwordHasher } from "./password.ts";
 import { setOperationTracker } from "./pending-ops.ts";
 import type { GenericActionCtx, GenericMutationCtx, GenericQueryCtx, VectorSearchQuery } from "./registration.ts";
 import { snapshotOnSettle } from "./result-snapshot.ts";
@@ -263,6 +264,8 @@ export const registryKey = (name: string) => {
 export type ComponentRuntime = {
   id: string;
   path: string;
+  /** Its definition's name (`defineComponent(name)`), when known. */
+  definitionName?: string | null;
   env: ReadonlyMap<string, { type: "value"; value: string } | { type: "envVar"; name: string }>;
   httpPrefix: string | null;
 };
@@ -1280,6 +1283,7 @@ export class Functions {
         id,
         {
           path: runtime.path,
+          definitionName: runtime.definitionName ?? null,
           env: sorted(runtime.env),
           httpPrefix: runtime.httpPrefix,
           hashes: sorted(hashes),
@@ -2420,6 +2424,13 @@ export class Functions {
   /** A query's body; `standalone`, a query that is not deployed, runs as `name` (the function tester's). */
   private queryBodyOf(name: string, args: unknown, fromClient = true, caller?: Caller, standalone?: QueryDef) {
     if (isSystemPath(name) && !standalone) return this.systemQueryBody(name, args, fromClient, caller);
+    // A system query subscribed with a component's path (the CLI's `data --component`, as Convex's): it runs in that
+    // component's namespace, as Convex runs a system function at a component's path.
+    const inComponent = standalone ? null : splitComponentFunctionName(name);
+    if (inComponent && isSystemPath(inComponent.name)) {
+      const body = this.systemQueryBody(inComponent.name, args, fromClient, caller);
+      return (db: Tx) => db.inComponent(inComponent.id, () => body(db));
+    }
     return this.queryRun(standalone ? () => standalone : this.fnLater(name, "query", fromClient, caller), args, true);
   }
 
@@ -2668,8 +2679,16 @@ export class Functions {
       : this.deployedFns.has(f)
         ? () => db.watch(handler, neverResolves)
         : handler;
+    const scope = {
+      db,
+      engine: this.engine,
+      resolve: (ref: unknown) => this.resolveCall(ref, component, db, false),
+      // `@bunvex/server/password` (AD-49): only the `authPassword` component's mutations hash.
+      password:
+        f.kind === "mutation" && component?.definitionName === PASSWORD_COMPONENT ? passwordHasher(db) : undefined,
+    };
     return notAQuery(
-      inHandleScope({ db, engine: this.engine, resolve: (ref) => this.resolveCall(ref, component, db, false) }, () =>
+      inHandleScope(scope, () =>
         component
           ? this.inComponentRun(db, component, run)
           : // The app's function called from a component (through a handle, STUDY-155): back in the app's namespace.

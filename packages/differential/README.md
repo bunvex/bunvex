@@ -20,6 +20,9 @@ backend is always started with `--disable-beacon`.
   `/api/mutation`. A test starts both with `startAll([startConvex(…), startBunvex(…)])`, not `Promise.all`: when one
   start fails, the others are waited for and stopped, so a failed `beforeAll` leaves no backend running
   (`test/setup-failure.test.ts`). `harness/preload.ts` stops, once the run ends, every backend a test left running.
+- `harness/convex-auth.ts`: Convex Auth v2 at the commit bunvex follows, for `test/auth.test.ts`. It is unreleased,
+  so it is built once from the `convex-auth` clone beside the repository (or `CONVEX_AUTH_REPO`) into `.cache/`, as
+  its release builds it; without a clone the test is skipped with a note.
 - `harness/runner.ts`: a program (calls, ids as references, a page's cursor named for a later page), played on
   one backend or compared on both.
 - `harness/generate.ts`: generated programs (fast-check): writes and reads inside one mutation (the #410

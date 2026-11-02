@@ -1,0 +1,107 @@
+{
+  "name": "@bunvex/auth",
+  "version": "0.1.0-alpha.2",
+  "description": "Built-in auth for bunvex: accounts, sessions with rotating refresh tokens and leaked-token detection, access tokens signed by the deployment, and sign-in methods as components.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "keywords": [
+    "bunvex",
+    "component",
+    "auth",
+    "authentication",
+    "sessions"
+  ],
+  "exports": {
+    ".": "./src/index.ts",
+    "./server": "./src/server/index.ts",
+    "./methods/username-password": "./src/methods/username-password/index.ts",
+    "./methods/username-password/server": "./src/methods/username-password/server.ts",
+    "./methods/anonymous/server": "./src/methods/anonymous/server.ts",
+    "./bunvex.config": {
+      "@bunvex/component-source": "./src/component/bunvex.config.ts",
+      "bunvex": "./src/component/bunvex.config.ts",
+      "default": "./src/component/bunvex.config.ts"
+    },
+    "./bunvex.config.js": {
+      "@bunvex/component-source": "./src/component/bunvex.config.ts",
+      "bunvex": "./src/component/bunvex.config.ts",
+      "default": "./src/component/bunvex.config.ts"
+    },
+    "./_generated/component.js": {
+      "types": "./src/component/_generated/component.ts"
+    },
+    "./test": "./src/test.ts",
+    "./components/password/bunvex.config": {
+      "@bunvex/component-source": "./src/components/password/bunvex.config.ts",
+      "bunvex": "./src/components/password/bunvex.config.ts",
+      "default": "./src/components/password/bunvex.config.ts"
+    },
+    "./components/password/bunvex.config.js": {
+      "@bunvex/component-source": "./src/components/password/bunvex.config.ts",
+      "bunvex": "./src/components/password/bunvex.config.ts",
+      "default": "./src/components/password/bunvex.config.ts"
+    },
+    "./components/password/_generated/component.js": {
+      "types": "./src/components/password/_generated/component.ts"
+    },
+    "./components/password/test": "./src/testing/password.ts",
+    "./components/username/bunvex.config": {
+      "@bunvex/component-source": "./src/components/username/bunvex.config.ts",
+      "bunvex": "./src/components/username/bunvex.config.ts",
+      "default": "./src/components/username/bunvex.config.ts"
+    },
+    "./components/username/bunvex.config.js": {
+      "@bunvex/component-source": "./src/components/username/bunvex.config.ts",
+      "bunvex": "./src/components/username/bunvex.config.ts",
+      "default": "./src/components/username/bunvex.config.ts"
+    },
+    "./components/username/_generated/component.js": {
+      "types": "./src/components/username/_generated/component.ts"
+    },
+    "./components/username/test": "./src/testing/username.ts",
+    "./components/anonymous/bunvex.config": {
+      "@bunvex/component-source": "./src/components/anonymous/bunvex.config.ts",
+      "bunvex": "./src/components/anonymous/bunvex.config.ts",
+      "default": "./src/components/anonymous/bunvex.config.ts"
+    },
+    "./components/anonymous/bunvex.config.js": {
+      "@bunvex/component-source": "./src/components/anonymous/bunvex.config.ts",
+      "bunvex": "./src/components/anonymous/bunvex.config.ts",
+      "default": "./src/components/anonymous/bunvex.config.ts"
+    },
+    "./components/anonymous/_generated/component.js": {
+      "types": "./src/components/anonymous/_generated/component.ts"
+    },
+    "./components/anonymous/test": "./src/testing/anonymous.ts",
+    "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "@bunvex/rate-limiter": "workspace:^"
+  },
+  "peerDependencies": {
+    "@bunvex/server": "workspace:^",
+    "@bunvex/values": "workspace:^"
+  },
+  "devDependencies": {
+    "hash-wasm": "^4.12.0",
+    "@bunvex/testing": "workspace:*",
+    "jose": "^6.2.14"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bunvex/bunvex",
+    "directory": "components/auth"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src",
+    "!src/**/*.test.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "bun": ">=1.4.2"
+  }
+}

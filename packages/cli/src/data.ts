@@ -1,6 +1,7 @@
 // `bunvex data` (STUDY-43), as Convex's `npx convex data` (npm-packages/convex/src/cli/data.ts, lib/data.ts):
 // without a table, the user tables; with one, its newest (or oldest) documents as a table, a JSON array or
 // one per line, each value printed as Convex's CLI prints it.
+import { BaseBunvexClient, type QueryToken } from "@bunvex/client";
 import { fromJsonValue, type JSONValue, type Value } from "@bunvex/values";
 import {
   argumentError,
@@ -36,6 +37,8 @@ Options:
   --order <choice>     order the documents by their \`_creationTime\`: asc or desc (default: desc)
   --format <format>    jsonArray (aka json): a JSON array of objects; jsonLines (aka jsonl): an object per
                        line; pretty: a table for people (the default)
+  --component <path>   a component's tables or documents, by its path in the tree your bunvex.config.ts
+                       mounts (default: the app's)
 ${TARGET_OPTIONS}`;
 
 const FORMATS = ["jsonArray", "json", "jsonLines", "jsonl", "pretty"] as const;
@@ -55,24 +58,69 @@ export function stringify(value: Value): string {
   return `{ ${pairs} }`;
 }
 
-/** Convex's `runSystemPaginatedQuery`: page after page until done or `limit` results. */
-async function paginated(target: Target, path: string, args: Record<string, unknown>, limit?: number) {
+type Page = { page: unknown[]; isDone: boolean; continueCursor: string };
+
+/**
+ * One result of a system query in a component, as Convex's `runSystemQuery` gets it: subscribed over a WebSocket with
+ * the component's path, its first result. A path no component has fails it.
+ */
+async function inComponent(target: Target, path: string, args: Record<string, unknown>, componentPath: string) {
+  let resolve!: (page: Page) => void;
+  let reject!: (e: Error) => void;
+  const first = new Promise<Page>((ok, fail) => {
+    resolve = ok;
+    reject = fail;
+  });
+  let token: QueryToken | undefined;
+  const client = new BaseBunvexClient(target.url, (updated) => {
+    if (token === undefined || !updated.includes(token)) return;
+    try {
+      resolve(client.localQueryResultByToken(token) as unknown as Page);
+    } catch (e) {
+      reject(e as Error);
+    }
+  });
+  client.setAdminAuth(target.adminKey);
+  const sub = client.subscribe(path, args as Record<string, Value>, { componentPath });
+  token = sub.queryToken;
+  try {
+    return await first;
+  } finally {
+    sub.unsubscribe();
+    await client.close();
+  }
+}
+
+/** Convex's `runSystemPaginatedQuery`: page after page until done or `limit` results; in a component, subscribed. */
+async function paginated(
+  target: Target,
+  path: string,
+  args: Record<string, unknown>,
+  limit?: number,
+  componentPath?: string,
+) {
   const results: unknown[] = [];
   let cursor: string | null = null;
   let isDone = false;
   while (!isDone && (limit === undefined || results.length < limit)) {
-    const r = (await adminRequest(target, "/api/query", {
-      path,
-      args: { ...args, paginationOpts: { cursor, numItems: limit === undefined ? 10000 : limit - results.length } },
-    })) as {
-      status: string;
-      value?: { page: unknown[]; isDone: boolean; continueCursor: string };
-      errorMessage?: string;
+    const pageArgs = {
+      ...args,
+      paginationOpts: { cursor, numItems: limit === undefined ? 10000 : limit - results.length },
     };
-    if (r.status !== "success") throw new Error(r.errorMessage ?? `${path} failed`);
-    isDone = r.value!.isDone;
-    cursor = r.value!.continueCursor;
-    results.push(...r.value!.page);
+    let page: Page;
+    if (componentPath !== undefined) page = await inComponent(target, path, pageArgs, componentPath);
+    else {
+      const r = (await adminRequest(target, "/api/query", { path, args: pageArgs })) as {
+        status: string;
+        value?: Page;
+        errorMessage?: string;
+      };
+      if (r.status !== "success") throw new Error(r.errorMessage ?? `${path} failed`);
+      page = r.value!;
+    }
+    isDone = page.isDone;
+    cursor = page.continueCursor;
+    results.push(...page.page);
   }
   return results;
 }
@@ -127,6 +175,7 @@ export async function dataCommand(args: string[], io: Io): Promise<number> {
   let order: "asc" | "desc" = "desc";
   let format: Format | undefined;
   let system = false;
+  let component: string | undefined;
   const r = taken.rest;
   for (let i = 0; i < r.length; i++) {
     const a = r[i]!;
@@ -154,8 +203,9 @@ export async function dataCommand(args: string[], io: Io): Promise<number> {
     } else if (a === "--system") {
       system = true;
     } else if (a === "--component" || a.startsWith("--component=")) {
-      // DV-224 (STUDY-43 D1): no components yet.
-      return argumentError(io, "--component: bunvex does not have components yet.");
+      const v = value("--component");
+      if (v === undefined) return argumentError(io, missingArgument("--component <path>"), DATA_USAGE);
+      component = v;
     } else if (!a.startsWith("-")) positional.push(a);
     else return argumentError(io, unknownOption(a, optionsIn(DATA_USAGE)), DATA_USAGE);
   }
@@ -193,7 +243,7 @@ export async function dataCommand(args: string[], io: Io): Promise<number> {
       return 0;
     }
     if (table === undefined) {
-      const tables = (await paginated(target, "_system/cli/tables", {})) as { name: string }[];
+      const tables = (await paginated(target, "_system/cli/tables", {}, undefined, component)) as { name: string }[];
       if (tables.length === 0) {
         // Convex names the deployment only for a cloud one; a self-hosted deployment has no name here.
         io.err("There are no tables in the database.");
@@ -213,6 +263,7 @@ export async function dataCommand(args: string[], io: Io): Promise<number> {
         system ? "_system/debug/systemTable" : "_system/cli/tableData",
         { table, order },
         limit + 1,
+        component,
       )
     ).map((d) => fromJsonValue(d as JSONValue) as Record<string, Value>);
     if (data.length === 0) {

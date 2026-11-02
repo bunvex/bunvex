@@ -100,7 +100,7 @@ describe("loading and analysis", () => {
   });
 
   test("only the @bunvex/* packages are linked: npm has no `bunvex` package (STUDY-40 L7)", () => {
-    expect([...LINKED_MODULES].sort()).toEqual(["@bunvex/server", "@bunvex/values"]);
+    expect([...LINKED_MODULES].sort()).toEqual(["@bunvex/server", "@bunvex/server/password", "@bunvex/values"]);
   });
 
   test("a real bundle: Bun.build with splitting, bunvex/* external, shared chunks linked", async () => {

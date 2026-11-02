@@ -32,6 +32,8 @@ test("sending a message", async () => {
   too: a test that seeds more than that moves the clock between batches (`t.advanceTime(1000)`).
 - **Callers**: `withIdentity({ … })` and `withRequestMetadata({ ip, userAgent })`; `t.fetch(path)` calls the app's
   HTTP actions as that user.
+- **Signed tokens**: `t.jwks()` returns the public keys that verify what `ctx.auth.signJwt` signs (for example with
+  `jose`'s `createLocalJWKSet`). Each test deployment signs with a key of its own.
 - **Components**: an app's are installed as its push installs them; call one directly through
   `componentsGeneric().<name>`. A component package's own tests mount it with
   `t.registerComponent(name, "path/to/its/dir")`, which returns its reference.

@@ -1,2 +1,4 @@
 .tanstack/
 .output/
+
+.env.local

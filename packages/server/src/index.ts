@@ -1,7 +1,5 @@
 // Package @bunvex/server — the function runtime, the transports (HTTP + WebSocket sync) and configuration.
 
-// Identity and the auth config (STUDY-27), as Convex's `convex/server` exports them.
-export type { AuthConfig, AuthProvider, UserIdentity, UserIdentityAttributes } from "@bunvex/auth";
 // The data model and database as types, as Convex's `convex/server` exports them (`_generated/` imports them).
 export type {
   AnyDataModel,
@@ -78,6 +76,8 @@ export {
   SearchFilter,
   type SystemFieldValidators,
 } from "@bunvex/core";
+// Identity and the auth config (STUDY-27), as Convex's `convex/server` exports them.
+export type { AuthConfig, AuthProvider, UserIdentity, UserIdentityAttributes } from "@bunvex/identity";
 // Function references, as Convex's `convex/server` exports them (STUDY-26 C3).
 export {
   type AnyApi,

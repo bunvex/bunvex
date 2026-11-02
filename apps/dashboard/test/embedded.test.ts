@@ -25,7 +25,8 @@ afterEach(async () => {
 
 /** A parent page at `origin` that embeds the dashboard; the dashboard listens with `allowed`. */
 async function embed(origin: string, allowed: readonly string[]) {
-  const parent = new Window({ url: `${origin}/` });
+  // happy-dom loads no iframe page unless asked (since 21): without it the iframe has no contentWindow.
+  const parent = new Window({ url: `${origin}/`, settings: { enableIframePageLoading: true } });
   windows.push(parent);
   const iframe = parent.document.createElement("iframe");
   parent.document.body.appendChild(iframe);

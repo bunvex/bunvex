@@ -8,7 +8,7 @@ import ts from "typescript";
 
 const ROOT = join(import.meta.dirname, "../..");
 /** What `@bunvex/server` and `@bunvex/values` import, through each other. */
-const PACKAGES = ["values", "search", "protocol", "core", "auth", "file-storage", "persistence", "server"];
+const PACKAGES = ["values", "search", "protocol", "core", "identity", "file-storage", "persistence", "server"];
 /** Where a file lives in the editor's file system. */
 export const MODULES = "file:///node_modules";
 

@@ -2,8 +2,8 @@
 // droplet, driven from a third. Rents three DigitalOcean droplets by the hour in one region's private network:
 //   server  runs Convex's prebuilt backend (the release bunvex follows), then bench/server.ts (versus-serve.ts)
 //   db      Postgres 17 in Docker, nothing else
-//   load    k6 over HTTP (bench/load/k6.js, the VPS reports' scenarios) and fanout.ts, WebSocket subscribers with
-//           each product's own client
+//   load    k6 over HTTP (bench/load/k6.js, the VPS reports' scenarios), ws-ops.ts (operations per second over the
+//           sync WebSocket, one raw client for both) and fanout.ts, WebSocket subscribers with each product's own client
 // Each target gets a fresh database, the same seed (bench/seed.ts) and the same functions (bench/functions.ts; for
 // Convex through convex-app.ts). Writes bench/results/cloud/<stamp>-versus-<sha>/ and destroys the droplets.
 // Needs `doctl` logged in and ~/.ssh/id_ed25519.pub, as cloud.ts.
@@ -11,7 +11,8 @@
 //   bun bench/cloud/versus.ts up | sync | run | down | status
 // Env: RUN (versus), REGION (sfo2), SERVER_SIZE (c-4), DB_SIZE (c-4), LOAD_SIZE (c-4),
 // TARGETS (convex,bunvex), SCENARIOS (cached,uncached,insert,increment1000,increment1,action,mix), VUS (8,32,128),
-// DURATION (20s), REPEATS (3), FANOUT (100,1000,5000,10000), MESSAGES (20), CONVEX_RELEASE, KEEP=1.
+// DURATION (20s), REPEATS (3), FANOUT (100,1000,5000,10000), MESSAGES (20), WS_SCENARIOS (insert,increment,
+// query-cached,query-uncached,chat; empty skips), WS_CONNS (64,512,2048), WS_SECS (15), CONVEX_RELEASE, KEEP=1.
 // c-4 is the largest size this account may create (dedicated CPU; sfo2, blr1, lon1 have it): the load box records its
 // busy cores, so a point where the generator was the limit shows.
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -158,6 +159,45 @@ async function http(s: State, target: string, scenario: string, vus: string) {
   };
 }
 
+/** Operations per second over the sync WebSocket (ws-ops.ts), with the server's, the db's and the load box's CPU. */
+async function ws(s: State, target: string, scenario: string, conns: string) {
+  const secs = Number(process.env.WS_SECS ?? 15);
+  const warmup = 3;
+  const [before, dbBefore] = await Promise.all([cpu(ssh, s.server), cpu(ssh, s.db)]);
+  // The CPU is read around the whole run (connections opened, warm-up, window): the cores are an average over it.
+  const out = await ssh(
+    s.load,
+    `ulimit -n 1048576; cd ${remote} && LABEL=${target} TARGET_URL=http://${s.server.private}:3210 SCENARIO=${scenario} ` +
+      `CONNS=${conns} SECS=${secs} WARMUP=${warmup} bun bench/cloud/ws-ops.ts 2>/dev/null`,
+  );
+  const [after, dbAfter] = await Promise.all([cpu(ssh, s.server), cpu(ssh, s.db)]);
+  const seconds = (after.at - before.at) / 1000;
+  const r = JSON.parse(out.trim().split("\n").at(-1)!) as {
+    opsPerSec: number;
+    errors: number;
+    ops: number;
+    p50: number | null;
+    p99: number | null;
+    updatesPerSec?: number;
+    updateP50?: number | null;
+    updateP99?: number | null;
+    closed: number;
+    loadCores: number;
+    maxWorkerCores: number;
+  };
+  return {
+    kind: "ws" as const,
+    target,
+    scenario,
+    conns: Number(conns),
+    secs,
+    ...r,
+    errorRate: r.ops + r.errors === 0 ? 1 : r.errors / (r.ops + r.errors),
+    serverCores: (after.servers - before.servers) / seconds,
+    dbCores: (dbAfter.box - dbBefore.box) / seconds,
+  };
+}
+
 async function fanout(s: State, target: string, n: string, splay: "on" | "off") {
   const messages = process.env.MESSAGES ?? "20";
   // The server's memory while the subscribers are connected: sampled until the run ends, the peak kept.
@@ -191,6 +231,7 @@ async function fanout(s: State, target: string, n: string, splay: "on" | "off") 
 
 type Result =
   | Awaited<ReturnType<typeof http>>
+  | Awaited<ReturnType<typeof ws>>
   | Awaited<ReturnType<typeof fanout>>
   | { kind: "fanout"; target: string; splay: "on" | "off"; n: number; failed: string };
 
@@ -215,6 +256,18 @@ async function runAll(sha: string) {
             );
             results.push({ ...m, repeat: r } as Result);
           }
+      for (const scenario of list("WS_SCENARIOS", "insert,increment,query-cached,query-uncached,chat"))
+        for (const conns of list("WS_CONNS", "64,512,2048")) {
+          const m = await ws(s, target, scenario, conns).catch((e: Error) => ({
+            kind: "ws" as const,
+            target,
+            scenario,
+            conns: Number(conns),
+            failed: e.message.slice(-500),
+          }));
+          console.log(`${target} ws ${scenario} conns=${conns}: ${JSON.stringify(m)}`);
+          results.push(m as Result);
+        }
       for (const splay of ["off", "on"] as const) {
         if (splay === "on") {
           await server.stop();
@@ -331,6 +384,41 @@ function summary(
     lines.push(`| ${scenario} | ${cells.join(" | ")} |`);
   }
   lines.push("", "⚠ = more than 1 % errors.");
+  const wsRows = results.filter((r) => r.kind === "ws") as (Result & Record<string, unknown>)[];
+  for (const scenario of [...new Set(wsRows.map((r) => r.scenario as string))]) {
+    const chat = scenario === "chat";
+    lines.push(
+      "",
+      chat
+        ? "## WebSocket, chat (1 post a second per connection, 10 connections a room): posts/s · ack p99 ms · " +
+            "updates/s · update p99 ms · server cores"
+        : `## WebSocket, ${scenario}: ops/s · p99 ms · server cores · db cores`,
+      "",
+      `| connections | ${targets.join(" | ")} |`,
+      `|--:|${targets.map(() => "--:|").join("")}`,
+    );
+    for (const conns of [...new Set(wsRows.filter((r) => r.scenario === scenario).map((r) => r.conns as number))]) {
+      const cells = targets.map((target) => {
+        const r = wsRows.find((x) => x.target === target && x.scenario === scenario && x.conns === conns);
+        if (!r) return "–";
+        if (r.failed) return "failed";
+        const n = (x: unknown, d = 0) => (typeof x === "number" ? x.toFixed(d) : "–");
+        // A generator worker near one core is the run's limit, not the server's.
+        const limited = (r.maxWorkerCores as number) > 0.9 ? " ⚠gen" : "";
+        const flags = `${(r.errorRate as number) > 0.01 ? " ⚠" : ""}${(r.closed as number) > 0 ? " ⚠closed" : ""}${limited}`;
+        return chat
+          ? `${n(r.opsPerSec)} · ${n(r.p99)} · ${n(r.updatesPerSec)} · ${n(r.updateP99)} · ${n(r.serverCores, 2)}${flags}`
+          : `${n(r.opsPerSec)} · ${n(r.p99)} · ${n(r.serverCores, 2)} · ${n(r.dbCores, 2)}${flags}`;
+      });
+      lines.push(`| ${conns} | ${cells.join(" | ")} |`);
+    }
+  }
+  if (wsRows.length > 0)
+    lines.push(
+      "",
+      "⚠ = more than 1 % errors; ⚠closed = a connection dropped; ⚠gen = a generator process used over 0.9 core, " +
+        "so the load box may be the limit.",
+    );
   for (const splay of ["off", "on"]) {
     const rows = results.filter((r) => r.kind === "fanout" && r.splay === splay) as (Result &
       Record<string, unknown>)[];

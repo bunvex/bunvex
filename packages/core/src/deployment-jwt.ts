@@ -26,10 +26,8 @@ const COMPONENT_ISSUER_PREFIX = "/components/";
 /** P-256's group order: a scalar must be in [1, n - 1]. */
 const P256_ORDER = 0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551n;
 
-/**
- * One public key of the JWKS, as Convex's serializes (`biscuit`'s JWK: its common parameters, then the curve's,
- * flattened in that order).
- */
+// Its fields in the order Convex's serializes them (`biscuit`'s JWK: its common parameters, then the curve's, flattened).
+/** One public key of the deployment's JWKS: a P-256 key that verifies ES256 tokens. */
 export type DeploymentJwk = {
   use: "sig";
   alg: "ES256";

@@ -38,6 +38,7 @@ import {
   neverResolves,
   type SandboxCall,
 } from "@bunvex/server/executor";
+import { hashPassword, verifyPassword } from "@bunvex/server/password";
 import { BunvexError, isBunvexError, type JSONValue } from "@bunvex/values";
 import { childGoneError, type SandboxError, type SandboxProcess, streamErrors } from "./host.ts";
 import {
@@ -89,8 +90,12 @@ const OPS: Record<string, { kinds: readonly Kind[]; writes?: boolean }> = {
   meta: { kinds: ["query", "mutation"] },
   createFunctionHandle: { kinds: ["query", "mutation"] },
   "log.audit": { kinds: ["query", "mutation"] },
+  // `@bunvex/server/password` (AD-49): hashed here, in the mutation's scope, which says whether it may.
+  password: { kinds: ["mutation"] },
   rooms: { kinds: ["mutation"] },
 };
+/** `@bunvex/server/password`'s functions. */
+const PASSWORD_METHODS = ["hash", "verify"];
 /** A mutation's `ctx.rooms` (AD-42): its broadcasts are sent once it commits. */
 const ROOMS_METHODS = ["broadcast"];
 
@@ -638,6 +643,12 @@ export class HostCall extends HostCallBase {
         return createFunctionHandle(args[0]);
       case "log.audit":
         return auditLine(args[0]);
+      case "password": {
+        const method = this.method(args, PASSWORD_METHODS, "password");
+        return method === "hash"
+          ? hashPassword(args[1] as string, new Uint8Array(args[2] as ArrayBuffer))
+          : verifyPassword(args[1] as string, args[2] as string);
+      }
       case "rooms": {
         const method = this.method(args, ROOMS_METHODS, "ctx.rooms");
         return (ctx.rooms as Record<string, (...a: unknown[]) => unknown>)[method]!(...args.slice(1));

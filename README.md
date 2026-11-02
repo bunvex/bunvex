@@ -76,7 +76,7 @@ regression check, 28 Oct).
 | `packages/persistence-conformance` | the PERSIST-01 suite every driver must pass |
 | `packages/server` | function runtime, HTTP API, WebSocket sync, scheduler, storage (`@bunvex/server`) |
 | `packages/protocol` | wire messages |
-| `packages/auth`, `packages/file-storage` | JWT / OIDC verification for `ctx.auth`; the bytes behind `ctx.storage` (local disk, S3) |
+| `packages/identity`, `packages/file-storage` | JWT / OIDC verification for `ctx.auth`; the bytes behind `ctx.storage` (local disk, S3) |
 | `packages/client` | the sync client: WebSocket, optimistic updates, pagination, HTTP client (`@bunvex/client`) |
 | `packages/react`, `nextjs`, `react-clerk`, `react-auth0`, `react-query` | React bindings, Next.js server rendering, Clerk and Auth0 providers, TanStack Query |
 | `packages/cli` | the `bunvex` command line: admin-key, codegen, dashboard, data, deploy, deployment, dev, docs, env, export, function-spec, import, logs, mcp, network-test, run, typecheck, update (`@bunvex/cli`) |
