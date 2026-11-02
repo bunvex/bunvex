@@ -848,7 +848,7 @@ Each one is green on its own. 0a–0d change nothing observable and run under th
 | iii | `version`, `release`, `epoch` | the worker's registry resolves as the main thread's for every example app |
 | iv | queries dispatched to workers on SQLite; `count` and `search` ops | the differential test, in-thread vs workers, on result text, errors, lines and read sets interval by interval; snapshot isolation; a push under load; retention; death; stuck; sabotage: run at `visibleTs`, drop an interval |
 | v | Postgres, MySQL and MongoDB readers; the connection split | the differential test on the Postgres job; connections counted in `pg_stat_activity` |
-| vi | the profile and the DO `c-4` measurement | §6's 2b row |
+| vi | the profile and the DO `c-4` measurement | §6's 2b row (§10.5.8) |
 
 ### 10.5.1 0c, as read (2026-10-28)
 
@@ -1105,6 +1105,39 @@ What it changes in the plan:
     stuck);
   - a worker's index cache on a commit stream larger than its log (purges follow the main thread's);
   - a lazy parse of the result for the HTTP API (the spike's 2.1× against 1.8×), to measure first in vi.
+
+### 10.5.8 vi, measured (2026-11-02)
+
+Two DO `c-4` (sfo2), SQLite, 64 VUs, 20 s, 3 repeats per point, all on the same droplets
+(`bench/results/cloud/2026-11-02-s194-vi/`). `BENCH_DEPLOY=1` deploys the bench's functions as a push's code: queries
+go to workers only then (§10.4).
+
+| median req/s (p99 ms) | uncached | cached | insert |
+|---|--:|--:|--:|
+| `main`, functions registered | 1941 (64) | 7894 (17) | 2682 (50) |
+| branch, registered | 1771 (68) | 8089 (17) | 2581 (52) |
+| branch, pushed, 0 workers | 1562 · 1553 (78) | 8097 · 7173 (17–18) | 2186 · 2171 (57–62) |
+| branch, pushed, 2 workers | 3128 · 3074 (47–51) | 7122 · 6905 (19) | 2160 · 2204 (60–69) |
+
+- **The gain, for a pushed app** (every real deployment): uncached 1.56k → 3.1k req/s (**2.0×**), p99 78 → 49 ms,
+  with the server using 2.45 cores instead of 0.97. Inserts are unchanged (2.18k either way): mutations stay
+  in-thread, and the commits sent to the workers cost nothing measurable.
+- **Pushed code costs more than registered code, in-thread.** On the branch, uncached is −12% and insert −16% against
+  the bench's registered functions. That is what a push's code costs, on `main` too: `vm` contexts, the deployment's
+  variables read per call, the `_modules` reads counted. It is not the workers' cost (with 0 workers nothing is sent).
+  `main` has no `BENCH_DEPLOY` to show the same row; measuring it there is the next step.
+- **What the branch costs a server without workers.** With the functions registered, the branch is uncached −9%
+  (1771 against 1941, ranges 1739–1798 and 1801–2032) and insert −4% (2581 against 2682). The candidates, all from
+  0c, 0d and iv:
+  - the metadata epoch computed per dispatch;
+  - the registry's per-version maps;
+  - `offloads` per call;
+  - the `unrecorded` change.
+
+  Each is to be measured alone before 2b's PR.
+- **Cached, with workers:** 7.0k against 7.6k without (ranges 6431–7878 and 7154–8404). Too noisy to call, and the
+  lead suspect is `callSpec` making the arguments' text and the code's sources for a query that the cache then
+  answers. That should be measured, and if needed only done when a worker is about to run the query.
 
 ### 10.6 Owner questions for 2b
 

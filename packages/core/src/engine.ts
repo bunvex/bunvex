@@ -5086,7 +5086,10 @@ function lazyValue<T extends object>(ran: T, result: string | null): T & { value
   let parsed: { v: unknown } | null = null;
   return Object.defineProperty(ran, "value", {
     enumerable: true,
-    get: () => (parsed ??= { v: result === null ? null : parseValue(result) }).v,
+    get: () => {
+      parsed ??= { v: result === null ? null : parseValue(result) };
+      return parsed.v;
+    },
   }) as T & { value: unknown };
 }
 
