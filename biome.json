@@ -11,6 +11,7 @@
       "!**/dist",
       "!examples/*/bunvex/_generated",
       "!components/*/src/component/_generated",
+      "!components/*/src/components/*/_generated",
       "!packages/server/test/fixtures/openapi"
     ]
   },

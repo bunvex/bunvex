@@ -15,7 +15,7 @@ import type {
   TableNamesInDataModel,
 } from "@bunvex/server";
 import type { GenericId } from "@bunvex/values";
-import type schema from "../schema.js";
+import schema from "../schema.js";
 
 /**
  * The names of all of your tables.
