@@ -67,15 +67,16 @@ export interface CallBodies {
   record(value: unknown): SessionRequestOutcome;
   /**
    * Run a request's transaction keeping its report apart (its console and audit lines, the function log's figures):
-   * `report` is that, as text for its outcome, once `result` settled; null when there is none.
+   * `report` is that, once `result` settled, as a value JSON can carry; null when there is none. It becomes the
+   * outcome's text only when the outcome crosses (`CallRunner.run`).
    */
-  capture<T>(run: () => Promise<T>): { result: Promise<T>; report(): string | null };
+  capture<T>(run: () => Promise<T>): { result: Promise<T>; report(): unknown };
   /**
-   * On the dispatcher's side, an outcome's `report`: its lines where the run would have logged them, its figures for
-   * its logged execution; `local` as `body`'s. Called for every outcome, so a mutation's attempt replaces the lines
-   * of the one before.
+   * On the dispatcher's side, a run's report (the value `capture` made, or an outcome's text of it): its lines where
+   * the run would have logged them, its figures for its logged execution; `local` as `body`'s. Called for every
+   * outcome, so a mutation's attempt replaces the lines of the one before.
    */
-  replay(report: string | null, local: unknown): void;
+  replay(report: unknown, local: unknown): void;
   /** What a run threw, as text for its outcome (STUDY-194 §10.2): its class, name, message, stack and fields. */
   encodeError(error: unknown): string;
   /** The error `encodeError` wrote, made again on the dispatcher's side as the same class. */
@@ -107,7 +108,7 @@ export const isCall = (b: unknown): b is Call => typeof b === "object" && b !== 
 export type Settled<T> = { tx: Tx; observedTime: boolean } & ({ ok: true; value: T } | { ok: false; error: unknown });
 
 /** What stays in the thread beside an outcome, in PR 2a (see the header). */
-export type CallLocal = { tx: Tx; value: unknown };
+export type CallLocal = { tx: Tx; value: unknown; report?: unknown };
 
 /** Run `body` in a new transaction from `host`, as a deterministic execution frozen at `start.now`. */
 export async function runTransaction<T>(host: CallHost, start: TxStart, body: TxBody<T>): Promise<Settled<T>> {
@@ -247,7 +248,11 @@ export class CallRunner {
       bodies,
       local,
     );
-    return { wire: encodeCallOutcome(r.outcome), local: r.local };
+    const report = r.local.report;
+    return {
+      wire: encodeCallOutcome({ ...r.outcome, report: report == null ? null : JSON.stringify(report) }),
+      local: r.local,
+    };
   }
 
   /**
@@ -298,12 +303,10 @@ export class CallRunner {
       status = "replayed";
       result = JSON.stringify((run.value as { replayed: SessionRequestOutcome }).replayed);
     } else if (run.ok && kind === "query") result = resultText(run.value);
+    // The report stays a value in the thread; `run` makes it the outcome's text when the outcome crosses.
     return {
-      outcome: {
-        ...outcomeOf(request.id, kind, run, status, result, run.ok ? null : bodies.encodeError(run.error)),
-        report: scope.report(),
-      },
-      local: { tx: run.tx, value: run.ok ? run.value : undefined },
+      outcome: outcomeOf(request.id, kind, run, status, result, run.ok ? null : bodies.encodeError(run.error)),
+      local: { tx: run.tx, value: run.ok ? run.value : undefined, report: scope.report() },
     };
   }
 }

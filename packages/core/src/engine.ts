@@ -4320,7 +4320,7 @@ export class Engine {
           }
         : async () => {
             const r = await this.runner.runRequest(request, start.identity ?? null, call.bodies, call.local);
-            call.bodies.replay(r.outcome.report, call.local);
+            call.bodies.replay(r.local.report ?? null, call.local);
             return r;
           };
       const run = offloaded ? async () => (await offloaded()) ?? (await inThread()) : inThread;

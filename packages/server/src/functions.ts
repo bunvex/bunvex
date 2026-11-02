@@ -2339,12 +2339,12 @@ export class Functions {
             bytesRead: tx.usage.bytesRead,
           };
           if (lines.length === 0 && audit.length === 0 && !figures) return null;
-          return JSON.stringify({ lines, audit, figures } satisfies CallReport);
+          return { lines, audit, figures } satisfies CallReport;
         },
       };
     },
     replay: (report, local) => {
-      const parsed = report === null ? null : (JSON.parse(report) as CallReport);
+      const parsed = (typeof report === "string" ? JSON.parse(report) : report) as CallReport | null;
       const owner = currentOwner();
       if (owner instanceof Running) owner.call = parsed?.figures ?? null;
       const put = () => {
