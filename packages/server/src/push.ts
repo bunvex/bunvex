@@ -16,7 +16,6 @@
 // The pushed version waits in memory between start_push and finish_push (Convex echoes start_push's answer
 // back; a restart in between makes finish_push answer RaceDetected and the CLI push again).
 import { createHash } from "node:crypto";
-import { type AuthInfo, authConfigWithoutJsonError, parseAuthConfig } from "@bunvex/auth";
 import {
   type AuditLogActor,
   componentMeta,
@@ -38,6 +37,7 @@ import {
   TooManyTablesError,
 } from "@bunvex/core";
 import type { BlobStore } from "@bunvex/file-storage";
+import { type AuthInfo, authConfigWithoutJsonError, parseAuthConfig } from "@bunvex/identity";
 import { checkValue, fromJsonValue, type JSONValue, validatorFromJson } from "@bunvex/values";
 import { auditEvents, type ComponentDiff } from "./audit-log.ts";
 import { putAuthInfo } from "./auth-info.ts";

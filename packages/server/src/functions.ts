@@ -3,7 +3,6 @@
 // and the calls the transports make. Transactions themselves run in
 // the engine (@bunvex/core); this layer only decides WHICH body runs and with what context.
 import vm from "node:vm";
-import type { UserIdentity } from "@bunvex/auth";
 import {
   boolKnob,
   type Call,
@@ -49,6 +48,7 @@ import {
   wallClock,
   withUserTimer,
 } from "@bunvex/core";
+import type { UserIdentity } from "@bunvex/identity";
 import { type AnyFunctionReference, getFunctionAddress, getFunctionName } from "@bunvex/protocol";
 import {
   BunvexError,

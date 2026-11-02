@@ -22,7 +22,7 @@ export const FIXED = [
   "search",
   "protocol",
   "core",
-  "auth",
+  "identity",
   "file-storage",
   "persistence",
   "server",

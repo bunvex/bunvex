@@ -14,7 +14,7 @@ fail() { echo "smoke-npm: $*" >&2; exit 1; }
 bun "$ROOT/scripts/publish-npm.ts" --dry-run >/dev/null
 VERSION=$(bun -e "console.log(require('$ROOT/packages/server/package.json').version)")
 bun -e "
-const names = ['values','search','protocol','core','auth','file-storage','persistence','server','client','react','react-clerk','react-auth0','react-query','nextjs','cli','sandbox','testing'];
+const names = ['values','search','protocol','core','identity','file-storage','persistence','server','client','react','react-clerk','react-auth0','react-query','nextjs','cli','sandbox','testing'];
 const own = (n, dir) => [n, require('$ROOT/' + dir + '/package.json').version];
 const versions = Object.fromEntries([...names.map((n) => [n, '$VERSION']), own('helpers', 'packages/helpers'), own('sharded-counter', 'components/sharded-counter')]);
 const f = (n) => 'file:$ROOT/dist/npm/bunvex-' + n + '-' + versions[n] + '.tgz';

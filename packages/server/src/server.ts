@@ -1,13 +1,6 @@
 // The transports: the HTTP one-shot API (Convex's `/api/{query,mutation,action}` shape) and the sync
 // protocol v1 at `/api/{version}/sync` (sync.ts, STUDY-23). One process: the committer is single by design.
-import {
-  type AuthConfig,
-  AuthenticationError,
-  type AuthInfo,
-  HTTP_CACHE_MAX_BYTES,
-  parseAuthConfig,
-  TokenVerifier,
-} from "@bunvex/auth";
+
 import {
   applyEnvVarChanges,
   BackendIsNotRunningError,
@@ -43,6 +36,14 @@ import {
   Tracer,
 } from "@bunvex/core";
 import { type BlobStore, blobStoreFromEnv } from "@bunvex/file-storage";
+import {
+  type AuthConfig,
+  AuthenticationError,
+  type AuthInfo,
+  HTTP_CACHE_MAX_BYTES,
+  parseAuthConfig,
+  TokenVerifier,
+} from "@bunvex/identity";
 import { v1 } from "@bunvex/protocol";
 import { decodeId, TOO_NESTED_MESSAGE, type Value } from "@bunvex/values";
 import { withDefaultUserAgent } from "./action-fetch.ts";

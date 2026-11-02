@@ -13,7 +13,7 @@
     "./executor": "./src/function-executor.ts"
   },
   "dependencies": {
-    "@bunvex/auth": "workspace:*",
+    "@bunvex/identity": "workspace:*",
     "@bunvex/core": "workspace:*",
     "@bunvex/file-storage": "workspace:*",
     "@bunvex/protocol": "workspace:*",

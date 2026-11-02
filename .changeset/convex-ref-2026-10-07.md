@@ -2,7 +2,7 @@
 "@bunvex/server": minor
 "@bunvex/core": minor
 "@bunvex/values": patch
-"@bunvex/auth": patch
+"@bunvex/identity": patch
 "@bunvex/cli": minor
 ---
 

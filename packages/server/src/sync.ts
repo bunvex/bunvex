@@ -15,7 +15,6 @@
 //   Convex's `advance_log` does. Anything else that triggers a transition (the session's own mutation, a
 //   query set change) still runs at once and covers the invalidated queries too.
 
-import { AuthenticationError, type VerifiedIdentity } from "@bunvex/auth";
 import {
   type CachedEntryRef,
   type Caller,
@@ -43,6 +42,7 @@ import {
   stringifyValue,
   TooManyWritesError,
 } from "@bunvex/core";
+import { AuthenticationError, type VerifiedIdentity } from "@bunvex/identity";
 import { v1 } from "@bunvex/protocol";
 import { fromJsonValue, rawValueSize, type Value } from "@bunvex/values";
 import { TooManyConcurrentRequestsError } from "./action-permits.ts";

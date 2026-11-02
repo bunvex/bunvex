@@ -1,4 +1,4 @@
-# @bunvex/auth
+# @bunvex/identity
 
 Identity for bunvex functions: the auth config, JWT / OIDC verification, and the `UserIdentity`
 `ctx.auth.getUserIdentity()` returns.
