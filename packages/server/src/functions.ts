@@ -2168,6 +2168,13 @@ export class Functions {
   /** A query's body; `standalone`, a query that is not deployed, runs as `name` (the function tester's). */
   private queryBodyOf(name: string, args: unknown, fromClient = true, caller?: Caller, standalone?: QueryDef) {
     if (isSystemPath(name) && !standalone) return this.systemQueryBody(name, args, fromClient, caller);
+    // A system query subscribed with a component's path (the CLI's `data --component`, as Convex's): it runs in that
+    // component's namespace, as Convex runs a system function at a component's path.
+    const inComponent = standalone ? null : splitComponentFunctionName(name);
+    if (inComponent && isSystemPath(inComponent.name)) {
+      const body = this.systemQueryBody(inComponent.name, args, fromClient, caller);
+      return (db: Tx) => db.inComponent(inComponent.id, () => body(db));
+    }
     return this.queryRun(standalone ? () => standalone : this.fnLater(name, "query", fromClient, caller), args, true);
   }
 

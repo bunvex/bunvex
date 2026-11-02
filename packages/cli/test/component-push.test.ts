@@ -504,3 +504,37 @@ describe("bunvex run --component (DV-391)", () => {
     expect(Bun.stripANSI(failed.out.join("\n"))).toContain("bad.ts");
   }, 30_000);
 });
+
+// As `npx convex data --component` (checked against Convex's local backend: the same tables, documents and messages; a
+// path no component has fails, Convex's CLI with its client's uncaught error).
+describe("bunvex data --component (DV-224 resolved)", () => {
+  const data = (root: string, url: string, ...args: string[]) => {
+    const r = io(root);
+    return main(["data", "--url", url, "--admin-key", KEY, ...args], r.it).then((code) => ({ code, ...r }));
+  };
+
+  test("a component's tables and documents, nested ones too; the app's stay the app's", async () => {
+    const d = await deployment();
+    const root = app();
+    expect(await deploy(root, d.url)).toBe(0);
+    await d.run("counter", "lib:add", { body: "hello" });
+
+    expect((await data(root, d.url, "--component", "counter")).out).toEqual(["messages"]);
+    const docs = await data(root, d.url, "messages", "--component=counter", "--format", "jsonArray");
+    expect(docs.code).toBe(0);
+    expect(JSON.parse(docs.out.join("\n")).map((m: { body: string }) => m.body)).toEqual(["hello"]);
+    const nested = await data(root, d.url, "messages", "--component", "counter/limiter");
+    expect({ code: nested.code, err: nested.err }).toEqual({ code: 0, err: ["There are no documents in this table."] });
+    // The app has no tables of its own.
+    expect((await data(root, d.url)).err).toEqual(["There are no tables in the database."]);
+  });
+
+  test("a path no component has fails", async () => {
+    const d = await deployment();
+    const root = app();
+    expect(await deploy(root, d.url)).toBe(0);
+    const missing = await data(root, d.url, "--component", "nope");
+    expect(missing.code).toBe(1);
+    expect(missing.err.join("\n")).toContain("Component path 'nope' not found");
+  });
+});
