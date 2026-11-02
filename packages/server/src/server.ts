@@ -2316,7 +2316,7 @@ export function createServer(opts: ServerOptions) {
       await modulesStore.delete(pkg.storageKey).catch(() => {});
       throw e;
     }
-    const live = await installCodeVersion(version);
+    const live = await installCodeVersion(version, { components: false });
     for (const p of unused) await modulesStore.delete(p.storageKey).catch(() => {});
     return { version, ...live };
   };
@@ -2326,7 +2326,6 @@ export function createServer(opts: ServerOptions) {
         const code = await loadLatestCode(engine, modulesStore, env, executor);
         if (!code) return;
         await installCodeVersion(code.version);
-        await installComponents();
         authModule = code.authConfig;
         // The providers stored by the last push or variable change, as Convex's token checks read `_auth`:
         // nothing is evaluated at a start.
@@ -2347,35 +2346,85 @@ export function createServer(opts: ServerOptions) {
       loaded.resolve();
     });
 
-  const installCodeVersion = async (version: LoadedCode, o: { crons?: boolean; auth?: AuthInfo[] } = {}) => {
+  // Convex's `finish_push` applies the app's and every component's config in one transaction
+  // (`crates/application/src/deploy_config.rs`): a run sees all of the old code or all of the new.
+  /**
+   * Make a code version live (STUDY-35), with every mounted component's code unless `components` is false
+   * (STUDY-154): at a start, after a push, and for a deploy that is not one (the app's alone). Everything is read and
+   * loaded first; then the app's and the components' functions, routers and routing are swapped in one step, with no
+   * await between them. The functions' handles, the crons and the invalidations follow.
+   */
+  const installCodeVersion = async (
+    version: LoadedCode,
+    o: { crons?: boolean; auth?: AuthInfo[]; components?: boolean } = {},
+  ) => {
+    const components = o.components === false ? null : await readComponents(version);
+    // The swap: synchronous from here to the routing.
     const changed = functions.install(version.functions, version.moduleHashes, version.rooms, version.moduleLoads);
     liveVersion = version;
     executor.installed?.(version);
-    // The functions' handles (STUDY-50): a row per function, tombstones for the ones gone.
-    await engine.mutation((db) => syncFunctionHandles(db, functions.functionPaths()), "_system/function_handles");
     httpOptions.router = version.router;
     if (o.auth !== undefined) useAuth(o.auth);
+    /** Each namespace's function handles to sync (STUDY-50, STUDY-155): `null` is the app's. */
+    const handles = new Map<string | null, string[]>([[null, functions.functionPaths()]]);
+    if (components) {
+      for (const id of functions.installedComponents())
+        if (!components.live.has(id)) {
+          functions.removeComponent(id);
+          replaceComponentVersion(id, null);
+          changed.add(id);
+          // Its handles soft-deleted (Convex's `apply_config_diff(component, None)` at an unmount).
+          handles.set(id, []);
+        }
+      for (const { meta, path, code } of components.loaded) {
+        if (meta.parent === null) continue;
+        if (!code) {
+          functions.removeComponent(meta._id);
+          replaceComponentVersion(meta._id, null);
+          continue;
+        }
+        functions.installComponent(
+          { id: meta._id, path: path.join("/"), env: new Map(meta.env), httpPrefix: meta.httpPrefix },
+          code.functions,
+          code.moduleHashes,
+          code.moduleLoads,
+          code.router,
+        );
+        replaceComponentVersion(meta._id, code);
+        // A handle row per function of the component, any visibility (Convex's `FunctionHandlesModel`, STUDY-155).
+        handles.set(meta._id, [...code.functions.keys()].map(canonicalPath));
+        for (const key of code.functions.keys()) changed.add(Functions.moduleOf(componentFunctionName(meta._id, key)));
+      }
+      httpOptions.routing = httpRouting(components.routing);
+    }
+    // The swap is done: what follows may await.
+    for (const [id, paths] of handles)
+      await engine.mutation(
+        (db) => (id === null ? syncFunctionHandles(db, paths) : syncFunctionHandles(db, paths, id)),
+        "_system/function_handles",
+      );
     const crons =
       o.crons === false
         ? undefined
         : await cronExecutor.push(
             version.crons ? cronSpecs(version.crons, (id, name) => functions.cronTarget(id, name)) : new Map(),
           );
-    sync.invalidateModules(changed);
+    if (changed.size) sync.invalidateModules(changed);
     return { changed, crons };
   };
+  /** An instance's version gives way to another, or goes: the executor may let what it holds for it go. */
+  const replaceComponentVersion = (id: string, next: LoadedCode | null) => {
+    const before = componentVersions.get(id);
+    if (next) componentVersions.set(id, next);
+    else componentVersions.delete(id);
+    if (before && before !== next) executor.release?.(before);
+  };
   /**
-   * Every mounted component's code, loaded from its namespace and installed (STUDY-154): at a start, and after a push
-   * or a deletion changed the tree. An unmounted or deleted one is removed: its functions are "not found".
+   * Every mounted component's code, loaded from its namespace beside the app's `version` (under `process`, in its
+   * child: STUDY-168 PR 7), and what the HTTP routing reads: nothing installed yet. An unmounted or deleted one is
+   * not `live`; one with no code loads as null (its functions "not found").
    */
-  const installComponents = async () => {
-    /** An instance's version gives way to another, or goes: the executor may let what it holds for it go. */
-    const replaced = (id: string, next: LoadedCode | null) => {
-      const before = componentVersions.get(id);
-      if (next) componentVersions.set(id, next);
-      else componentVersions.delete(id);
-      if (before && before !== next) executor.release?.(before);
-    };
+  const readComponents = async (version: LoadedCode) => {
     const mounted = await engine.query((db) =>
       db.asSystem(async () => {
         const out: { meta: ComponentMeta; path: string[] }[] = [];
@@ -2388,47 +2437,24 @@ export function createServer(opts: ServerOptions) {
         return out;
       }),
     );
-    const live = new Set(mounted.map((m) => m.meta._id));
-    const changed = new Set<string>();
-    for (const id of functions.installedComponents())
-      if (!live.has(id)) {
-        functions.removeComponent(id);
-        replaced(id, null);
-        changed.add(id);
-        // Its handles soft-deleted (Convex's `apply_config_diff(component, None)` at an unmount).
-        await engine.mutation((db) => syncFunctionHandles(db, [], id), "_system/function_handles");
-      }
-    for (const { meta, path } of mounted) {
-      if (meta.parent === null) continue;
-      // Under `process`, in the app's child, each instance a version of its own there (STUDY-168 PR 7).
-      const version = await loadComponentCode(engine, modulesStore, meta._id, executor, liveVersion ?? undefined);
-      if (!version) {
-        functions.removeComponent(meta._id);
-        replaced(meta._id, null);
-        continue;
-      }
-      functions.installComponent(
-        { id: meta._id, path: path.join("/"), env: new Map(meta.env), httpPrefix: meta.httpPrefix },
-        version.functions,
-        version.moduleHashes,
-        version.moduleLoads,
-        version.router,
-      );
-      replaced(meta._id, version);
-      // A handle row per function of the component, any visibility (Convex's `FunctionHandlesModel`, STUDY-155).
-      const paths = [...version.functions.keys()].map(canonicalPath);
-      await engine.mutation((db) => syncFunctionHandles(db, paths, meta._id), "_system/function_handles");
-      for (const key of version.functions.keys()) changed.add(Functions.moduleOf(componentFunctionName(meta._id, key)));
+    const loaded: { meta: ComponentMeta; path: string[]; code: LoadedCode | null }[] = [];
+    try {
+      for (const { meta, path } of mounted)
+        loaded.push({
+          meta,
+          path,
+          code: await loadComponentCode(engine, modulesStore, meta._id, executor, version),
+        });
+      return { live: new Set(mounted.map((m) => m.meta._id)), loaded, routing: await readRouting() };
+    } catch (e) {
+      // Nothing was installed: what was loaded for this version goes.
+      for (const { code } of loaded) if (code) executor.release?.(code);
+      throw e;
     }
-    if (changed.size) sync.invalidateModules(changed);
-    httpOptions.routing = await httpRouting();
   };
-  /**
-   * The app's HTTP routing below its router (STUDY-157 PR 4): its prefix, and each definition's mounts with the
-   * installed components' routers, as Convex's `route_http_action` reads them.
-   */
-  const httpRouting = async (): Promise<AppRouting> => {
-    const { rows, definitions } = await engine.query((db) =>
+  /** What the app's HTTP routing is built from: the components' and their definitions' rows. */
+  const readRouting = () =>
+    engine.query((db) =>
       db.asSystem(async () => ({
         rows: (await db.query("_components").collect()).map((r) => componentMeta(r as Record<string, unknown>)),
         definitions: new Map(
@@ -2439,6 +2465,11 @@ export function createServer(opts: ServerOptions) {
         ),
       })),
     );
+  /**
+   * The app's HTTP routing below its router (STUDY-157 PR 4): its prefix, and each definition's mounts with the
+   * installed components' routers, as Convex's `route_http_action` reads them.
+   */
+  const httpRouting = ({ rows, definitions }: Awaited<ReturnType<typeof readRouting>>): AppRouting => {
     const root = rows.find((r) => r.parent === null);
     if (!root) return NO_ROUTING;
     // A definition's mounts, each naming a direct child (`_reference/childComponent/<name>`), in key order.
@@ -2474,9 +2505,7 @@ export function createServer(opts: ServerOptions) {
     executor,
     install: async (version, auth, module) => {
       authModule = module;
-      const live = await installCodeVersion(version, { crons: false, auth });
-      await installComponents();
-      return live;
+      return installCodeVersion(version, { crons: false, auth });
     },
     deploymentEnv,
     // As Convex's Node executor's timeout, which bounds its `build_deps`: NODE_ACTION_USER_TIMEOUT + 5 s.

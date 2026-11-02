@@ -999,6 +999,8 @@ export class PushService {
     }
     const rootSpecs = new Map(Object.entries(p.version.analysis["crons.js"]?.cronSpecs ?? {}));
     let committed: { value: Awaited<ReturnType<typeof finishComponents>> & { authDiff: ComponentDiff["moduleDiff"] } };
+    // From the commit to the install, the crons it commits wait for the code they name.
+    const releaseCrons = this.deps.cronExecutor.hold();
     try {
       committed = (await engine.commitSchemaPush(
         p.schemaId,
@@ -1047,6 +1049,7 @@ export class PushService {
         withoutSchema,
       )) as typeof committed;
     } catch (e) {
+      releaseCrons();
       for (const w of written) await this.deps.modulesStore.delete(w.storageKey).catch(() => {});
       if (e instanceof RaceError) throw new PushError(e.code, e.message, 409);
       if (e instanceof SchemaPushError)
@@ -1061,8 +1064,11 @@ export class PushService {
     // schema is never overwritten, so it stays finishable (Convex's `finish_push` needs only the answer), until the
     // cap of `start_push` drops it.
     if (p.schemaId !== null) for (const [k, q] of this.pending) if (q.schemaId !== null) this.pending.delete(k);
-    await this.deps.install(p.version, auth, p.authModule);
-    this.deps.cronExecutor.refresh();
+    try {
+      await this.deps.install(p.version, auth, p.authModule);
+    } finally {
+      releaseCrons();
+    }
     // A blob is deleted once no namespace's `_source_packages` row names it (two instances share one).
     const unused = committed.value.unused;
     if (unused.length) {

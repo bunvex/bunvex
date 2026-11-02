@@ -252,7 +252,7 @@ export const MIGRATE = {
     { text: "The official client talks to bunvex: the same sync protocol.", source: "packages/client/README.md" },
     { text: "Snapshots exported from one import into the other.", source: "docs/study/STUDY-42-import-export.md" },
     {
-      text: "29 example apps (24 after Convex's demos and templates, one for rooms, four for components), each tested end to end.",
+      text: "30 example apps (24 after Convex's demos and templates, one for rooms, five for components), each tested end to end.",
       source: "examples/README.md",
     },
     {
