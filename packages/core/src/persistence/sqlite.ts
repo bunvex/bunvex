@@ -364,6 +364,12 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     return Number(r.n);
   }
 
+  // AD-46, STUDY-194 Q9.
+  /** @internal This connection's page cache, in bytes: the store's share when execution workers read it too. */
+  setCacheBytes(bytes: number) {
+    this.db.exec(`pragma cache_size = -${Math.max(1, Math.ceil(bytes / 1024))};`);
+  }
+
   /** How another thread opens this store to read it: a file's path; none for a store in memory. */
   reader(): StoreReader | undefined {
     return this.inMemory ? undefined : { driver: "sqlite", path: resolve(this.path) };

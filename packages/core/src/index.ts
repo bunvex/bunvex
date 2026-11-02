@@ -30,9 +30,11 @@ export {
   type CallHost,
   CallRunner,
   callsRoundTripByDefault,
+  checkWorkerOutcomes,
   isCall,
   roundTripCallsByDefault,
   type TxStart,
+  workerOutcomesChecked,
 } from "./call-runner.ts";
 export {
   type CallKind,
@@ -238,6 +240,7 @@ export {
   monotonicNow,
   newUserTimer,
   observeTime,
+  onUserTimeResume,
   onWork,
   outsideExecution,
   PersistenceReadError,
@@ -271,6 +274,8 @@ export {
   DEFAULT_INSTANCE_NAME,
   Engine,
   FINISH_PUSH_MAX_OCC_FAILURES,
+  type FollowerOps,
+  type FollowerStart,
   ImportBackfillingError,
   INDEX_BACKFILL_DEFAULTS,
   type IndexBackfillOptions,
@@ -282,6 +287,7 @@ export {
   occBackoffMs,
   parseValue,
   type QueryJournal,
+  type QueryWorkers,
   type RequestMetadata,
   readInstanceRecord,
   readSystemRows,
@@ -290,6 +296,7 @@ export {
   StagedSchemaError,
   stringifyValue,
   type TxBody,
+  type WorkerSink,
 } from "./engine.ts";
 export {
   applyEnvVarChanges,
@@ -305,6 +312,7 @@ export {
   orderEnvVarChanges,
 } from "./environment-variables.ts";
 export { Expression, expressionFromJson, expressionJson, type FilterOperand, filterBuilder } from "./filter.ts";
+export { answerFollowerOp, followerOpsOver } from "./follower-ops.ts";
 export { INDEX_CACHE_MAX_BYTES, IndexCache, IndexCacheMismatchError, type IndexCacheStats } from "./index-cache.ts";
 export { opaqueToInspect } from "./inspect.ts";
 export {

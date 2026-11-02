@@ -3,6 +3,7 @@
 // exposing functions is the server's job (@bunvex/server).
 
 import { hostname } from "node:os";
+import type { TextHit, TextQuery } from "@bunvex/search";
 import {
   fromJsonValue,
   type GenericValidator,
@@ -24,6 +25,7 @@ import {
 } from "./bootstrap.ts";
 import {
   type Call,
+  type CallBodies,
   type CallHost,
   CallRunner,
   callsRoundTripByDefault,
@@ -126,6 +128,7 @@ import {
   wallClock,
 } from "./determinism.ts";
 import { EnvironmentVariables } from "./environment-variables.ts";
+import { answerFollowerOp } from "./follower-ops.ts";
 import { INDEX_CACHE_MAX_BYTES, IndexCache } from "./index-cache.ts";
 import { readNextIndexId } from "./index-ids.ts";
 import { INDEX_BACKFILL_DEFAULTS, type IndexBackfillOptions, IndexWorker } from "./index-worker.ts";
@@ -133,7 +136,14 @@ import { opaqueToInspect } from "./inspect.ts";
 import { indexIdOf, internalIdOf } from "./internal-id.ts";
 import { canonicalInstanceSecret, instanceSecretBytes, kbkdfCtrHmacSha256 } from "./kbkdf.ts";
 import { knob } from "./knobs.ts";
-import { decodeMetadata, EpochWindow, encodeMetadata, MetadataCopies } from "./metadata-wire.ts";
+import {
+  decodeMetadata,
+  EpochWindow,
+  encodeCommits,
+  encodeMetadata,
+  MetadataCopies,
+  WriteLogCopy,
+} from "./metadata-wire.ts";
 import {
   hasLease,
   hasRetention,
@@ -200,7 +210,14 @@ import {
   startTableValidation,
   validStagedValidators,
 } from "./schema-validations.ts";
-import { filterKey, indexedDoc, indexedDocBytes, type SearchIndexEntry, SearchIndexes } from "./search-indexes.ts";
+import {
+  filterKey,
+  indexedDoc,
+  indexedDocBytes,
+  type SearchIndexEntry,
+  SearchIndexes,
+  type SearchIndexState,
+} from "./search-indexes.ts";
 import {
   canPersistSegments,
   changedSince,
@@ -392,6 +409,33 @@ export type CacheCompanion = {
   replay(extra: unknown): void;
 };
 
+/** What an execution worker's engine starts from (`Engine.followerStart`): the main thread's, as text. */
+export type FollowerStart = { instanceSecret: string; instanceName: string; visibleTs: string };
+
+/** A worker as a query's preparation sees it: what to post to it first, and its record of what it was sent. */
+export type WorkerSink = { post(text: string): void; readonly memo: Map<unknown, unknown> };
+
+/**
+ * Where an engine's queries run off its thread (the server's execution workers): a request's text sent to a worker,
+ * after what `prepare` posts it, and the outcome's text back; null when none can run it (it runs in-thread). `local`
+ * is what the call carries beside its request (the code it was checked against).
+ */
+export type QueryWorkers = {
+  /** `inThread` runs the same request in this thread, without its report replayed: for a differential check. */
+  run(
+    text: string,
+    local: unknown,
+    prepare: (w: WorkerSink) => void,
+    inThread: () => Promise<string>,
+  ): Promise<string> | null;
+};
+
+/** What an execution worker's engine asks the main thread (`Engine.follow`). */
+export type FollowerOps = {
+  count(tablet: TabletId, ts: bigint): Promise<number>;
+  search(e: SearchIndexState, q: TextQuery, ts: bigint): Promise<{ hits: TextHit[]; indexedBytes: number }>;
+};
+
 export class Engine {
   readonly committer: Committer;
   /** The index cache (STUDY-136): persistence index reads of every transaction; null when off. */
@@ -447,7 +491,8 @@ export class Engine {
    */
   private readonly inThread: CallHost = {
     begin: (start) => this.beginTx(start),
-    pin: (ts) => this.tableSummaries.pin(ts),
+    // A worker's counts are the main thread's, which pinned them at dispatch.
+    pin: (ts) => (this.following ? () => {} : this.tableSummaries.pin(ts)),
     finish: (tx) => this.finishTx(tx),
   };
   private readonly runner = new CallRunner(this.inThread);
@@ -468,6 +513,98 @@ export class Engine {
     this.metadataSent.add(epoch);
     this.metadataCopies.hear(decodeMetadata(encodeMetadata(epoch, this.catalog, this.searchIndexes)));
   }
+  /** An execution worker's engine (`follow`): what it reads by, from the main thread. */
+  private following: {
+    metadata: MetadataCopies;
+    log: WriteLogCopy;
+    ops: FollowerOps;
+    indexCache: IndexCache | null;
+  } | null = null;
+
+  // STUDY-194 §10.1 (2b step iv): the engine an execution worker runs queries on.
+  /**
+   * @internal Makes this engine an execution worker's. It never writes nor commits, and is not `init`ed: it reads its
+   * store (a reader) at each request's ts, with the catalog and text indexes' states of the request's metadata epoch
+   * (`hearMetadata`), its index cache checked against the main thread's commits (`hearCommits`), and asks the main
+   * thread for table counts and searches (`ops`). `start` is the main thread's (`followerStart`).
+   */
+  follow(start: FollowerStart, ops: FollowerOps, opts: { indexCacheBytes?: number } = {}) {
+    this.instanceSecret = start.instanceSecret;
+    this.instanceName = start.instanceName;
+    const ts = BigInt(start.visibleTs);
+    // As at a start: nothing before `ts` is known, so no cache is good before it.
+    this.committer.resume(ts);
+    this.backendState.unknownBefore(ts);
+    const log = new WriteLogCopy(ts);
+    const bytes = opts.indexCacheBytes ?? this.indexCache?.maxBytes ?? 0;
+    this.following = {
+      metadata: new MetadataCopies(),
+      log,
+      ops,
+      indexCache: bytes > 0 ? new IndexCache(log, bytes, 0) : null,
+    };
+  }
+
+  /** @internal What an execution worker's engine starts from (`follow`), as text-safe data. */
+  followerStart(): FollowerStart {
+    return {
+      instanceSecret: this.instanceSecret,
+      instanceName: this.instanceName,
+      visibleTs: this.committer.visibleTs.toString(),
+    };
+  }
+
+  /** @internal Where queries run off this thread, if anywhere: set by the server that starts execution workers. */
+  queryWorkers: QueryWorkers | null = null;
+
+  /** @internal The main thread's answer to a worker's op (`follower-ops.ts`). */
+  answerOp(text: string): string {
+    return answerFollowerOp(text, this.tableSummaries, this.searchIndexes);
+  }
+
+  /**
+   * @internal Every commit's written keys, as `post` should send them to every worker (`encodeCommits`), posted as the
+   * commit becomes visible: before any request at or past its ts.
+   */
+  postCommits(post: (text: string) => void) {
+    this.committer.onCommit((entries) => {
+      post(encodeCommits({ visibleTs: this.committer.visibleTs, purgedTs: this.committer.logStartTs, entries }));
+    }, "execution workers");
+  }
+
+  /** The metadata epochs a worker was sent, in its memo. */
+  private static readonly SENT_METADATA = Symbol("metadata sent");
+
+  /** Sends a worker the metadata epoch a request names, unless it has it (it keeps as many as `EpochWindow`). */
+  private prepareWorker(w: WorkerSink, epoch: number) {
+    let sent = w.memo.get(Engine.SENT_METADATA) as EpochWindow | undefined;
+    if (!sent) w.memo.set(Engine.SENT_METADATA, (sent = new EpochWindow()));
+    if (sent.has(epoch)) return;
+    sent.add(epoch);
+    w.post(encodeMetadata(epoch, this.catalog, this.searchIndexes));
+  }
+
+  /**
+   * @internal A worker's metadata message (`encodeMetadata`). Its catalog becomes the engine's own too: what the
+   * caches fed by commits look their tables up in (the run state's, the variables').
+   */
+  hearMetadata(text: string) {
+    const m = decodeMetadata(text);
+    this.following!.metadata.hear(m);
+    this.catalog = m.catalog;
+  }
+
+  /** @internal A worker's commits message (`encodeCommits`): the index cache's log, and the caches fed by commits. */
+  hearCommits(text: string) {
+    const fresh = this.following!.log.hear(text);
+    if (fresh.length) this.committer.followed(fresh);
+  }
+
+  /** @internal Runs a request's text on this side of the boundary: its outcome's text. */
+  async runRequestText(text: string, bodies: CallBodies): Promise<string> {
+    return (await this.runner.run(text, bodies, undefined)).wire;
+  }
+
   /** The deployment's run state, as every user function checks it (STUDY-63). */
   readonly backendState: BackendStateCache;
   /** The search indexes of the active tables, in memory (STUDY-45 S1). */
@@ -3996,6 +4133,8 @@ export class Engine {
 
   /** A transaction for a call or the engine's own body, wired to the engine's store and services (`CallHost.begin`). */
   private beginTx(s: TxStart): Tx {
+    const f = this.following;
+    if (f) return this.beginFollowingTx(s, f);
     // A query's call under the codec begins with the catalog a worker would have been sent (STUDY-194 §4.7).
     const catalog =
       this.callCodec && s.kind === "query" && s.metadata !== undefined
@@ -4024,6 +4163,23 @@ export class Engine {
       tx.stagedChecks = this.stagedChecks;
     }
     if (this.tracerOf.on) this.indexSpansOf(tx);
+    return tx;
+  }
+
+  /** A worker's transaction (`follow`): a query's, on the metadata its request names, counts and searches asked. */
+  private beginFollowingTx(s: TxStart, f: NonNullable<Engine["following"]>): Tx {
+    if (s.kind !== "query" || s.metadata === undefined) throw new Error("an execution worker runs queries only");
+    const m = f.metadata.get(s.metadata);
+    const tx = new Tx(m.catalog, this.persistence, s.ts, false, s.now, s.system);
+    if (!s.tracked) tx.indexCache = f.indexCache;
+    tx.identity = s.identity;
+    tx.systemIdentity = s.systemIdentity;
+    tx.request = s.request;
+    tx.cursorCodec = this.cursorCodecOf;
+    tx.searchIndexes = m.search;
+    tx.searchRunner = (e, q, ts) => f.ops.search(e, q, ts);
+    tx.tableCount = (tablet, ts) => f.ops.count(tablet, ts);
+    if (s.tracked) tx.prevEndCursor = s.journal;
     return tx;
   }
 
@@ -4106,7 +4262,10 @@ export class Engine {
         ts: start.ts,
         now: start.now,
         // In-thread without the codec the identity object goes beside the request instead (`runRequest`).
-        identity: start.identity == null || !this.callCodec ? null : JSON.stringify(start.identity),
+        identity:
+          start.identity == null || !(this.callCodec || this.offloads(call, start))
+            ? null
+            : JSON.stringify(start.identity),
         systemIdentity: start.systemIdentity,
         request: start.request,
         tracked: start.tracked,
@@ -4115,9 +4274,35 @@ export class Engine {
         metadata: this.metadataEpoch,
       };
       if (this.callCodec) this.sendMetadata(request.metadata);
+      // A query on an execution worker, when one is ready (STUDY-194 2b); in-thread otherwise.
+      const offloaded = this.offloads(call, start)
+        ? async () => {
+            const text = encodeCallRequest(request);
+            const unpin = this.tableSummaries.pin(start.ts);
+            try {
+              const sent = this.queryWorkers!.run(
+                text,
+                call.local,
+                (w) => this.prepareWorker(w, request.metadata),
+                async () => (await this.runner.run(text, call.bodies, call.local)).wire,
+              );
+              if (!sent) return null;
+              let outcome: CallOutcome;
+              try {
+                outcome = decodeCallOutcome(await sent);
+              } catch (e) {
+                outcome = notRun(request.id, call.bodies.encodeError(e));
+              }
+              call.bodies.replay(outcome.report, call.local);
+              return { outcome, local: null };
+            } finally {
+              unpin();
+            }
+          }
+        : null;
       // Through the codec under the tests; as objects otherwise (STUDY-194 Q7).
       // What it logged goes where it would have logged it: inside `wrap` (the query cache keeps it with the result).
-      const run = this.callCodec
+      const inThread = this.callCodec
         ? async () => {
             const r = await this.runner.run(encodeCallRequest(request), call.bodies, call.local);
             const outcome = decodeCallOutcome(r.wire);
@@ -4129,9 +4314,10 @@ export class Engine {
             call.bodies.replay(r.outcome.report, call.local);
             return r;
           };
+      const run = offloaded ? async () => (await offloaded()) ?? (await inThread()) : inThread;
       const { outcome, local } = await (opts.wrap ? opts.wrap(run) : run)();
       if (outcome.id !== request.id) throw new Error(`call ${request.id} was answered as call ${outcome.id}`);
-      const ran = { tx: local.tx, observedTime: outcome.observedTime, now: start.now, outcome };
+      const ran = { tx: local?.tx, observedTime: outcome.observedTime, now: start.now, outcome };
       if (outcome.status === "failed")
         return { ...ran, ok: false, error: call.bodies.decodeError(outcome.error ?? "") };
       const value =
@@ -4139,11 +4325,23 @@ export class Engine {
           ? REFUSED
           : outcome.status === "replayed"
             ? { replayed: JSON.parse(outcome.result ?? "null") }
-            : local.value;
+            : local
+              ? local.value
+              : outcome.result === null
+                ? null
+                : parseValue(outcome.result);
       return { ...ran, ok: true, value: value as T };
     } finally {
       release?.();
     }
+  }
+
+  /**
+   * Whether a call runs on an execution worker when one is ready: a query, not the system identity's (§10.4), and
+   * none a tracer follows (its spans do not cross yet).
+   */
+  private offloads(call: Call, start: TxStart): boolean {
+    return this.queryWorkers !== null && call.spec.kind === "query" && !start.systemIdentity && !this.tracerOf.on;
   }
 
   /**
@@ -4884,12 +5082,12 @@ function ranValue<T>(ran: Ran<T>): T {
   return ran.value;
 }
 
-/** The outcome of a call that never ran (its permit refused). */
-const notRun = (id: number): CallOutcome => ({
+/** The outcome of a call that never ran (its permit refused), or that its worker did not answer (`error`). */
+const notRun = (id: number, error: string | null = null): CallOutcome => ({
   id,
   status: "failed",
   result: null,
-  error: null,
+  error,
   report: null,
   reads: [],
   searchReads: [],

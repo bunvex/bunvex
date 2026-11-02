@@ -2233,7 +2233,7 @@ export class Functions {
     const checked = this.callSpec("query", name, args, fromClient, caller);
     if (!checked) return this.queryBody(name, args, fromClient, caller);
     // It runs the function its arguments were checked against, whatever a push installs while it waits for its permit.
-    const local: CallIn = { args: checked.args, fn: checked.fn };
+    const local: CallIn = { args: checked.args, fn: checked.fn, ...(checked.code ? { code: checked.code } : {}) };
     return { spec: checked.spec, bodies: this.bodies, permit: this.queryPermit, local };
   }
 
@@ -2275,7 +2275,7 @@ export class Functions {
     args: unknown,
     fromClient: boolean,
     caller: Caller | undefined,
-  ): { spec: CallSpec; fn: FunctionDef; args?: { value: unknown } } | null {
+  ): { spec: CallSpec; fn: FunctionDef; args?: { value: unknown }; code?: CallIn["code"] } | null {
     if (isSystemPath(name)) return null;
     // A query on a deployment known not to run fails before its permit (Convex's `fail_while_not_running`).
     const state = kind === "query" ? this.engine.backendState.latest() : null;
@@ -2289,12 +2289,32 @@ export class Functions {
       return null;
     }
     const internal = !fromClient || f.visibility === "internal";
+    // A query an execution worker may run: its arguments as text too, and the code they were checked against.
+    if (kind === "query" && this.offloadQueries) {
+      const sources = this.codeSources();
+      const text = sources ? argsText(a) : null;
+      if (sources && text !== null)
+        return {
+          spec: { kind, name, args: text, internal, session: null },
+          fn: f,
+          ...(this.engine.callCodec ? {} : { args: { value: a } }),
+          code: { epoch: this.code.epoch, sources },
+        };
+    }
     // Without the codec (outside the tests, STUDY-194 Q7) the arguments go beside the request as they are.
     if (!this.engine.callCodec)
       return { spec: { kind, name, args: "", internal, session: null }, fn: f, args: { value: a } };
     const text = argsText(a);
     if (text === null) return null;
     return { spec: { kind, name, args: text, internal, session: null }, fn: f };
+  }
+
+  /** @internal Whether queries may run on execution workers: their calls carry what a worker needs (`callSpec`). */
+  offloadQueries = false;
+
+  /** @internal The code side of the call boundary, as an execution worker's runner takes it. */
+  get callBodies(): CallBodies {
+    return this.bodies;
   }
 
   // STUDY-194 §4.1.
@@ -3897,9 +3917,11 @@ type CallIn = {
   args?: { value: unknown };
   /**
    * A query's function as `callSpec` resolved it, the one its arguments were checked against (STUDY-194 §10.3).
-   * A worker will get the code version's id instead.
+   * A worker gets the code epoch instead (`code`).
    */
   fn?: FunctionDef;
+  /** The code epoch the arguments were checked against and its sources, for an execution worker (STUDY-194 §4.8). */
+  code?: { epoch: number; sources: CodeSources };
 };
 
 /**

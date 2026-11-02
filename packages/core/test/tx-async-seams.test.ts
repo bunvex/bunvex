@@ -5,6 +5,7 @@ import { expect, test } from "bun:test";
 import { v } from "@bunvex/values";
 import { Engine } from "../src/engine.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
+import type { SearchIndexEntry, SearchIndexes } from "../src/search-indexes.ts";
 import { defineSchema, defineTable } from "../src/schema.ts";
 import { TableSummariesUnavailableError } from "../src/table-summaries.ts";
 import type { Tx } from "../src/tx.ts";
@@ -28,10 +29,11 @@ function later(db: Tx) {
     await Promise.resolve();
     return count(tablet, snapshot);
   };
-  const indexes = db.searchIndexes!;
+  const indexes = db.searchIndexes as SearchIndexes;
   db.searchRunner = async (e, q, snapshot, pending) => {
     await Promise.resolve();
-    return indexes.search(e, q, snapshot, pending);
+    const entry = e as SearchIndexEntry;
+    return { hits: await indexes.search(entry, q, snapshot, pending), indexedBytes: entry.index.indexedBytes };
   };
   return db;
 }

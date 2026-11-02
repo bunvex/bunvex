@@ -214,6 +214,21 @@ export function roundTripCallsByDefault(on = true): void {
 /** @internal Whether a new engine round-trips its calls (`roundTripCallsByDefault`). */
 export const callsRoundTripByDefault = (): boolean => roundTripByDefault;
 
+/**
+ * Whether a query an execution worker ran is run in-thread too and the two outcomes compared (STUDY-194 2b's
+ * differential check): only under the tests, whose preload turns it on, so every suite that runs queries on workers
+ * checks them against the in-thread runner.
+ */
+let checkWorkers = false;
+
+/** @internal The test runs' preload: every query a worker runs is checked against an in-thread run. */
+export function checkWorkerOutcomes(on = true): void {
+  checkWorkers = on;
+}
+
+/** @internal Whether worker outcomes are checked (`checkWorkerOutcomes`). */
+export const workerOutcomesChecked = (): boolean => checkWorkers;
+
 /** Runs requests on `host`. */
 export class CallRunner {
   constructor(private readonly host: CallHost) {}

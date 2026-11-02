@@ -5,5 +5,8 @@ process.env.BUNVEX_FREEZE_ENGINE_VALUES ??= "1";
 // Every engine's calls round-trip through the call boundary's codec (STUDY-194 Q7, owner, 2026-10-27): the suites
 // exercise the text a worker will receive, while a server outside the tests passes the same objects without it.
 // Imported after the line above, which the engine reads when it loads.
-const { roundTripCallsByDefault } = await import("../packages/core/src/call-runner.ts");
+const { checkWorkerOutcomes, roundTripCallsByDefault } = await import("../packages/core/src/call-runner.ts");
 roundTripCallsByDefault();
+// Every query an execution worker runs is run in-thread too, and the outcomes compared (STUDY-194 2b): a server's
+// suites on a SQLite file check the workers against the in-thread runner.
+checkWorkerOutcomes();

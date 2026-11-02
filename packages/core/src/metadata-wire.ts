@@ -9,7 +9,7 @@ import { Out, WireReader } from "./call-wire.ts";
 import { Catalog } from "./catalog.ts";
 import type { Interval, LogEntry } from "./committer.ts";
 import type { IndexDef, TableDef } from "./schema.ts";
-import type { SearchIndexEntry, SearchIndexes } from "./search-indexes.ts";
+import type { SearchIndexEntry, SearchIndexes, SearchIndexState } from "./search-indexes.ts";
 import { intervalSetsByIndex, WritesByIndex } from "./write-log-index.ts";
 
 // --- The catalog
@@ -135,10 +135,7 @@ function readIndex(r: WireReader): IndexDef {
 // --- The text indexes' states
 
 /** What a transaction reads of a text index before it searches: its definition and state, not its contents. */
-export type SearchIndexState = Pick<
-  SearchIndexEntry,
-  "readIndex" | "table" | "tablet" | "name" | "def" | "staged" | "ready" | "bootstrapping"
->;
+export type { SearchIndexState };
 
 /** The text indexes' states as text: the active ones, then a pending push's. */
 export function encodeSearchState(s: SearchIndexes): string {
@@ -366,14 +363,16 @@ export class WriteLogCopy {
     this.visibleTs = this.purgedTs = startTs;
   }
 
-  /** A `commits` message, in the order the main thread posted them. */
-  hear(text: string) {
+  /** A `commits` message, in the order the main thread posted them: the commits it had not heard of. */
+  hear(text: string): LogEntry[] {
     const m = decodeCommits(text);
+    const fresh: LogEntry[] = [];
     for (const e of m.entries) {
       if (e.ts <= this.visibleTs) continue;
       this.log.push(e);
       this.byIndex.append(e);
       this.visibleTs = e.ts;
+      fresh.push(e);
     }
     if (m.visibleTs > this.visibleTs) this.visibleTs = m.visibleTs;
     if (m.purgedTs > this.purgedTs) {
@@ -387,6 +386,7 @@ export class WriteLogCopy {
         this.head = 0;
       }
     }
+    return fresh;
   }
 
   changedBetween(reads: Interval[], from: bigint, to: bigint): boolean {

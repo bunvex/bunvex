@@ -484,6 +484,14 @@ export class Committer {
     this.listenerNames.push(name);
   }
 
+  /**
+   * @internal An execution worker's committer, which never commits: the main thread's commits, as the worker hears
+   * them, told to the same listeners (the run state's and the variables' caches).
+   */
+  followed(entries: LogEntry[]) {
+    for (const fn of this.listeners) fn(entries);
+  }
+
   /** Called once, when the committer stops (persistence failed, or a commit listener threw); the server shuts the process down. */
   onFatal(fn: (e: CommitterStoppedError) => void) {
     this.fatalListeners.push(fn);

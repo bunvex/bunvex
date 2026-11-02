@@ -132,6 +132,17 @@ export function failExecution(e: Error) {
   if (t && !t.failed) t.failed = e;
 }
 
+/** Told each time a function's JavaScript resumes after a store call (`onUserTimeResume`). */
+let resumed: (() => void) | null = null;
+
+/**
+ * @internal Calls `fn` each time a function resumes after a store call or a nested call, in its async context: an
+ * execution worker marks its progress with it, which tells a busy worker from one that never yields.
+ */
+export function onUserTimeResume(fn: (() => void) | null) {
+  resumed = fn;
+}
+
 /** Run `fn` with the running function's clock paused (a nested call: it has its own budget). */
 export async function pausingUserTime<T>(fn: () => Promise<T>): Promise<T> {
   const t = executions.getStore()?.timer;
@@ -142,6 +153,7 @@ export async function pausingUserTime<T>(fn: () => Promise<T>): Promise<T> {
   } finally {
     t.paused += now(t) - t.pausedSince;
     t.pausedSince = null;
+    resumed?.();
   }
 }
 

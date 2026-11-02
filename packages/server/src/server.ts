@@ -32,6 +32,7 @@ import {
   orderEnvVarChanges,
   parseValue,
   readBackendState,
+  realRuntime,
   resolveComponentPath,
   SCHEDULED_JOB_ARGS_TABLE,
   SCHEDULED_JOBS_TABLE,
@@ -111,6 +112,7 @@ import {
   newRequestId,
   withRequestId,
 } from "./errors.ts";
+import { maxExecutionWorkers } from "./execution-workers.ts";
 import { EXECUTOR_SOURCES, ExecutorInvalidations } from "./executor-invalidations.ts";
 import { ExportError, ExportService } from "./exports.ts";
 import {
@@ -179,6 +181,7 @@ import {
 } from "./otlp.ts";
 import { evaluateAuthConfig, PushError, PushService } from "./push.ts";
 import { QueryArgsError, type QueryField, queryArgs } from "./query-args.ts";
+import { startQueryWorkers } from "./query-workers.ts";
 import { RequestLimit, requestLimitFromEnv, withRequestLimit } from "./request-limit.ts";
 import { REQUEST_TIMEOUT_MS, withRequestTimeout } from "./request-timeout.ts";
 import { withRequestTracing } from "./request-tracing.ts";
@@ -226,6 +229,12 @@ type WsData = { session: SyncSession; waiting?: Promise<void> };
 export type ServerOptions = {
   engine: Engine;
   functions: Functions;
+  // DV-574, AD-47, STUDY-194 Q10.
+  /**
+   * The most execution workers queries run on (default `MAX_ISOLATE_WORKERS`, else the core count); 0 runs every
+   * call on the main thread. Workers start only on a store they can read themselves (a SQLite file).
+   */
+  executionWorkers?: number;
   /**
    * How many days of the audit log may be read (STUDY-48, Convex's `_backend_info.auditLogRetentionDays`):
    * -1 (the default) all of it, null none. Events are always recorded.
@@ -2071,6 +2080,19 @@ export function createServer(opts: ServerOptions) {
   };
   functions.builtinEnv = builtinEnv;
   functions.httpRoutes = () => (httpOptions.router?.getRoutes() ?? []).map(([path, method]) => [method, path] as const);
+  // STUDY-194 2b: queries on execution workers, where a worker can read the store itself and run the code as here:
+  // the `vm` executor and the process's own clock (§10.4).
+  const queryWorkers =
+    executor.kind === "vm" && engine.runtime === realRuntime
+      ? startQueryWorkers({
+          engine,
+          functions,
+          persistence: engine.persistence,
+          max: opts.executionWorkers ?? maxExecutionWorkers(),
+          filesOrigin: files?.origin ?? null,
+          builtinEnv,
+        })
+      : null;
   /** The deployment's variables with the built-ins, as `auth.config` sees them. */
   const deploymentEnv = async () => {
     const [vars, canonical] = await engine.query(
@@ -2754,7 +2776,10 @@ export function createServer(opts: ServerOptions) {
     serverMetrics,
     /** The topology at `/api/debug/topology` (STUDY-131 §11, AD-04). */
     topology,
+    /** The execution workers queries run on (STUDY-194 2b), when the server starts them. */
+    queryWorkers,
     stop: () => {
+      void queryWorkers?.close();
       serverMetrics.stop();
       topology.stop();
       builtinScreen?.stop();
@@ -2794,8 +2819,10 @@ export function createServer(opts: ServerOptions) {
       server?.stop(true);
       builtinScreen?.stop();
       functionLog.close();
-      // The function sandbox's children (by their own pids), once nothing can call them.
+      // The function sandbox's children (by their own pids), once nothing can call them; the execution workers, whose
+      // connections close before the store's own (the last to close checkpoints it).
       await executor.close?.();
+      await queryWorkers?.close();
       await engine.close();
       // The last spans (the final commits' included) are sent before the process goes.
       await spanExporter?.close();

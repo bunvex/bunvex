@@ -51,7 +51,15 @@ import { writeCatalogChanges } from "./catalog-writes.ts";
 import { type Interval, type LoggedIndexWrite, OutOfRetentionError, type SearchRead } from "./committer.ts";
 import { COMPONENT_NAMESPACE_TABLES } from "./components.ts";
 import { type CursorCodec, type CursorPosition, decodeCursor, encodeCursor, queryFingerprint } from "./cursor.ts";
-import { failExecution, monotonicNow, nextUp, outsideExecution, storeCall, wallClock } from "./determinism.ts";
+import {
+  failExecution,
+  monotonicNow,
+  nextUp,
+  outsideExecution,
+  pausingUserTime,
+  storeCall,
+  wallClock,
+} from "./determinism.ts";
 import { engineOwned } from "./engine-owned.ts";
 import { expressionJson, type FilterBuilder, type FilterOperand, filterBuilder } from "./filter.ts";
 import type { IndexCache } from "./index-cache.ts";
@@ -98,6 +106,8 @@ import {
   indexedDocBytes,
   type SearchIndexEntry,
   type SearchIndexes,
+  type SearchIndexLookup,
+  type SearchIndexState,
   searchReadIntervals,
 } from "./search-indexes.ts";
 import { rememberStagedSize, sizeOfVersion } from "./staged-size.ts";
@@ -1105,6 +1115,7 @@ export class Tx {
    */
   async unrecorded<T>(fn: () => Promise<T>): Promise<T> {
     const n = this.reads.length;
+    const depended = this.dependedOn.size;
     this.notCounting++;
     try {
       return await fn();
@@ -1112,6 +1123,8 @@ export class Tx {
       this.notCounting--;
       void this.reads; // settle the scans it made
       this.readList.length = n;
+      // The tables it used were not read either: the next recorded use of one reads it, and the table mapping, then.
+      if (this.dependedOn.size > depended) this.dependedOn = new Set([...this.dependedOn].slice(0, depended));
     }
   }
 
@@ -1576,6 +1589,19 @@ export class Tx {
     const out = await this.storeRangeOf(st, lo, hi, limit);
     spans.record(st.ix!, out.length, start);
     return out;
+  }
+
+  /**
+   * An answer from the main thread (a worker's count or search, STUDY-194 §4.11): in flight until it lands, its wait not
+   * the function's time, as a store call's; its failure is its own (not a store failure).
+   */
+  private async answered<T>(p: Promise<T>): Promise<T> {
+    this.inFlight++;
+    try {
+      return await pausingUserTime(() => p);
+    } finally {
+      this.landed();
+    }
   }
 
   /**
@@ -2500,8 +2526,11 @@ export class Tx {
     return this.writes.size > 0;
   }
 
-  /** The engine's search indexes (STUDY-45), for `withSearchIndex`. */
-  searchIndexes: SearchIndexes | null = null;
+  /**
+   * The search indexes (STUDY-45), for `withSearchIndex`: the engine's, or a worker's copy of their states, whose
+   * searches go to the main thread (`searchRunner`).
+   */
+  searchIndexes: SearchIndexLookup | null = null;
   /** The vector indexes, for the bytes a write adds to them (STUDY-71). */
   vectorIndexes: VectorIndexes | null = null;
   /**
@@ -2530,11 +2559,11 @@ export class Tx {
    */
   searchRunner:
     | ((
-        e: SearchIndexEntry,
+        e: SearchIndexState,
         q: TextQuery,
         snapshot: bigint,
         pending: Map<string, Doc | null>,
-      ) => TextHit[] | Promise<TextHit[]>)
+      ) => Promise<{ hits: TextHit[]; indexedBytes: number }>)
     | null = null;
 
   /**
@@ -2567,7 +2596,7 @@ export class Tx {
     try {
       const counted = this.tableCount ? this.tableCount(t.id, this.snapshot) : 0;
       // Awaited only when it is a promise: an in-thread count answers in the same turn, as before.
-      n = typeof counted === "number" ? counted : await counted;
+      n = typeof counted === "number" ? counted : await this.answered(counted);
     } catch (e) {
       // The summaries are still being built (Convex's bootstrapping error), or the snapshot is older than the
       // write log keeps: system errors, which the function cannot catch.
@@ -2664,13 +2693,18 @@ export class Tx {
     for (const [id, w] of this.writes) if (w.table.id === t.id) pending.set(id, w.next);
     // Convex charges a search its whole index's bytes (DV-317: bunvex's indexed bytes for its segments');
     // an empty search string, nothing.
-    if (text !== "" && !t.name.startsWith("_")) this.textQueryBytes += e.index.indexedBytes;
+    const charged = text !== "" && !t.name.startsWith("_");
     const q: TextQuery = { tokens, prefixLast: true, filters: eqs };
-    const found = this.searchRunner
-      ? this.searchRunner(e, q, this.snapshot, pending)
-      : this.searchIndexes!.search(e, q, this.snapshot, pending);
     const answer = (hits: TextHit[]) => ({ hits, full: hits.length >= MAX_CANDIDATE_REVISIONS });
-    return Array.isArray(found) ? answer(found) : found.then(answer);
+    // A worker's search runs on the main thread, which holds the index and says its size.
+    if (this.searchRunner)
+      return this.answered(this.searchRunner(e, q, this.snapshot, pending)).then((r) => {
+        if (charged) this.textQueryBytes += r.indexedBytes;
+        return answer(r.hits);
+      });
+    const entry = e as SearchIndexEntry;
+    if (charged) this.textQueryBytes += entry.index.indexedBytes;
+    return answer((this.searchIndexes as SearchIndexes).search(entry, q, this.snapshot, pending));
   }
 
   /** A search's documents in relevance order; reading past the candidates Convex fetches is an error. */
