@@ -3,14 +3,23 @@
 // `busy:<ms>` (resumes on microtasks only, marking progress each time, as a query whose store reads are synchronous),
 // `spin` (`for (;;) {}`), `await-spin` (`for (;;) await null`), `exit`, `throw` (an uncaught error), `reject` (the
 // call fails in the worker).
-// An init text of `fail` fails the start; `hang` never answers it.
+// `heard` (the other messages heard since the last `heard`), `ask:<text>` (an op). An init text of `fail` fails
+// the start; `hang` never answers it; `slow` answers after 150 ms.
 import { threadId } from "node:worker_threads";
-import { running, serveExecutionThread } from "../../src/execution-thread.ts";
+import { ask, running, serveExecutionThread } from "../../src/execution-thread.ts";
+
+/** The other messages heard, in order: made by `init`, as a worker's state is (none before it). */
+let heard: string[] | null = null;
 
 serveExecutionThread({
   async init(text) {
+    if (text === "slow") await Bun.sleep(150);
+    heard = [];
     if (text === "fail") throw new Error("cannot open the store");
     if (text === "hang") await new Promise(() => {});
+  },
+  message(text) {
+    heard!.push(text);
   },
   async call(id, text) {
     const [what, arg = ""] = text.split(/:(.*)/s);
@@ -19,6 +28,10 @@ serveExecutionThread({
         return arg;
       case "whoami":
         return String(threadId);
+      case "heard":
+        return heard!.splice(0).join(",");
+      case "ask":
+        return `answered ${await ask(arg)}`;
       case "wait":
         await Bun.sleep(Number(arg));
         return "waited";

@@ -63,7 +63,14 @@ type ThreadWorker = Worker & { ref(): void; unref(): void };
 
 type Pending = { resolve: (outcome: string) => void; reject: (e: Error) => void; timeoutMs: number };
 
-type Thread = {
+/** One worker as a call's preparation sees it: what to post to it first, and what was posted to it before. */
+export type WorkerLink = {
+  post(text: string): void;
+  /** The preparation's own record of this worker (what it holds), kept while the worker lives. */
+  readonly memo: Map<unknown, unknown>;
+};
+
+type Thread = WorkerLink & {
   worker: ThreadWorker;
   state: "starting" | "ready" | "gone";
   /** Slot 0: progress; slot 1: the call that ran last (`execution-thread.ts`). */
@@ -88,6 +95,8 @@ export type ExecutionWorkersOptions = {
   log?: (line: string) => void;
   /** How long a worker may take to answer its start (`START_TIMEOUT_MS`). */
   startTimeoutMs?: number;
+  /** Answers a worker's op (`q`): what only the main thread holds. A rejection fails the op in the worker. */
+  answer?: (text: string) => Promise<string>;
 };
 
 /** What the pool has done, for `/metrics`. */
@@ -131,7 +140,7 @@ export class ExecutionWorkers {
    * text. `timeoutMs` is the call's user time limit: a worker that shows no progress for longer (plus a slack) is
    * stuck. Null when no worker is ready (the caller runs it in-thread); a worker may be starting for the next.
    */
-  call(text: string, timeoutMs: number): Promise<string> | null {
+  call(text: string, timeoutMs: number, prepare?: (w: WorkerLink) => void): Promise<string> | null {
     if (this.closed) return null;
     let best: Thread | null = null;
     for (const t of this.threads) if (t.state === "ready" && (!best || t.calls.size < best.calls.size)) best = t;
@@ -147,8 +156,21 @@ export class ExecutionWorkers {
     this.watch();
     return new Promise((resolve, reject) => {
       t.calls.set(id, { resolve, reject, timeoutMs });
+      try {
+        prepare?.(t);
+      } catch (e) {
+        t.calls.delete(id);
+        if (t.calls.size === 0) t.worker.unref();
+        reject(e);
+        return;
+      }
       t.worker.postMessage(`c${id}:${text}`);
     });
+  }
+
+  /** Posts `text` to every worker, starting or ready: state each must hear in order (the commits). */
+  broadcast(text: string) {
+    for (const t of this.threads) t.worker.postMessage(text);
   }
 
   /** Starts a worker if none is starting, the cap allows one, and no failed start asks to wait. */
@@ -163,7 +185,16 @@ export class ExecutionWorkers {
     const worker = new Worker(this.entry) as ThreadWorker;
     worker.unref();
     const shared = new Int32Array(new SharedArrayBuffer(8));
-    const t: Thread = { worker, state: "starting", shared, calls: new Map(), seen: 0, quietSince: 0 };
+    const t: Thread = {
+      worker,
+      state: "starting",
+      shared,
+      calls: new Map(),
+      seen: 0,
+      quietSince: 0,
+      memo: new Map(),
+      post: (text) => worker.postMessage(text),
+    };
     this.threads.push(t);
     this.counts.started++;
     worker.onmessage = (e: MessageEvent<string>) => this.heard(t, e.data);
@@ -189,6 +220,17 @@ export class ExecutionWorkers {
       if (t.calls.size === 0) t.worker.unref();
       if (head === "o") p.resolve(m.slice(colon + 1));
       else p.reject(new ExecutionWorkerError("failed", `the execution worker failed the call: ${m.slice(colon + 1)}`));
+      return;
+    }
+    if (head === "q") {
+      const colon = m.indexOf(":");
+      const id = m.slice(1, colon);
+      const answer = this.options.answer;
+      if (!answer) return this.malformed(t, "an op, which this pool does not answer");
+      answer(m.slice(colon + 1)).then(
+        (a) => t.state !== "gone" && t.worker.postMessage(`a${id}:${a}`),
+        (e) => t.state !== "gone" && t.worker.postMessage(`A${id}:${e instanceof Error ? e.message : String(e)}`),
+      );
       return;
     }
     if (head === "r" && t.state === "starting") {

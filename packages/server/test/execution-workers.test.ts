@@ -8,6 +8,7 @@ import {
   ExecutionWorkers,
   type ExecutionWorkersOptions,
   maxExecutionWorkers,
+  type WorkerLink,
 } from "../src/execution-workers.ts";
 
 const ENTRY = new URL("./fixtures/execution-test-worker.ts", import.meta.url).href;
@@ -192,6 +193,60 @@ describe("execution workers", () => {
     expect(lines).toEqual([
       "An execution worker could not start: no answer within 100 ms. Calls run on the main thread until one starts.",
     ]);
+  });
+
+  test("ops: a worker asks the main thread, and gets its answer or its failure", async () => {
+    const { p } = pool({
+      max: 1,
+      answer: async (q) => {
+        if (q === "bad") throw new Error("no such table");
+        return q.toUpperCase();
+      },
+    });
+    p.call("echo:x", 1000);
+    await until(() => p.ready === 1);
+    expect(await sent(p, "ask:count")).toBe("answered COUNT");
+    const e = await sent(p, "ask:bad").catch((e) => e);
+    expect((e as Error).message).toBe("the execution worker failed the call: no such table");
+  });
+
+  test("a call's preparation posts before it, once per worker as its memo says; broadcasts reach every worker", async () => {
+    const { p } = pool({ max: 2 });
+    p.call("echo:x", 1000);
+    await until(() => p.ready === 1);
+    const prepare = (w: WorkerLink) => {
+      if (w.memo.has("v1")) return;
+      w.memo.set("v1", true);
+      w.post("v1");
+    };
+    expect(await p.call("heard", 1000, prepare)).toBe("v1");
+    expect(await p.call("heard", 1000, prepare)).toBe("");
+    p.broadcast("w1");
+    p.broadcast("w2");
+    expect(await sent(p, "heard")).toBe("w1,w2");
+  });
+
+  test("a worker still starting hears the broadcasts, in order, before it says it is ready", async () => {
+    const { p } = pool({ max: 1, init: () => "slow" });
+    expect(p.call("echo:x", 1000)).toBeNull();
+    p.broadcast("w1");
+    p.broadcast("w2");
+    expect(p.ready).toBe(0);
+    await until(() => p.ready === 1);
+    expect(await sent(p, "heard")).toBe("w1,w2");
+  });
+
+  test("a preparation that throws fails its call, which is not sent", async () => {
+    const { p } = pool({ max: 1 });
+    p.call("echo:x", 1000);
+    await until(() => p.ready === 1);
+    const e = await p
+      .call("echo:y", 1000, () => {
+        throw new Error("cannot send the code");
+      })!
+      .catch((e) => e);
+    expect((e as Error).message).toBe("cannot send the code");
+    expect(await sent(p, "echo:z")).toBe("z");
   });
 
   test("close ends every worker; calls in flight fail, later ones answer null", async () => {
