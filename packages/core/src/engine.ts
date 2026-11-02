@@ -421,6 +421,8 @@ export type WorkerSink = { post(text: string): void; readonly memo: Map<unknown,
  * is what the call carries beside its request (the code it was checked against).
  */
 export type QueryWorkers = {
+  /** Whether a worker would run a call carrying `local` now: asked before anything is made for it. */
+  wants(local: unknown): boolean;
   /** `inThread` runs the same request in this thread, without its report replayed: for a differential check. */
   run(
     text: string,
@@ -4282,7 +4284,9 @@ export class Engine {
       // A query on an execution worker, when one is ready (STUDY-194 2b); in-thread otherwise.
       const offloaded = this.offloads(call, start)
         ? async () => {
-            const text = encodeCallRequest(request);
+            const args = request.args !== "" ? request.args : (call.argsText?.() ?? null);
+            if (args === null) return null;
+            const text = encodeCallRequest({ ...request, args });
             const unpin = this.tableSummaries.pin(start.ts);
             try {
               const sent = this.queryWorkers!.run(
@@ -4344,7 +4348,13 @@ export class Engine {
    * none a tracer follows (its spans do not cross yet).
    */
   private offloads(call: Call, start: TxStart): boolean {
-    return this.queryWorkers !== null && call.spec.kind === "query" && !start.systemIdentity && !this.tracerOf.on;
+    return (
+      this.queryWorkers !== null &&
+      call.spec.kind === "query" &&
+      !start.systemIdentity &&
+      !this.tracerOf.on &&
+      this.queryWorkers.wants(call.local)
+    );
   }
 
   /**

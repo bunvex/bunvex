@@ -2234,7 +2234,15 @@ export class Functions {
     if (!checked) return this.queryBody(name, args, fromClient, caller);
     // It runs the function its arguments were checked against, whatever a push installs while it waits for its permit.
     const local: CallIn = { args: checked.args, fn: checked.fn, ...(checked.code ? { code: checked.code } : {}) };
-    return { spec: checked.spec, bodies: this.bodies, permit: this.queryPermit, local };
+    const value = checked.args;
+    return {
+      spec: checked.spec,
+      bodies: this.bodies,
+      permit: this.queryPermit,
+      local,
+      // Made only when a worker runs it (the engine asks).
+      ...(checked.code && value ? { argsText: () => argsText(value.value) } : {}),
+    };
   }
 
   /**
@@ -2289,24 +2297,16 @@ export class Functions {
       return null;
     }
     const internal = !fromClient || f.visibility === "internal";
-    // A query an execution worker may run: its arguments as text too, and the code they were checked against.
-    if (kind === "query" && this.offloadQueries) {
-      const sources = this.codeSources();
-      const text = sources ? argsText(a) : null;
-      if (sources && text !== null)
-        return {
-          spec: { kind, name, args: text, internal, session: null },
-          fn: f,
-          ...(this.engine.callCodec ? {} : { args: { value: a } }),
-          code: { epoch: this.code.epoch, sources },
-        };
-    }
+    // A query an execution worker may run: the code its arguments were checked against (their text is made when a
+    // worker runs it, `Call.argsText`).
+    const sources = kind === "query" && this.offloadQueries ? this.codeSources() : null;
+    const code = sources ? { code: { epoch: this.code.epoch, sources } } : {};
     // Without the codec (outside the tests, STUDY-194 Q7) the arguments go beside the request as they are.
     if (!this.engine.callCodec)
-      return { spec: { kind, name, args: "", internal, session: null }, fn: f, args: { value: a } };
+      return { spec: { kind, name, args: "", internal, session: null }, fn: f, args: { value: a }, ...code };
     const text = argsText(a);
     if (text === null) return null;
-    return { spec: { kind, name, args: text, internal, session: null }, fn: f };
+    return { spec: { kind, name, args: text, internal, session: null }, fn: f, ...code };
   }
 
   /** @internal Whether queries may run on execution workers: their calls carry what a worker needs (`callSpec`). */

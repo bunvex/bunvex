@@ -94,6 +94,11 @@ export type Call = {
   readonly permit?: () => Promise<() => void>;
   /** Beside the request, in-thread only: a sync mutation's deadline. A worker will get `cancel` (STUDY-194 §4.12). */
   readonly local?: unknown;
+  /**
+   * The arguments as the request's text, made only when an execution worker is to run the call (its `spec.args` is
+   * empty when they go beside it as a value); null when no text gives them back exactly, and the call runs in-thread.
+   */
+  readonly argsText?: () => string | null;
 };
 
 export const isCall = (b: unknown): b is Call => typeof b === "object" && b !== null && "spec" in b;

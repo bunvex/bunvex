@@ -79,6 +79,7 @@ export function startQueryWorkers(o: {
   const shipper = new CodeShipper();
   functions.offloadQueries = true;
   engine.queryWorkers = {
+    wants: (local) => (local as { code?: unknown } | undefined)?.code !== undefined && pool.readyOrStart(),
     run(text, local, prepare, inThread) {
       const code = (local as { code?: { epoch: number; sources: CodeSources } } | undefined)?.code;
       if (!code) return null;

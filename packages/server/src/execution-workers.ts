@@ -134,7 +134,20 @@ export class ExecutionWorkers {
 
   /** The workers ready for calls. */
   get ready(): number {
-    return this.threads.filter((t) => t.state === "ready").length;
+    let n = 0;
+    for (const t of this.threads) if (t.state === "ready") n++;
+    return n;
+  }
+
+  /**
+   * Whether a call would go to a worker now; when none is ready, one is started for the calls after (as `call` does),
+   * and this one runs in-thread.
+   */
+  readyOrStart(): boolean {
+    if (this.closed) return false;
+    for (const t of this.threads) if (t.state === "ready") return true;
+    this.maybeStart();
+    return false;
   }
 
   /**
