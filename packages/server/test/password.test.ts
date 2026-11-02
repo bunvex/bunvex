@@ -6,7 +6,7 @@ import { argon2 } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
-import { argon2idPhc, verifyPhc } from "../src/password.ts";
+import { argon2idPhc, MAX_MEMORY_KIB, MAX_PASSES, verifyPhc } from "../src/password.ts";
 
 type Wasm = {
   default: (init: { module_or_path: Uint8Array }) => Promise<unknown>;
@@ -81,5 +81,31 @@ describe("verification follows the stored string", () => {
     ["invalid base64", "$argon2id$v=19$m=1024,t=2,p=1$c2Fs*$aGFzaGhhc2g"],
   ])("a stored hash it cannot read throws: %s", async (why, hash) => {
     await expect(verifyPhc("pw", hash)).rejects.toThrow(`Failed to verify password against the stored hash: ${why}`);
+  });
+
+  // Bounded (the owner, 2026-11-02): computed in the deployment's process, not in a function's bounded isolate.
+  test("costs up to 64 MiB and 10 passes verify; over them, the stored hash is refused before any work", async () => {
+    const atMemory = phc(
+      "argon2id",
+      `m=${MAX_MEMORY_KIB},t=1,p=1`,
+      saltOf(3),
+      await derive("argon2id", MAX_MEMORY_KIB, 1, 32),
+    );
+    const atPasses = phc(
+      "argon2id",
+      `m=64,t=${MAX_PASSES},p=1`,
+      saltOf(3),
+      await derive("argon2id", 64, MAX_PASSES, 32),
+    );
+    expect(await verifyPhc("pw-12345678", atMemory)).toBe(true);
+    expect(await verifyPhc("pw-12345678", atPasses)).toBe(true);
+    const started = performance.now();
+    await expect(verifyPhc("pw", `$argon2id$v=19$m=4194304,t=1,p=1$c2FsdHNhbHQ$aGFzaGhhc2g`)).rejects.toThrow(
+      "Failed to verify password against the stored hash: memory cost over 65536 KiB",
+    );
+    await expect(verifyPhc("pw", `$argon2id$v=19$m=64,t=11,p=1$c2FsdHNhbHQ$aGFzaGhhc2g`)).rejects.toThrow(
+      "Failed to verify password against the stored hash: time cost over 10",
+    );
+    expect(performance.now() - started).toBeLessThan(50);
   });
 });
