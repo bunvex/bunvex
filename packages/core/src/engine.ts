@@ -566,8 +566,10 @@ export class Engine {
    * @internal Every commit's written keys, as `post` should send them to every worker (`encodeCommits`), posted as the
    * commit becomes visible: before any request at or past its ts.
    */
-  postCommits(post: (text: string) => void) {
+  postCommits(post: (text: string) => void, wanted: () => boolean = () => true) {
     this.committer.onCommit((entries) => {
+      // Nothing is encoded while no worker would hear it.
+      if (!wanted()) return;
       post(encodeCommits({ visibleTs: this.committer.visibleTs, purgedTs: this.committer.logStartTs, entries }));
     }, "execution workers");
   }
@@ -4323,16 +4325,14 @@ export class Engine {
       const ran = { tx: local?.tx, observedTime: outcome.observedTime, now: start.now, outcome };
       if (outcome.status === "failed")
         return { ...ran, ok: false, error: call.bodies.decodeError(outcome.error ?? "") };
+      // A worker's value is its result's text, parsed only when asked for: the HTTP API answers with the text.
+      if (!local && outcome.status === "ok") return lazyValue({ ...ran, ok: true }, outcome.result) as Ran<T>;
       const value =
         outcome.status === "refused"
           ? REFUSED
           : outcome.status === "replayed"
             ? { replayed: JSON.parse(outcome.result ?? "null") }
-            : local
-              ? local.value
-              : outcome.result === null
-                ? null
-                : parseValue(outcome.result);
+            : local?.value;
       return { ...ran, ok: true, value: value as T };
     } finally {
       release?.();
@@ -4399,7 +4399,8 @@ export class Engine {
     const ts = at === undefined || at > visible ? visible : at;
     if (cacheKey === undefined) {
       const ran = await this.execute("query", ts, body, false, caller);
-      return { value: ranValue(ran), json: ran.outcome.result ?? undefined };
+      if (!ran.ok) throw ran.error;
+      return withValueOf(ran, ran.outcome.result ?? undefined);
     }
     const keys = [`${cacheKey}${ID_SEP}${caller.key}`, `${cacheKey}${ID_SEP}*`] as const;
     // Where a run is coordinated once a key was found (Convex's `stored_key_hint`): a result stored shared
@@ -4470,17 +4471,17 @@ export class Engine {
       }
       throw error;
     }
-    const { value, outcome, now } = run;
-    if (!waiting) return { value, json: outcome.result ?? undefined };
+    const { outcome, now } = run;
+    if (!waiting) return withValueOf(run, outcome.result ?? undefined);
     this.cache.removeWaiting(key, waiting.id);
     if (epoch !== this.cacheEpoch) {
       waiting.settle(null);
-      return { value, json: outcome.result ?? undefined };
+      return withValueOf(run, outcome.result ?? undefined);
     }
     // Keyed by the caller only if the run read the identity (STUDY-27 §1.4). The cache keeps its own
     // serialized copy; the caller keeps `value`.
     const stored = outcome.identityObserved ? keys[0] : keys[1];
-    const json = outcome.result ?? stringifyValue(value);
+    const json = outcome.result ?? stringifyValue(run.value);
     const result: CachedResult = {
       json,
       extra: wrapped?.capture(),
@@ -4495,7 +4496,7 @@ export class Engine {
     this.cache.putReady(stored, result);
     // Waiters at `key` take this result only if it is stored there; otherwise they look again.
     waiting.settle(stored === key ? result : null);
-    return { value, json };
+    return withValueOf(run, json);
   }
 
   /**
@@ -5079,6 +5080,23 @@ type ExecuteOptions = {
   /** This mutation attempt's permit was refused (`CallRequest.refused`). */
   refused?: boolean;
 };
+
+/** `ran` with its value parsed from `result` when first read (a worker's outcome). */
+function lazyValue<T extends object>(ran: T, result: string | null): T & { value: unknown } {
+  let parsed: { v: unknown } | null = null;
+  return Object.defineProperty(ran, "value", {
+    enumerable: true,
+    get: () => (parsed ??= { v: result === null ? null : parseValue(result) }).v,
+  }) as T & { value: unknown };
+}
+
+/** A query's answer: the run's value, read only when the caller reads it, and its text. */
+function withValueOf<T>(ran: { value: T }, json: string | undefined): { value: T; json?: string } {
+  return Object.defineProperty(json === undefined ? {} : { json }, "value", {
+    enumerable: true,
+    get: () => ran.value,
+  }) as { value: T; json?: string };
+}
 
 function ranValue<T>(ran: Ran<T>): T {
   if (!ran.ok) throw ran.error;

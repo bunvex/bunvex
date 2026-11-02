@@ -10,7 +10,7 @@
 // Suites: quick, single (one server: sqlite and postgres, 4 scenarios), independent (1-4 servers, sqlite).
 // PERSISTENCES, NS and SCENARIOS (comma-separated) override a suite's matrix.
 // Env: RUN (default), SERVER_SIZE (c-8), LOAD_SIZE (c-8), REGION (nyc3), VUS (32 per server), DURATION (30s), REPEATS (3),
-// KEEP=1 (all: leave the droplets up).
+// KEEP=1 (all: leave the droplets up), SERVER_ENV (more env for the bench servers: `BENCH_DEPLOY=1 MAX_ISOLATE_WORKERS=2`).
 import { mkdirSync, writeFileSync } from "node:fs";
 import { type Box, cpu as cpuOf, root, runOf, sh, status } from "./boxes.ts";
 
@@ -80,7 +80,8 @@ function matrix(suite: string): Point[] {
 }
 
 async function measure(s: State, p: Point) {
-  const env = `N=${p.n} PERSISTENCE=${p.persistence} HOST=${s.server.private}`;
+  // SERVER_ENV: more of the bench servers' environment (`BENCH_DEPLOY=1 MAX_ISOLATE_WORKERS=2`).
+  const env = `${process.env.SERVER_ENV ?? ""} N=${p.n} PERSISTENCE=${p.persistence} HOST=${s.server.private}`.trim();
   const pid = (
     await ssh(s.server, `cd ${remote} && (${env} nohup bun bench/cloud/serve.ts >/root/serve.log 2>&1 & echo $!)`)
   ).trim();

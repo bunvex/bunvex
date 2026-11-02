@@ -72,7 +72,10 @@ export function startQueryWorkers(o: {
       } satisfies QueryWorkerInit),
     answer: async (text) => engine.answerOp(text),
   });
-  engine.postCommits((text) => pool.broadcast(text));
+  engine.postCommits(
+    (text) => pool.broadcast(text),
+    () => pool.size > 0,
+  );
   const shipper = new CodeShipper();
   functions.offloadQueries = true;
   engine.queryWorkers = {
