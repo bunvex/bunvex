@@ -1,0 +1,10 @@
+// @bunvex/auth's clients (the browser session manager, the OAuth client, the React bindings): DOM types, which the
+// engine and the server must not see (UI-01 §8), so the root tsconfig leaves them out.
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx"
+  },
+  "include": ["src/browser", "src/methods/oauth", "test-react"]
+}

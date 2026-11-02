@@ -17,6 +17,9 @@
     "packages/sync-e2e/dashboard",
     "packages/react",
     "packages/react-clerk",
-    "packages/react-auth0"
+    "packages/react-auth0",
+    // @bunvex/auth's clients: their own tsconfig, with DOM types.
+    "components/auth/src/browser",
+    "components/auth/src/methods/oauth"
   ]
 }
