@@ -80,6 +80,7 @@ drives it in Chromium; any page error or console error fails the test.
 | [resend](resend) | A component from npm: `@bunvex/resend`, emails sent in batches, their statuses and Resend's webhook events, live |
 | [auth-password](auth-password) | Built-in auth (`@bunvex/auth`): sign up and in with a username and a password, change it, sign out other sessions |
 | [auth-anonymous](auth-anonymous) | Built-in auth (`@bunvex/auth`): anonymous sign-in, a new user per session, signed-in calls |
+| [auth-nextjs](auth-nextjs) | Built-in auth under Next.js (`@bunvex/auth/ssr/nextjs`): username + password and anonymous sign-in through the app's own routes, the refresh token in an httpOnly cookie, pages rendered signed in |
 | [sharded-counter](sharded-counter) | A component from npm: `@bunvex/sharded-counter` counting a million checkboxes, a trigger counting a table |
 | [testing](testing) | `@bunvex/testing`: the app's functions in tests, on the real engine (no front end) |
 | [users-and-clerk](users-and-clerk) | Signed-in users with Clerk (`@bunvex/react-clerk`) |

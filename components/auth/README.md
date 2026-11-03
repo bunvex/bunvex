@@ -197,6 +197,32 @@ your app's (`allowedOrigins` adds others, for a proxy that rewrites `Host`). `cr
 deployment whether an access token names a live session; `ServerAuthSession` refreshes a request's cookies when its
 access token is about to expire.
 
+### Next.js
+
+`@bunvex/auth/ssr/nextjs` adds the App Router's side (Next 16):
+
+```ts
+// lib/bunvexAuth.tsx
+import { setupBunvexAuthNextjs } from "@bunvex/auth/ssr/nextjs";
+
+export const { bunvexAuthNextjsProxy, nextjsProxyRedirect, bunvexAuthNextjsAccessToken, isAuthenticatedNextjs,
+  BunvexAuthNextjsServerProvider } = setupBunvexAuthNextjs({
+  bunvexUrl: process.env.NEXT_PUBLIC_BUNVEX_URL!,
+  refreshSession: api.auth.refreshSession,
+  isAuthenticated: api.auth.isAuthenticated,
+});
+```
+
+- `bunvexAuthNextjsProxy(handler?)`, the default export of `proxy.ts`, refreshes the access token before a page renders
+  and runs your redirects (`isAuthenticated`, `getToken` and `nextjsProxyRedirect` help).
+- `bunvexAuthNextjsAccessToken()` gives a Server Component or a Server Action the token to call your functions with
+  (`preloadQuery(…, { token })`); `isAuthenticatedNextjs()` asks the deployment whether it is signed in.
+- `BunvexAuthNextjsServerProvider` goes in the root layout: the client provider, `BunvexAuthNextjsProvider`, starts with
+  the server's token, and the methods' usual hooks sign in through `/auth/signin`.
+
+Cookies are `Secure` when `NODE_ENV` is `production` unless `cookieOptions.secure` says otherwise.
+[examples/auth-nextjs](../../examples/auth-nextjs) is a whole app.
+
 ## Testing
 
 `@bunvex/auth/test` mounts the component in a [`@bunvex/testing`](../../packages/testing) deployment and calls as a

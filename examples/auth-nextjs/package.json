@@ -1,0 +1,31 @@
+{
+  "name": "bunvex-example-auth-nextjs",
+  "version": "0.0.0",
+  "private": true,
+  "description": "@bunvex/auth under Next.js: sign in with a username and a password, or anonymously; the refresh token in an httpOnly cookie, pages rendered signed in.",
+  "type": "module",
+  "scripts": {
+    "dev": "bunvex dev --start 'next dev'",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "@bunvex/auth": "workspace:*",
+    "@bunvex/client": "workspace:*",
+    "@bunvex/nextjs": "workspace:*",
+    "@bunvex/react": "workspace:*",
+    "@bunvex/server": "workspace:*",
+    "@bunvex/values": "workspace:*",
+    "next": "16.4.3",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@bunvex/cli": "workspace:*",
+    "@types/node": "26.6.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "bunvex-examples-harness": "workspace:*",
+    "typescript": "^5.9.0"
+  }
+}
