@@ -1,7 +1,8 @@
 # STUDY-202 — Built-in auth under server rendering, and Next.js
-<!-- index: built-in auth under server rendering (STUDY-191 §3.4 step 7): Convex Auth v2's `./ssr` (the refresh token in an httpOnly cookie; refresh, sign-out and the allowlisted sign-in proxy as WHATWG handlers; the Origin check) and `./ssr/nextjs` (the proxy, the Server Component token, the providers); written from convex/convex-auth `reboot` at db15c82e | no divergence of its own; build in PRs (§3.4) -->
+<!-- index: built-in auth under server rendering (STUDY-191 §3.4 step 7): Convex Auth v2's `./ssr` (the refresh token in an httpOnly cookie; refresh, sign-out and the allowlisted sign-in proxy as WHATWG handlers; the Origin check) and `./ssr/nextjs` (the proxy, the Server Component token, the providers); written from convex/convex-auth `reboot` at db15c82e | no divergence of its own; `./ssr` built, `./ssr/nextjs` next (§3.4) -->
 
-- **Status:** no divergence of its own, so nothing for the owner to decide; build in PRs (§3.4). The names and the cookie names follow C-4 (DV-577, rule 5), the proxy's
+- **Status:** no divergence of its own, so nothing for the owner to decide. `./ssr` built; `./ssr/nextjs` and the
+  example next (§3.4). The names and the cookie names follow C-4 (DV-577, rule 5), the proxy's
   wire names DV-307 and DV-315 (§4).
 - **Scope:** STUDY-191 §3.4 step 7, "SSR and Next.js", taken before steps 4–6 (email, OAuth, passkeys) at the
   owner's request (2026-11-03). Everything the core of [STUDY-201](STUDY-201-auth-core.md) left out: `./ssr` and
@@ -262,7 +263,12 @@ The proxy speaks the HTTP client's wire, and bunvex's is bunvex-named: the body'
 1. **This study.**
 2. **`./ssr`**: cookies, `httpCookies`, the JWT helpers, `ServerAuthSession`, the handlers, the Origin check,
    `setupBunvexAuthServer`, the proxy, the checker. The 65 tests of §1.10 outside `nextjs/` ported; the cookie and
-   JWT corpus against `cookie` and `jose`; the differential test (§5).
+   JWT corpus against `cookie` and `jose`; the differential test (§5). Built: `components/auth/src/ssr/`;
+   `test/ssr-cookies.test.ts` (the cookie tests and the corpus, 20 000 headers and 20 000 `Set-Cookie` lines each
+   compared with `cookie@1.1.1`) and `test/ssr-routes.test.ts` (the rest, against a stand-in deployment over HTTP);
+   `packages/differential/test/auth-ssr.test.ts` (25 steps through each side's routes with its own HTTP client: every
+   status, body and `Set-Cookie` line the same, once named alike). The cookie names moved to `lib/storageKeys.ts`, so
+   the server side names them without the browser's code.
 3. **`./ssr/nextjs`** and the example `examples/auth-nextjs` (username + password and anonymous; GitHub waits for
    OAuth), with an end-to-end test that runs `next start` against a deployment (§5), and the examples checklist
    (the site's example count, the sandbox parity corpus, `examples/README.md`). Of `oauth.test.tsx`, the callback

@@ -16,10 +16,8 @@ export interface TokenStorage {
   removeItem: (key: string) => void | Promise<void>;
 }
 
-/** The storage key of the access token (a JWT), before its namespace. */
-export const JWT_STORAGE_KEY = "__bunvexAuthJWT";
-/** The storage key of the rotating refresh token, before its namespace (also the name of the refresh lock). */
-export const REFRESH_TOKEN_STORAGE_KEY = "__bunvexAuthRefreshToken";
+export { JWT_STORAGE_KEY, REFRESH_TOKEN_STORAGE_KEY } from "../lib/storageKeys.ts";
+
 /** The prefix of an ambient sign-in's own keys. */
 const SIGN_IN_KEY_PREFIX = "__bunvexAuthProvider_";
 

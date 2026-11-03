@@ -13,69 +13,22 @@
 // Local only: skipped, with a note, without Convex's backend or a convex-auth clone to build the pin from.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { argon2, timingSafeEqual } from "node:crypto";
-import {
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import { type Backend, ORACLE_BIN, startAll, startBunvex, startConvex } from "../harness/backends.ts";
-import { convexAuthModules } from "../harness/convex-auth.ts";
+import { authAppPreparer, convexAuthModules } from "../harness/convex-auth.ts";
 
 const pin = existsSync(ORACLE_BIN) ? convexAuthModules() : { missing: `no Convex backend at ${ORACLE_BIN}` };
 const ready = "modules" in pin;
 if (!ready) console.warn(`auth: skipped, ${(pin as { missing: string }).missing} (set CONVEX_BACKEND_BIN)`);
 
 const APP = resolve(import.meta.dir, "../auth-app");
-const PACKAGE = resolve(import.meta.dir, "..");
 const PASSWORD = "correct horse battery staple";
 const NEW_PASSWORD = "a whole new password here";
 let convex: Backend;
 let bunvex: Backend;
 
-/**
- * Convex's project: its `node_modules` this package's, but with `@convex-dev/auth` the pin's. bunvex's: `@bunvex/auth`,
- * with bunvex's names (rule 5, C-4).
- */
-function prepare(project: string, dir: "convex" | "bunvex") {
-  if (dir === "convex") {
-    const own = join(project, "node_modules");
-    rmSync(own);
-    mkdirSync(join(own, "@convex-dev"), { recursive: true });
-    const shared = join(PACKAGE, "node_modules");
-    for (const name of readdirSync(shared))
-      if (name !== "@convex-dev") symlinkSync(join(shared, name), join(own, name));
-    for (const name of readdirSync(join(shared, "@convex-dev")))
-      symlinkSync(join(shared, "@convex-dev", name), join(own, "@convex-dev", name));
-    rmSync(join(own, "@convex-dev/auth"), { force: true });
-    symlinkSync(join((pin as { modules: string }).modules, "@convex-dev/auth"), join(own, "@convex-dev/auth"));
-    return;
-  }
-  const functions = join(project, dir);
-  renameSync(join(functions, "convex.config.ts"), join(functions, "bunvex.config.ts"));
-  for (const name of readdirSync(functions)) {
-    if (!name.endsWith(".ts")) continue;
-    const file = join(functions, name);
-    writeFileSync(
-      file,
-      readFileSync(file, "utf8")
-        .replace(
-          /"@convex-dev\/auth\/((?:components\/[a-z]+\/)?)convex\.config\.js"/g,
-          '"@bunvex/auth/$1bunvex.config.js"',
-        )
-        .replaceAll('"@convex-dev/auth/', '"@bunvex/auth/')
-        .replaceAll('"convex/server"', '"@bunvex/server"')
-        .replaceAll('"convex/values"', '"@bunvex/values"')
-        .replaceAll("setupConvexAuth", "setupAuth")
-        .replaceAll("convexAuthProvider", "bunvexAuthProvider"),
-    );
-  }
-}
+const prepare = authAppPreparer((pin as { modules: string }).modules);
 
 beforeAll(async () => {
   if (!ready) return;
