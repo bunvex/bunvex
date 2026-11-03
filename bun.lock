@@ -95,6 +95,9 @@
     "components/auth": {
       "name": "@bunvex/auth",
       "version": "0.1.0-alpha.2",
+      "bin": {
+        "auth": "./src/cli/init.ts",
+      },
       "dependencies": {
         "@bunvex/rate-limiter": "workspace:^",
       },

@@ -1,8 +1,8 @@
 # STUDY-201 — Built-in auth, the core
-<!-- index: the first build step of built-in auth (STUDY-191 §3.4 step 3): Convex Auth v2's `auth` component (accounts, sessions, refresh-token rotation, deployment-signed access tokens), `authPassword`, `authUsername`, `authAnonymous`, the username + password and anonymous methods, `getAuthUserId` on the live session, the React client and the browser session manager; written from convex/convex-auth `reboot` at db15c82e | decided (owner, 2026-11-01): C-1–C-8 as recommended, C-2 a native hasher (AD-49); DV-577 and DV-581 extended -->
+<!-- index: the first build step of built-in auth (STUDY-191 §3.4 step 3): Convex Auth v2's `auth` component (accounts, sessions, refresh-token rotation, deployment-signed access tokens), `authPassword`, `authUsername`, `authAnonymous`, the username + password and anonymous methods, `getAuthUserId` on the live session, the React client and the browser session manager; written from convex/convex-auth `reboot` at db15c82e | decided (owner, 2026-11-01): C-1–C-8 as recommended, C-2 a native hasher (AD-49); DV-577 and DV-581 extended; the `init` command's output DV-583 (2026-11-02) -->
 
 - **Status:** decided (owner, 2026-11-01): C-1–C-8 as recommended, except C-2, where the owner chose the native
-  hasher (AD-49) over v2's WASM; C-3 extends DV-581, C-4 DV-577. To be built (§3.5). Decided before: STUDY-191's A-1–A-8 (DV-575–DV-577);
+  hasher (AD-49) over v2's WASM; C-3 extends DV-581, C-4 DV-577; C-9 (the `init` command's output, owner 2026-11-02) is DV-583. Built (§3.5). Decided before: STUDY-191's A-1–A-8 (DV-575–DV-577);
   the rename of `packages/auth` to `@bunvex/identity`, with `@bunvex/auth` reused for the auth components (A-2,
   confirmed by the owner on 2026-11-01, §3.2).
 - **Scope:** STUDY-191 §3.4 step 3, "the core": the `auth` component; `authAnonymous`, `authUsername`,
@@ -570,6 +570,44 @@ callbacks are a fixture module injected as `testApp.ts` (`component/testApp.fixt
 - The OAuth entries (cleanup, system env vars, one pending flow, custom URL schemes) are not the core, but the core
   provider registers `oauth()` by default (§1.11).
 
+### 1.18 The `init` command (`cli/`, C-8)
+
+- **What it is:** the package's `bin` (`{"@convex-dev/auth": "./dist/cli/init.js"}`, which npm links as `auth`), run
+  as `npx @convex-dev/auth` with no subcommand: `npx @convex-dev/auth init` is refused (`too many arguments`).
+  `cli/init.ts` (a Node shebang) parses `process.argv` with `createProgram()` (`cli/program.ts`, commander 14); the
+  behaviour is behind injectable dependencies (`InitDeps`: `cwd`, `fs`, `log`, `warn`, `detectPackageManager`).
+- **What it does, in order** (`runInit`):
+  1. `package.json` in the current directory, else `No package.json found in <dir>.\nRun this command from the root of
+     your project.`; parsed with `JSON.parse`, else `Could not parse <path> as JSON.` and the parser's message, as a
+     `@babel/code-frame` frame at the offset V8 puts in the message, or indented when there is none
+     (`describeJsonError`).
+  2. `@convex-dev/auth` in `dependencies` or `devDependencies` (`hasAuthDependency`, which reads `pkg.dependencies`:
+     a `package.json` of `null` throws a `TypeError`, uncaught), else `<package> is not a dependency of this
+     project.` and the install command, indented, for the package manager in use: `npm_config_user_agent`'s prefix,
+     else the lockfile (`pnpm-lock.yaml`, `bun.lock`/`bun.lockb`, `yarn.lock`), else npm (`detectPackageManager`);
+     `npm install` / `pnpm add` / `yarn add` / `bun add` of `@convex-dev/auth@beta` (`installCommand`). It installs
+     nothing.
+  3. Writes `convex/auth.config.ts` (`convexAuthProvider()`), `convex/convex.config.ts` (`app.use(auth)` and a TODO)
+     and `convex/auth.ts` (`setupConvexAuth`, the session functions exported, a commented-out username + password
+     example) in that order, `convex/` made if absent, a file that exists never overwritten
+     (`FILE_TEMPLATES`, `writeAuthFiles`). It writes to `convex/` whatever `convex.json` names as the functions
+     directory.
+  4. Prints `Convex Auth setup in <dir>`, `Files` with one aligned line per file (`✔ … created` / `! … already
+     exists`), then on standard error, per existing file, `<file> already exists`, `This file was not changed. Make sure
+     that it contains:` and the template as a code block (syntax colors from `@babel/code-frame`'s `highlight`, on a
+     256-color background, padded; plain without colors), then `Next steps` (add a sign-in method; `npx convex dev`)
+     and the docs URL. Exit 0.
+- **Arguments** (commander's): `-h`/`--help` anywhere before `--` prints `Usage: @convex-dev/auth [options]`, the
+  description and the one option, to standard output, exit 0; else the first unknown option fails, with commander's
+  suggestion for a mistyped `--` option (an optimal-string-alignment distance of at most 3 and over 40% alike, so
+  `--hlep`, `--Help`, `--help=1`, not `--h` or `--help=x=y`); else any argument (`-` and everything after `--`
+  included) fails `too many arguments. Expected 0 arguments but got <n>.`. Every failure is commander's `error: …`
+  rewritten as `✖ …` on standard error, exit 1.
+- **Colors:** chalk's, decided from standard output's terminal and `FORCE_COLOR` (`chalk.level`).
+- **Tests:** `cli/init.test.ts` (vitest, the file system stubbed): the missing dependency, no `package.json`, an
+  invalid one, the files written, the summary (an inline snapshot), `devDependencies`, an existing file; the
+  templates' Node-free `auth.config.ts`; `installCommand`; `detectPackageManager`.
+
 ## 2. What an app can observe
 
 ### 2.1 Names and shapes
@@ -814,7 +852,12 @@ Everything §1.14 lists is in bunvex, with the file that provides it, except two
    with upstream's example suite ported to `@bunvex/testing` on the example's own project (20 and 3, plus one each) and an
    end-to-end test on a deployment where the access tokens are verified through `auth.config.ts`; upstream's password
    suite has 20 tests, not the 23 §1.13 first counted).
-7. Later: the `init` CLI (C-8).
+7. The `init` command, C-8 (built: `components/auth/src/cli/`, the package's `bin` named `auth` as npm links v2's, so
+   `bunx @bunvex/auth` runs it; §1.18 in bunvex's words, with its own argument parser and output (DV-583); upstream's
+   `cli/init.test.ts` ported to real directories, plus the arguments, the colors and the files it writes typechecked by
+   `bunvex codegen` and pushed to a deployment that answers their functions (`components/auth/test/cli.test.ts`); and a
+   differential test, `packages/differential/test/auth-init.test.ts`, that runs v2's command at the pin and bunvex's
+   in 37 scenarios and finds their exit codes, output and files byte for byte the same once the names are mapped).
 
 ## 4. Divergences
 
@@ -822,6 +865,7 @@ Everything §1.14 lists is in bunvex, with the file that provides it, except two
 |---|---|---|---|
 | C-3 | `authPassword`'s child `rateLimiter` is bunvex's rate limiter, 0.4.2's shape (its own `batchWorker` child and `pendingUpdates` table), where Convex Auth mounts 0.3.2: DV-581 extended | one rate limiter in bunvex; the password limit is one token-bucket `limit` call, the same in both versions | DV-581, extended (owner, 2026-11-01) |
 | C-4 | The names of §2.8 not yet decided, in bunvex's words (storage keys and the OAuth URL parameters under DV-577; the rest under rule 5) | rule 5 | DV-577, extended, and rule 5 (owner, 2026-11-01) |
+| C-9 | `bunx @bunvex/auth` (§1.18) without v2's libraries: the "Make sure that it contains" code block keeps its dark panel but has no syntax colors; an unparsable `package.json` shows Bun's parser message indented, without a code frame (Bun's `JSON.parse` gives no position); and a `--` given first is taken by Bun before the command sees its arguments, so `bunx @bunvex/auth -- -h` prints the help where v2 refuses the argument. Every other output is v2's byte for byte (the differential test) | no dependency for a one-off command in a package every app installs (chalk, commander, `@babel/code-frame`); the frame needs a position Bun's parser does not give | DV-583 (owner, 2026-11-02) |
 
 ## 4b. Additions
 
