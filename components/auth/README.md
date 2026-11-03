@@ -168,6 +168,35 @@ Each mounts from `@bunvex/auth/components/<name>/bunvex.config.js`; the methods 
   Native); without `localStorage` the session is kept in memory, with a warning.
 - A sign-out the server fails still signs out locally.
 
+## Server rendering
+
+`@bunvex/auth/ssr` keeps the session in cookies on your app's server, for any framework that speaks WHATWG
+`Request`/`Response`: the refresh token sits in an httpOnly, SameSite=Lax cookie and never reaches the page's
+JavaScript, which holds the access token alone.
+
+```ts
+// auth.ts, on the server
+import { setupBunvexAuthServer } from "@bunvex/auth/ssr";
+import { api } from "./bunvex/_generated/api";
+
+export const auth = setupBunvexAuthServer({
+  bunvexUrl: process.env.BUNVEX_URL!,
+  refreshSession: api.auth.refreshSession,
+  signOut: api.auth.signOut,
+  // Every function that signs a user in: the sign-in route serves these and nothing else.
+  signIn: [api.auth.signInWithUsernamePassword, api.auth.signUpWithUsernamePassword],
+  cookieOptions: { secure: process.env.NODE_ENV === "production" },
+});
+```
+
+Mount `auth.bunvexProxyHandler`, `auth.refreshHandler` and `auth.signOutHandler` as `POST` routes (`/auth/signin`,
+`/auth/refresh`, `/auth/signout` by default). The sign-in route speaks the HTTP client's wire, so a method's usual hook
+works through it: point a `BunvexHttpClient` at `"/auth/signin?path="` and the route forwards each listed call to your
+deployment, moving the refresh token it returns into the cookie. Every route refuses a request whose `Origin` is not
+your app's (`allowedOrigins` adds others, for a proxy that rewrites `Host`). `createServerAuthChecker` asks the
+deployment whether an access token names a live session; `ServerAuthSession` refreshes a request's cookies when its
+access token is about to expire.
+
 ## Testing
 
 `@bunvex/auth/test` mounts the component in a [`@bunvex/testing`](../../packages/testing) deployment and calls as a

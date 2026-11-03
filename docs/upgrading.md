@@ -139,10 +139,21 @@ app deployed, and every document, index read and file must come back.
 3. Start bunvex on an empty store, `bunx bunvex deploy`, set the variables, then
    `bunx bunvex import --replace-all ./backups/snapshot_<…>.zip`.
 
-What does not import: an app with **components** (bunvex has none yet: a ZIP with `_components/…` is refused), and
+What does not import: the data of an app's **components** (bunvex's export and import cover the app's own tables: a ZIP with `_components/…` is refused), and
 Convex's legacy inferred-schema ZIP encoding (the Convex release bunvex follows writes the current one). Moving **from
 bunvex to Convex** is the same path the other way round: `bunvex export` writes Convex's ZIP format, which
 `npx convex import --replace-all` takes. No automated test covers that direction yet.
+
+### What runs differently
+
+Under the default function executor (`vm`), a few things an app can see differ from Convex; the
+[self-hosting guide](../docker/README.md#configure-it) explains each one and the `process` executor that avoids most
+of them. Before you move an app, check that it does not rely on these:
+
+- a function that leaves a **rejected promise unhandled** fails on Convex, but goes on (and a mutation commits) on bunvex;
+- a **synchronous loop** that never yields is stopped at the time limit on Convex, but blocks the bunvex backend;
+- there is **no 64 MiB memory cap** per call;
+- **module-level variables** keep their values between calls of the same deployed version.
 
 ### Opening the other system's store (cross-open)
 

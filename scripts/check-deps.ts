@@ -107,7 +107,8 @@ const ALLOWED: Record<string, string[]> = {
   // Test-only, never published: Jepsen-style consistency runs against a server process (STUDY-57).
   jepsen: ["client", "server", "core", "values"],
   // Test-only, never published: the same app on Convex's backend and on bunvex's, compared (STUDY-122);
-  // it uses bunvex as a user would, through the public packages and its CLI.
+  // it uses bunvex as a user would, through the public packages and its CLI, and the components an app installs
+  // (ARCHITECTURE.md; STUDY-202: `@bunvex/auth/ssr` in the app's own server), added below.
   differential: ["server", "values", "client", "react", "nextjs", "cli"],
   // apps/local-backend (STUDY-39, STUDY-40): the executable's entry carries the persistence drivers into it, and
   // provides the function sandbox's executor, which the server cannot import (STUDY-171 §8.8).
@@ -184,7 +185,7 @@ for (const [name, dir] of dirOfName) {
   const root = workspaces.get(dir)!;
   const where = relative(ROOT, root);
   const allowed =
-    ALLOWED[dir] ??
+    (dir === "differential" ? [...ALLOWED[dir]!, ...componentKeys()] : ALLOWED[dir]) ??
     (dir.startsWith("examples/") ? EXAMPLE_ALLOWED() : dir.startsWith("components/") ? COMPONENT_ALLOWED() : undefined);
   const testOnly = TEST_ONLY[dir] ?? (dir.startsWith("components/") ? COMPONENT_TEST_ONLY : undefined);
   if (!allowed) {

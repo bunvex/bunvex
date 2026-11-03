@@ -3,7 +3,17 @@
 // reference clone, as its own release does (pnpm, then `pnpm pack`), and installed once into `.cache/` with its
 // dependencies but not its peers: its `convex` is then this package's, the one the Convex CLI bundles with.
 // `package.json` declares npm's latest, 2.0.0-beta.0, for the app's imports; the test's Convex project links the pin instead.
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -56,4 +66,46 @@ export function convexAuthModules(): { modules: string } | { missing: string } {
     Bun.spawnSync(["git", "-C", REPO, "worktree", "remove", "--force", work]);
     rmSync(work, { recursive: true, force: true });
   }
+}
+
+/**
+ * How each backend's project of `auth-app/` is prepared (`StartOptions.prepare`). Convex's: its `node_modules` this
+ * package's, but with `@convex-dev/auth` the pin's (`modules`, from {@link convexAuthModules}). bunvex's: `@bunvex/auth`,
+ * with bunvex's names (rule 5, C-4).
+ */
+export function authAppPreparer(modules: string) {
+  return (project: string, dir: "convex" | "bunvex") => {
+    if (dir === "convex") {
+      const own = join(project, "node_modules");
+      rmSync(own);
+      mkdirSync(join(own, "@convex-dev"), { recursive: true });
+      const shared = join(PACKAGE, "node_modules");
+      for (const name of readdirSync(shared))
+        if (name !== "@convex-dev") symlinkSync(join(shared, name), join(own, name));
+      for (const name of readdirSync(join(shared, "@convex-dev")))
+        symlinkSync(join(shared, "@convex-dev", name), join(own, "@convex-dev", name));
+      rmSync(join(own, "@convex-dev/auth"), { force: true });
+      symlinkSync(join(modules, "@convex-dev/auth"), join(own, "@convex-dev/auth"));
+      return;
+    }
+    const functions = join(project, dir);
+    renameSync(join(functions, "convex.config.ts"), join(functions, "bunvex.config.ts"));
+    for (const name of readdirSync(functions)) {
+      if (!name.endsWith(".ts")) continue;
+      const file = join(functions, name);
+      writeFileSync(
+        file,
+        readFileSync(file, "utf8")
+          .replace(
+            /"@convex-dev\/auth\/((?:components\/[a-z]+\/)?)convex\.config\.js"/g,
+            '"@bunvex/auth/$1bunvex.config.js"',
+          )
+          .replaceAll('"@convex-dev/auth/', '"@bunvex/auth/')
+          .replaceAll('"convex/server"', '"@bunvex/server"')
+          .replaceAll('"convex/values"', '"@bunvex/values"')
+          .replaceAll("setupConvexAuth", "setupAuth")
+          .replaceAll("convexAuthProvider", "bunvexAuthProvider"),
+      );
+    }
+  };
 }
