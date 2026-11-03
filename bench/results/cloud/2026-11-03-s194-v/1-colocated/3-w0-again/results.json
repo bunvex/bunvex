@@ -1,0 +1,258 @@
+{
+  "meta": {
+    "suite": "single",
+    "sha": "121fa495",
+    "bun": "1.4.4",
+    "k6": "k6 v2.3.0 (commit/e088784614, go1.26.8, linux/amd64)",
+    "server": {
+      "name": "bunvex-bench-s194-v-server",
+      "id": 615480431,
+      "public": "167.71.155.68",
+      "private": "10.120.0.3",
+      "size": "c-4",
+      "hourly": 0.125,
+      "machine": ["4", "Intel(R) Xeon(R) Platinum 8280 CPU @ 2.70GHz", "7", "6.8.0-147-generic"]
+    },
+    "load": {
+      "name": "bunvex-bench-s194-v-load",
+      "id": 615480430,
+      "public": "138.68.16.144",
+      "private": "10.120.0.2",
+      "size": "c-4",
+      "hourly": 0.125,
+      "machine": ["4", "Intel(R) Xeon(R) Platinum 8168 CPU @ 2.70GHz", "7", "6.8.0-147-generic"]
+    },
+    "env": {
+      "VUS": "64",
+      "DURATION": "20s",
+      "REPEATS": 3
+    }
+  },
+  "results": [
+    {
+      "persistence": "postgres",
+      "n": 1,
+      "scenario": "uncached",
+      "vus": 64,
+      "duration": "20s",
+      "rate": 1527.7050798872133,
+      "errors": 0,
+      "p99": 80.94980801000001,
+      "serverCores": 0.9783840342922724,
+      "boxCores": 1.247958810260669,
+      "loadCores": 0.44667913459879394,
+      "servers": [
+        {
+          "port": 3510,
+          "rate": 1527.7050798872133,
+          "errors": 0,
+          "p50": 34.361604,
+          "p90": 63.8087933,
+          "p99": 80.94980801000001,
+          "max": 182.054988
+        }
+      ],
+      "repeat": 1
+    },
+    {
+      "persistence": "postgres",
+      "n": 1,
+      "scenario": "uncached",
+      "vus": 64,
+      "duration": "20s",
+      "rate": 1470.2050698865828,
+      "errors": 0,
+      "p99": 88.8857555,
+      "serverCores": 0.9856035405563638,
+      "boxCores": 1.274339336285468,
+      "loadCores": 0.4510521349497849,
+      "servers": [
+        {
+          "port": 3510,
+          "rate": 1470.2050698865828,
+          "errors": 0,
+          "p50": 36.031176,
+          "p90": 67.160888,
+          "p99": 88.8857555,
+          "max": 341.484271
+        }
+      ],
+      "repeat": 2
+    },
+    {
+      "persistence": "postgres",
+      "n": 1,
+      "scenario": "uncached",
+      "vus": 64,
+      "duration": "20s",
+      "rate": 1531.7517062988709,
+      "errors": 0,
+      "p99": 83.92461269999995,
+      "serverCores": 1.0046580226268769,
+      "boxCores": 1.2959260801871995,
+      "loadCores": 0.41502742166579004,
+      "servers": [
+        {
+          "port": 3510,
+          "rate": 1531.7517062988709,
+          "errors": 0,
+          "p50": 34.677166,
+          "p90": 63.730461,
+          "p99": 83.92461269999995,
+          "max": 398.026802
+        }
+      ],
+      "repeat": 3
+    },
+    {
+      "persistence": "postgres",
+      "n": 1,
+      "scenario": "cached",
+      "vus": 64,
+      "duration": "20s",
+      "rate": 7817.236906471863,
+      "errors": 0,
+      "p99": 17.895373819999993,
+      "serverCores": 0.8645423209040559,
+      "boxCores": 0.8903612318450816,
+      "loadCores": 1.6078139995093514,
+      "servers": [
+        {
+          "port": 3510,
+          "rate": 7817.236906471863,
+          "errors": 0,
+          "p50": 7.70527,
+          "p90": 11.249407599999998,
+          "p99": 17.895373819999993,
+          "max": 40.773428
+        }
+      ],
+      "repeat": 1
+    },
+    {
+      "persistence": "postgres",
+      "n": 1,
+      "scenario": "cached",
+      "vus": 64,
+      "duration": "20s",
+      "rate": 7768.890334431703,
+      "errors": 0,
+      "p99": 17.723361399999984,
+      "serverCores": 0.893476310675653,
+      "boxCores": 0.9108024268809102,
+      "loadCores": 1.5971528938300812,
+      "servers": [
+        {
+          "port": 3510,
+          "rate": 7768.890334431703,
+          "errors": 0,
+          "p50": 7.697307,
+          "p90": 11.210213400000004,
+          "p99": 17.723361399999984,
+          "max": 38.664527
+        }
+      ],
+      "repeat": 2
+    },
+    {
+      "persistence": "postgres",
+      "n": 1,
+      "scenario": "cached",
+      "vus": 64,
+      "duration": "20s",
+      "rate": 7137.409342287345,
+      "errors": 0,
+      "p99": 19.323120550000002,
+      "serverCores": 0.8467127134186447,
+      "boxCores": 0.8654591203578061,
+      "loadCores": 1.4321473801227707,
+      "servers": [
+        {
+          "port": 3510,
+          "rate": 7137.409342287345,
+          "errors": 0,
+          "p50": 7.8537894999999995,
+          "p90": 11.885477999999999,
+          "p99": 19.323120550000002,
+          "max": 43.635369
+        }
+      ],
+      "repeat": 3
+    },
+    {
+      "persistence": "postgres",
+      "n": 1,
+      "scenario": "insert",
+      "vus": 64,
+      "duration": "20s",
+      "rate": 2498.268891127599,
+      "errors": 0,
+      "p99": 47.21245052000009,
+      "serverCores": 0.9430246695861254,
+      "boxCores": 1.15516586195129,
+      "loadCores": 0.41798505805528613,
+      "servers": [
+        {
+          "port": 3510,
+          "rate": 2498.268891127599,
+          "errors": 0,
+          "p50": 23.914677,
+          "p90": 32.666431,
+          "p99": 47.21245052000009,
+          "max": 87.606202
+        }
+      ],
+      "repeat": 1
+    },
+    {
+      "persistence": "postgres",
+      "n": 1,
+      "scenario": "insert",
+      "vus": 64,
+      "duration": "20s",
+      "rate": 2459.925549911274,
+      "errors": 0,
+      "p99": 47.366325499999995,
+      "serverCores": 0.9286178536239554,
+      "boxCores": 1.1553006630102725,
+      "loadCores": 0.42327152166445164,
+      "servers": [
+        {
+          "port": 3510,
+          "rate": 2459.925549911274,
+          "errors": 0,
+          "p50": 23.668406,
+          "p90": 32.951196,
+          "p99": 47.366325499999995,
+          "max": 378.419584
+        }
+      ],
+      "repeat": 2
+    },
+    {
+      "persistence": "postgres",
+      "n": 1,
+      "scenario": "insert",
+      "vus": 64,
+      "duration": "20s",
+      "rate": 2487.294526613805,
+      "errors": 0,
+      "p99": 46.80758629999996,
+      "serverCores": 0.8988681906043021,
+      "boxCores": 1.1961742502113957,
+      "loadCores": 0.4112090304955239,
+      "servers": [
+        {
+          "port": 3510,
+          "rate": 2487.294526613805,
+          "errors": 0,
+          "p50": 23.7374025,
+          "p90": 33.935072899999994,
+          "p99": 46.80758629999996,
+          "max": 85.146388
+        }
+      ],
+      "repeat": 3
+    }
+  ]
+}

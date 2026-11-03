@@ -274,8 +274,8 @@ describe("opening the local drivers", () => {
   });
 
   test("a store with no reader of its kind is refused", async () => {
-    await expect(openStoreReader({ driver: "postgres" } as never, { cacheBytes: 0 })).rejects.toThrow(
-      "no reader for the postgres store",
+    await expect(openStoreReader({ driver: "mongodb" } as never, { cacheBytes: 0 })).rejects.toThrow(
+      "no reader for the mongodb store",
     );
   });
 

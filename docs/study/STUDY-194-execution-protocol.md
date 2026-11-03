@@ -1,10 +1,11 @@
 # STUDY-194 — The execution protocol between the main thread and execution workers
-<!-- index: The execution protocol (STUDY-190 PRs 2–4, STUDY-24 A2): Convex's function runner (the request, the snapshot and metadata at a timestamp, the outcome, how the backend commits it), bunvex's in-thread call path, the messages and their encoding (a prototype), snapshots, metadata by epoch, code versions, nested calls, OCC, failures, backpressure, a five-PR plan | decided (owner): Q1–Q6 and AD-47 (2026-10-26), Q7 (2026-10-27); PR 2a is #895; PR 2b planned (§10), Q8–Q10 decided (2026-10-27) -->
+<!-- index: The execution protocol (STUDY-190 PRs 2–4, STUDY-24 A2): Convex's function runner (the request, the snapshot and metadata at a timestamp, the outcome, how the backend commits it), bunvex's in-thread call path, the messages and their encoding (a prototype), snapshots, metadata by epoch, code versions, nested calls, OCC, failures, backpressure, a five-PR plan | decided (owner): Q1–Q6 and AD-47 (2026-10-26), Q7 (2026-10-27); PR 2a is #895; PR 2b is #1021 (SQLite) and step v (Postgres, MySQL, §10.5.10), Q8–Q10 decided (2026-10-27) -->
 
 - **Status:** decided (owner): every §8 recommendation, Q1–Q6 on 2026-10-26 (Q4 is AD-47) and Q7 on 2026-10-27
   (the codec round-trips in-thread calls under the tests only). PR 2a is #895: the boundary, the codec and the permit
-  order (§9); on DO `c-4` uncached +0.7 % and insert −2.2 % against `main`. PR 2b is planned in §10; its Q8–Q10
-  were decided by the owner on 2026-10-27, as recommended.
+  order (§9); on DO `c-4` uncached +0.7 % and insert −2.2 % against `main`. PR 2b (§10), queries on execution
+  workers, is #1021 on a SQLite file (uncached 1.83×, §10.5.9) and step v on Postgres and MySQL (uncached +41 % with
+  Postgres on another box, §10.5.10); its Q8–Q10 were decided by the owner on 2026-10-27, as recommended.
 - **Convex source read:** `precompiled-2026-10-24-bb31399`. Files:
   - `crates/function_runner/src/{lib,server,in_process_function_runner,in_memory_indexes,module_cache}.rs`;
   - `crates/isolate/src/client.rs`, `crates/isolate/src/environment/udf/{async_syscall,phase,mod}.rs`;
@@ -1166,6 +1167,33 @@ pushed too (a local commit adding `BENCH_DEPLOY`):
   are the same with and without workers (about 320k/s).
 - **Pushed code against registered, on `main`:** uncached −9%, insert −8% (`main` pushed against registered). Every
   real deployment runs pushed code; this is outside 2b.
+
+### 10.5.10 v, Postgres and MySQL (2026-11-03)
+
+- **A database server's store describes its reader** (`reader()`): its URL and the options its driver opened it with
+  (TLS, timeouts, idle time; MySQL's document encoding). A worker opens it with `openReader`, which shares the pool's
+  making with `open` and skips the rest: no checks, no tables, no lease. A write fails, as any without the lease does.
+- **The connection split (Q6, Q8)** is made when the workers start, not when the store opens: the store's pool is
+  replaced by a smaller one (`setPoolSize`) only once a worker can start, and calls running on the old pool finish
+  there. postgres.js ends a pool after its queries; mysql2's `end` fails the calls still getting a connection, so the
+  MySQL driver ends a replaced pool after its last call. With the default 128 and 2 workers, the main thread keeps 32
+  and each worker opens up to 48; with fewer than 2 per worker, none starts and the pool stays whole.
+- **Inside `bunvex-local-backend`** a worker's registry of embedded modules is its own, and `import.meta.url` there is
+  the worker's module, not the executable. The drivers' registration moved to `@bunvex/persistence/executable`,
+  embedded as an entry point; the main thread sends its embedded URL in the start message, and the worker imports it
+  before it opens the store. The binary's and the image's smoke tests now check that a client's query is answered by a
+  worker (a module-level count that starts again, DV-573).
+- **Tests:** the differential suite of `query-workers.test.ts` runs on Postgres and MySQL too (CI's database jobs),
+  each worker outcome compared with an in-thread run; `store-readers.test.ts` covers the description, the reader and
+  the resize under load.
+- **Measured** on two `c-4` (`bench/results/cloud/2026-11-03-s194-v/`), 0 and 2 workers alternated:
+  - **Postgres on another box** (as deployed): uncached **+41%** (1596 → 2247 req/s), p99 −15%; cached the same;
+    inserts within their noise (the medians of one configuration spread 1427–1962; the averages were −5%, and the
+    same with the main thread keeping 128 connections).
+  - **Postgres on the server box** (the suite's default): uncached +15%. bunvex and Postgres share 4 vCPUs on 2 cores,
+    and use 2.84 of them.
+  - Why it is less than SQLite's 1.83× is not settled: a worker's reads wait on Postgres's round trips, and the load
+    box, which ran Postgres beside k6, used 1.75 of its 4 vCPUs.
 
 ### 10.6 Owner questions for 2b
 

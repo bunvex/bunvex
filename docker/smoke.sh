@@ -41,12 +41,28 @@ export const add = mutation(async ({ db }, { n }: { n: number }) => {
 });
 export const all = query(async ({ db }) => (await db.query("items").collect()).map((d) => d.n));
 export const site = query(async () => process.env.BUNVEX_SITE_URL ?? null);
+let calls = 0;
+export const counted = query(async (_ctx, _args: { r: number }) => ++calls);
 TS
 cli() { (cd "$APP" && BUNVEX_SELF_HOSTED_URL="http://127.0.0.1:$PORT" BUNVEX_SELF_HOSTED_ADMIN_KEY="$KEY" bun "$ROOT/packages/cli/bin/bunvex.ts" "$@"); }
 cli deploy --typecheck=disable >/dev/null 2>&1 || fail "deploy failed"
 cli run items:add '{ n: 42 }' >/dev/null 2>&1 || fail "run failed"
 [ "$(cli run items:all 2>/dev/null | tr -d ' \n')" = "[42]" ] || fail "unexpected data"
 [ "$(cli run items:site 2>/dev/null)" = "\"http://127.0.0.1:$SITE_PROXY_PORT\"" ] || fail "unexpected site origin"
+# A client's queries run on the execution workers (STUDY-194), each opening the store with what the image embeds.
+# Module state is per worker (DV-573): a count that starts again shows a worker answered (no call is cached).
+last=0
+restarted=""
+for i in $(seq 1 20); do
+  got=$(curl -sf "http://127.0.0.1:$PORT/api/query" -H 'content-type: application/json' \
+    -d "{\"path\":\"items:counted\",\"args\":{\"r\":$i},\"format\":\"json\"}" | sed -nE 's/.*"value":([0-9]+).*/\1/p')
+  [ -n "$got" ] || fail "a client's query failed"
+  [ "$got" -gt "$last" ] || restarted=1
+  last=$got
+  sleep 0.05
+done
+[ -n "$restarted" ] || fail "no execution worker answered a client's query"
+! compose logs backend | grep -q "execution worker" || fail "an execution worker failed"
 
 # A restart keeps the data, the code and the credentials: the same key still works (a key is issued anew each
 # time, with its own time and nonce, so the secret is what stays the same).

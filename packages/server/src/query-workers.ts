@@ -4,10 +4,11 @@
 // (`execution-code.ts`). Every commit's written keys go to every worker. The worker's module is
 // `execution-worker.ts`.
 //
-// Workers start only where they can read the store themselves (`Persistence.reader`: a SQLite file), under the `vm`
+// Workers start only where they can read the store themselves (`Persistence.reader`: a SQLite file, a Postgres or MySQL database), under the `vm`
 // executor and the process's own clock; the server checks those (§10.4).
+import { availableParallelism } from "node:os";
 import type { Engine, Persistence, StoreReader } from "@bunvex/core";
-import { decodeCallOutcome, formatDuration, workerOutcomesChecked } from "@bunvex/core";
+import { decodeCallOutcome, formatDuration, inExecutable, threadEntry, workerOutcomesChecked } from "@bunvex/core";
 import { type CodeHeld, CodeShipper, newCodeHeld } from "./execution-code.ts";
 import { ExecutionWorkerError, ExecutionWorkers } from "./execution-workers.ts";
 import type { CodeSources, Functions } from "./functions.ts";
@@ -16,15 +17,27 @@ import type { CodeSources, Functions } from "./functions.ts";
 export type QueryWorkerInit = {
   store: StoreReader;
   cacheBytes: number;
+  /** A database server's store: how many connections its pool opens at most. */
+  connections: number;
   /** Its index cache's budget: the main thread's, shared by the workers. */
   indexCacheBytes: number;
   start: ReturnType<Engine["followerStart"]>;
+  /**
+   * Inside `bunvex-local-backend`, on a database server's store: the module that registers the drivers embedded
+   * there (`@bunvex/persistence/executable`), which a worker imports before it opens the store. Null elsewhere: a
+   * worker imports the drivers as the main thread does.
+   */
+  drivers: string | null;
   /** The file storage's origin, when the server has file storage (`ctx.storage.getUrl`). */
   filesOrigin: string | null;
   builtinEnv: Record<string, string>;
   userTimeoutMs: number;
   systemTimeoutMs: number;
 };
+
+// `scripts/build-binary.ts` embeds it as an entry point of its own; the main thread's `import.meta.url` is the
+// executable's there, where `threadEntry` finds it (a worker's is its own module's).
+const EMBEDDED_DRIVERS = threadEntry(import.meta.url, "persistence/src", "executable.ts");
 
 /** How many code epochs a worker keeps: older ones are forgotten (a call naming one fails as a system error). */
 const CODE_EPOCHS_KEPT = 4;
@@ -50,19 +63,32 @@ export function startQueryWorkers(o: {
   const store = o.persistence.reader?.();
   if (!store || o.max <= 0) return null;
   const { engine, functions } = o;
+  // Q6/Q8: a database server's connections are the deployment's, split between the main thread and the workers.
+  const pooled = o.persistence as { connections?: number; setPoolSize?(n: number): void };
+  let max = o.max;
+  let connections = 0;
+  if (pooled.connections !== undefined && pooled.setPoolSize) {
+    const split = connectionSplit(pooled.connections, max, availableParallelism());
+    if (!split) return null;
+    pooled.setPoolSize(split.main);
+    max = split.workers;
+    connections = split.each;
+  }
   // AD-46's page cache is the deployment's: the store's own connection keeps half, the workers share the rest.
   const cacheBytes = (o.persistence as { cacheBytes?: number }).cacheBytes ?? 0;
-  const workerCache = Math.max(1, Math.floor(cacheBytes / 2 / o.max));
+  const workerCache = Math.max(1, Math.floor(cacheBytes / 2 / max));
   (o.persistence as { setCacheBytes?(bytes: number): void }).setCacheBytes?.(Math.floor(cacheBytes / 2));
-  const indexCacheBytes = Math.floor((engine.indexCache?.maxBytes ?? 0) / o.max);
+  const indexCacheBytes = Math.floor((engine.indexCache?.maxBytes ?? 0) / max);
   const pool = new ExecutionWorkers({
-    max: o.max,
+    max,
     ...(o.entry ? { entry: o.entry } : {}),
     ...(o.log ? { log: o.log } : {}),
     init: () =>
       JSON.stringify({
         store,
         cacheBytes: workerCache,
+        connections,
+        drivers: store.driver !== "sqlite" && inExecutable(import.meta.url) ? EMBEDDED_DRIVERS : null,
         indexCacheBytes,
         start: engine.followerStart(),
         filesOrigin: o.filesOrigin,
@@ -118,6 +144,23 @@ export function startQueryWorkers(o: {
     },
   };
   return pool;
+}
+
+/**
+ * How a pool of `total` connections is shared (STUDY-194 Q6, Q8): the main thread keeps a quarter, at least 8, for its
+ * commits and the calls it runs; the workers share the rest, at least 2 each, so there are at most `max`, one per core
+ * and half the rest. Null when no worker would get 2: the pool stays whole.
+ */
+export function connectionSplit(
+  total: number,
+  max: number,
+  cores: number,
+): { main: number; workers: number; each: number } | null {
+  const main = Math.max(8, Math.floor(total / 4));
+  const rest = total - main;
+  const workers = Math.min(max, cores, Math.floor(rest / 2));
+  if (workers <= 0) return null;
+  return { main, workers, each: Math.floor(rest / workers) };
 }
 
 /**

@@ -1,21 +1,11 @@
 // `bunvex-local-backend` (STUDY-40 L1, STUDY-39): the backend as one executable, the counterpart of Convex's
 // precompiled `convex-local-backend`. `bun build --compile` cannot follow the persistence drivers' computed
-// imports, so they and their database clients are imported here and registered for the loaders.
-import { provideBundledModules } from "@bunvex/core";
-import * as mysqlPersistence from "@bunvex/persistence/mysql";
-import * as postgresPersistence from "@bunvex/persistence/postgres";
+// imports, so `@bunvex/persistence/executable` imports them and their database clients and registers them for the
+// loaders.
+import "@bunvex/persistence/executable";
 import { createProcessExecutor } from "@bunvex/sandbox";
 import { localBackendMain } from "@bunvex/server";
 import { provideProcessExecutor } from "@bunvex/server/executor";
-import * as mysql2 from "mysql2/promise";
-import postgres from "postgres";
-
-provideBundledModules({
-  "@bunvex/persistence/postgres": postgresPersistence,
-  "@bunvex/persistence/mysql": mysqlPersistence,
-  postgres,
-  "mysql2/promise": mysql2,
-});
 
 // The function sandbox (AD-44, STUDY-171 §8): `BUNVEX_FUNCTION_SANDBOX=process` runs queries and mutations in its
 // children. The server cannot import it (its child runs the server's loader), so it is provided here.

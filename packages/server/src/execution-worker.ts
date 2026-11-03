@@ -27,7 +27,10 @@ const noBlobs = new Proxy({} as ConstructorParameters<typeof FileStorage>[1], {
 serveExecutionThread({
   async init(text) {
     const o = JSON.parse(text) as QueryWorkerInit;
-    const store = await openStoreReader(o.store, { cacheBytes: o.cacheBytes });
+    // Inside `bunvex-local-backend` the database drivers are registered by a module of their own: this thread's
+    // registry is its own.
+    if (o.drivers) await import(o.drivers);
+    const store = await openStoreReader(o.store, { cacheBytes: o.cacheBytes, connections: o.connections });
     const e = new Engine(defineSchema({}), store, { callCodec: false, indexCache: false });
     e.follow(o.start, followerOpsOver(ask), { indexCacheBytes: o.indexCacheBytes });
     engine = e;

@@ -30,7 +30,10 @@ export type IndexedDoc = { id: InternalId; ts: bigint; json: string };
 export type IndexEntryAt = IndexWrite & { ts: bigint };
 
 /** What another thread needs to open a store for reading (`Persistence.reader`): plain data, sent to it as JSON. */
-export type StoreReader = { driver: "sqlite"; path: string };
+export type StoreReader =
+  | { driver: "sqlite"; path: string }
+  /** A database server's store: its URL and the options its driver opens connections with. */
+  | { driver: "postgres" | "mysql"; url: string; options: Record<string, unknown> };
 
 export interface Persistence {
   /** Apply one commit's writes at `ts`. Called by the committer, possibly several times per group. */

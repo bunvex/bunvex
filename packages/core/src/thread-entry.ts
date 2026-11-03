@@ -4,8 +4,12 @@
 // `<packages-relative path>` at its embedded root; and there, every module's `import.meta.url` is the executable's
 // own path at that root (`file:///$bunfs/root/bunvex-local-backend`), not its module's.
 
-/** True when `here` (a module's `import.meta.url`) is not a source file: the module is inside an executable. */
-const compiled = (here: string) => !/\.[cm]?[jt]sx?$/.test(new URL(here).pathname);
+/**
+ * True when `here` (a module's `import.meta.url`) is not a source file: the module is inside an executable.
+ *
+ * @internal
+ */
+export const inExecutable = (here: string) => !/\.[cm]?[jt]sx?$/.test(new URL(here).pathname);
 
 /**
  * The URL to start a Worker at: `file`, beside the module whose `import.meta.url` is `here`; inside the executable,
@@ -14,5 +18,5 @@ const compiled = (here: string) => !/\.[cm]?[jt]sx?$/.test(new URL(here).pathnam
  * @internal
  */
 export function threadEntry(here: string, dir: string, file: string): string {
-  return new URL(compiled(here) ? `./${dir}/${file}` : `./${file}`, here).href;
+  return new URL(inExecutable(here) ? `./${dir}/${file}` : `./${file}`, here).href;
 }

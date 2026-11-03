@@ -69,6 +69,7 @@ import {
   renewTimeoutMs,
   retryOnce,
   type SplitRow,
+  type StoreReader,
   scanLatest,
   splitKey,
   splitPages,
@@ -254,6 +255,48 @@ export const connectionLost = (e: unknown) => {
   return typeof code === "string" && (LOST.has(code) || code.startsWith("08"));
 };
 
+// STUDY-194 §10.2: the same connections for the store and for an execution worker's reader.
+/** The options a Postgres store was opened with that its readers open with too: plain data. */
+type PostgresReaderOptions = { idleInTransactionMs?: number; timeoutMs?: number; idleMs?: number } & TlsOptions;
+
+/** How a store's pools are made: the driver's parse of the URL, its TLS, and the session settings of each connection. */
+async function pools(url: string, opts: PostgresReaderOptions) {
+  const postgres = await loadPeer<typeof postgresDriver>("postgres", "postgres");
+  const conn = `bunvex-${Buffer.from(crypto.getRandomValues(new Uint8Array(8))).toString("hex")}`;
+  const timeoutMs = opts.timeoutMs ?? 30_000;
+  // The driver's own parse of the URL (hosts, ports, socket path, PG* environment); it connects nothing.
+  const target = postgres(url, { max: 1 }).options as unknown as Parameters<typeof postgresTls>[1];
+  const { ssl, target_session_attrs } = await postgresTls(url, target, opts);
+  const newPool = (max: number) =>
+    postgres(url, {
+      max,
+      onnotice: () => {},
+      prepare: true,
+      // No catalog query per new connection: every parameter here is a scalar (rows travel as jsonb), and
+      // with the planner settings below that query took ~0.75 s per connection (measured), stalling every
+      // connection the pool opened under load.
+      fetch_types: false,
+      // A connection idle that long is closed (Convex's POSTGRES_INACTIVE_CONNECTION_LIFETIME_SECS, 90 s; the
+      // server passes it): postgres.js counts whole seconds.
+      ...(opts.idleMs ? { idle_timeout: Math.max(1, Math.round(opts.idleMs / 1000)) } : {}),
+      ssl: ssl as postgresDriver.Options<{}>["ssl"],
+      target_session_attrs,
+      // A connection that cannot be opened within the timeout fails too (postgres.js counts whole seconds).
+      ...(timeoutMs > 0 && timeoutMs < Infinity ? { connect_timeout: Math.max(1, Math.ceil(timeoutMs / 1000)) } : {}),
+      connection: {
+        application_name: conn,
+        idle_in_transaction_session_timeout: opts.idleInTransactionMs ?? 2500,
+        // As Convex's planner hints (`Set(enable_seqscan OFF)`, `Set(enable_bitmapscan OFF)` on its reads and
+        // deletes): Convex's `indexes` index has no ts column, so the planner prices a range's newest versions
+        // as a full sort and picks a sequential scan; walking the index with an incremental sort is ~20× faster
+        // (1.7 ms against 32 ms for a range of 20 over 160k rows, measured).
+        enable_seqscan: "off",
+        enable_bitmapscan: "off",
+      },
+    });
+  return { newPool, conn, timeoutMs };
+}
+
 export class PostgresPersistence implements Persistence, Lease, ReadOnlyFlag, RetentionStore {
   readonly driver = "postgres";
   /** PERSIST-01 C7 as Convex's lease: the newest process wins (DV-413). */
@@ -276,14 +319,19 @@ export class PostgresPersistence implements Persistence, Lease, ReadOnlyFlag, Re
   private retired = new Set<Promise<void>>();
   private closed = false;
   private constructor(
-    private newPool: () => postgresDriver.Sql,
+    /** A pool of at most `max` connections. */
+    private newPool: (max: number) => postgresDriver.Sql,
+    /** How many connections the pool opens at most (`setPoolSize`). */
+    private poolSize: number,
+    /** How another thread opens a reader of this store (`reader`); null for a reader itself. */
+    private readerOf: StoreReader | null,
     /** This instance's connections' application_name: an acquisition held up by a writer paused inside its
      *  flush ends the sessions that block it (see acquireLease). */
     private conn: string,
     /** The client-side timeout of one round trip (STUDY-25 L3). */
     private timeoutMs: number,
   ) {
-    this.sql = newPool();
+    this.sql = newPool(poolSize);
   }
 
   /**
@@ -304,40 +352,15 @@ export class PostgresPersistence implements Persistence, Lease, ReadOnlyFlag, Re
     pool = 16,
     opts: { idleInTransactionMs?: number; timeoutMs?: number; idleMs?: number } & OpenOptions & TlsOptions = {},
   ) {
-    const postgres = await loadPeer<typeof postgresDriver>("postgres", "postgres");
-    const conn = `bunvex-${Buffer.from(crypto.getRandomValues(new Uint8Array(8))).toString("hex")}`;
-    const timeoutMs = opts.timeoutMs ?? 30_000;
-    // The driver's own parse of the URL (hosts, ports, socket path, PG* environment); it connects nothing.
-    const target = postgres(url, { max: 1 }).options as unknown as Parameters<typeof postgresTls>[1];
-    const { ssl, target_session_attrs } = await postgresTls(url, target, opts);
-    const newPool = () =>
-      postgres(url, {
-        max: pool,
-        onnotice: () => {},
-        prepare: true,
-        // No catalog query per new connection: every parameter here is a scalar (rows travel as jsonb), and
-        // with the planner settings below that query took ~0.75 s per connection (measured), stalling every
-        // connection the pool opened under load.
-        fetch_types: false,
-        // A connection idle that long is closed (Convex's POSTGRES_INACTIVE_CONNECTION_LIFETIME_SECS, 90 s; the
-        // server passes it): postgres.js counts whole seconds.
-        ...(opts.idleMs ? { idle_timeout: Math.max(1, Math.round(opts.idleMs / 1000)) } : {}),
-        ssl: ssl as postgresDriver.Options<{}>["ssl"],
-        target_session_attrs,
-        // A connection that cannot be opened within the timeout fails too (postgres.js counts whole seconds).
-        ...(timeoutMs > 0 && timeoutMs < Infinity ? { connect_timeout: Math.max(1, Math.ceil(timeoutMs / 1000)) } : {}),
-        connection: {
-          application_name: conn,
-          idle_in_transaction_session_timeout: opts.idleInTransactionMs ?? 2500,
-          // As Convex's planner hints (`Set(enable_seqscan OFF)`, `Set(enable_bitmapscan OFF)` on its reads and
-          // deletes): Convex's `indexes` index has no ts column, so the planner prices a range's newest versions
-          // as a full sort and picks a sequential scan; walking the index with an incremental sort is ~20× faster
-          // (1.7 ms against 32 ms for a range of 20 over 160k rows, measured).
-          enable_seqscan: "off",
-          enable_bitmapscan: "off",
-        },
-      });
-    const store = new PostgresPersistence(newPool, conn, timeoutMs);
+    const { newPool, conn, timeoutMs } = await pools(url, opts);
+    const options: PostgresReaderOptions = {
+      ...(opts.idleInTransactionMs === undefined ? {} : { idleInTransactionMs: opts.idleInTransactionMs }),
+      ...(opts.timeoutMs === undefined ? {} : { timeoutMs: opts.timeoutMs }),
+      ...(opts.idleMs === undefined ? {} : { idleMs: opts.idleMs }),
+      ...(opts.requireSsl === undefined ? {} : { requireSsl: opts.requireSsl }),
+      ...(opts.caFile === undefined ? {} : { caFile: opts.caFile }),
+    };
+    const store = new PostgresPersistence(newPool, pool, { driver: "postgres", url, options }, conn, timeoutMs);
     try {
       await store.bootstrap(opts);
     } catch (e) {
@@ -345,6 +368,36 @@ export class PostgresPersistence implements Persistence, Lease, ReadOnlyFlag, Re
       throw explainTlsError(e, "Postgres", "PG_CA_FILE");
     }
     return store;
+  }
+
+  // STUDY-194 §10.2: an execution worker's connections, opened from `reader()`'s description.
+  /**
+   * Opens a store that another process or thread writes, to read it only, with a pool of `pool` connections: no
+   * checks, no tables created, no lease taken. A write fails, as one without the lease does.
+   */
+  static async openReader(url: string, pool: number, opts: PostgresReaderOptions = {}) {
+    const { newPool, conn, timeoutMs } = await pools(url, opts);
+    return new PostgresPersistence(newPool, pool, null, conn, timeoutMs);
+  }
+
+  /** How another thread opens this store to read it: its URL and connection options. None for a reader. */
+  reader(): StoreReader | undefined {
+    return this.readerOf ?? undefined;
+  }
+
+  /** How many connections the pool opens at most. */
+  get connections() {
+    return this.poolSize;
+  }
+
+  /**
+   * Opens at most `n` connections from now on: the pool is replaced (calls running on the old one finish there).
+   * The server gives its execution workers the rest of the deployment's connections.
+   */
+  setPoolSize(n: number) {
+    if (n === this.poolSize) return;
+    this.poolSize = n;
+    this.retire(this.sql);
   }
 
   /**
@@ -382,7 +435,7 @@ export class PostgresPersistence implements Persistence, Lease, ReadOnlyFlag, Re
 
   private retire(sql: postgresDriver.Sql) {
     if (this.sql !== sql || this.closed) return; // already retired by another call that timed out
-    this.sql = this.newPool();
+    this.sql = this.newPool(this.poolSize);
     // Calls already running on the old pool may finish; whatever still waits after one more timeout is
     // destroyed (postgres.js counts seconds).
     const ending: Promise<void> = sql
