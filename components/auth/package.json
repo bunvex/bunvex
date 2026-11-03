@@ -14,6 +14,9 @@
     "authentication",
     "sessions"
   ],
+  "bin": {
+    "auth": "./src/cli/init.ts"
+  },
   "exports": {
     ".": "./src/index.ts",
     "./server": "./src/server/index.ts",

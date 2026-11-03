@@ -10,6 +10,16 @@ results, defaults, messages and log lines, so a Convex export of its data import
 
 ## Setup
 
+Install the package, then let it write the three files below, as a start, from your project's root:
+
+```sh
+bun add @bunvex/auth
+bunx @bunvex/auth
+```
+
+It writes `bunvex/auth.config.ts`, `bunvex/bunvex.config.ts` and `bunvex/auth.ts`, never over a file you have: for one
+that exists, it prints what the file should contain. Then add a sign-in method, as below.
+
 Mount the components your methods use:
 
 ```ts
