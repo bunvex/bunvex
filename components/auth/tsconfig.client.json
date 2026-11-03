@@ -6,5 +6,5 @@
     "lib": ["ESNext", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx"
   },
-  "include": ["src/browser", "src/methods/oauth", "test-react"]
+  "include": ["src/browser", "src/methods/oauth", "src/react", "src/methods/*/react.tsx", "test-react"]
 }

@@ -18,9 +18,12 @@
     ".": "./src/index.ts",
     "./server": "./src/server/index.ts",
     "./browser": "./src/browser/index.ts",
+    "./react": "./src/react/index.tsx",
     "./methods/username-password": "./src/methods/username-password/index.ts",
     "./methods/username-password/server": "./src/methods/username-password/server.ts",
+    "./methods/username-password/react": "./src/methods/username-password/react.tsx",
     "./methods/anonymous/server": "./src/methods/anonymous/server.ts",
+    "./methods/anonymous/react": "./src/methods/anonymous/react.tsx",
     "./bunvex.config": {
       "@bunvex/component-source": "./src/component/bunvex.config.ts",
       "bunvex": "./src/component/bunvex.config.ts",
@@ -83,10 +86,30 @@
     "@bunvex/rate-limiter": "workspace:^"
   },
   "peerDependencies": {
+    "@bunvex/client": "workspace:^",
+    "@bunvex/react": "workspace:^",
     "@bunvex/server": "workspace:^",
-    "@bunvex/values": "workspace:^"
+    "@bunvex/values": "workspace:^",
+    "react": "^19.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@bunvex/client": {
+      "optional": true
+    },
+    "@bunvex/react": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    }
   },
   "devDependencies": {
+    "@bunvex/client": "workspace:*",
+    "@bunvex/react": "workspace:*",
+    "@testing-library/react": "^16.3.3",
+    "@types/react": "^19.3.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
     "@happy-dom/global-registrator": "^21.0.4",
     "hash-wasm": "^4.12.0",
     "@bunvex/testing": "workspace:*",

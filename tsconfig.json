@@ -20,6 +20,9 @@
     "packages/react-auth0",
     // @bunvex/auth's clients: their own tsconfig, with DOM types.
     "components/auth/src/browser",
-    "components/auth/src/methods/oauth"
+    "components/auth/src/methods/oauth",
+    "components/auth/src/react",
+    "components/auth/src/methods/username-password/react.tsx",
+    "components/auth/src/methods/anonymous/react.tsx"
   ]
 }
