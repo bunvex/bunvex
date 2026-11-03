@@ -102,11 +102,24 @@ loopback and private networks, `none` nothing).
 **Where functions run (the function sandbox).** `BUNVEX_FUNCTION_SANDBOX` chooses the executor, and
 `--function-sandbox` on the command line wins over it:
 - `vm` (the default): functions run in the backend's own process, in `node:vm` contexts. They get their own
-  globals, but this is not a security boundary: run only code you trust.
-- `process` (**coming**): each call in its own OS-sandboxed process, with a real timeout and a 96 MiB memory
-  cap per call (`ISOLATE_MAX_USER_HEAP_SIZE` + `ISOLATE_MAX_HEAP_EXTRA_SIZE`). `BUNVEX_FUNCTION_SANDBOX_ISOLATION`
-  (`auto`, `namespaces`, `landlock` or `none`) will pick its layers. Linux only; not on Windows. This release
-  refuses to start with it, saying it is not available yet.
+  globals, but this is not a security boundary: run only code you trust. Under `vm`, four things differ from Convex,
+  whose functions each run in an isolate of their own:
+  - **A synchronous loop is not stopped.** The 1 s limit of a query or mutation is checked at each database call and
+    at the end, so code that never yields (`for (;;) {}`) blocks the whole backend: every function, the sync
+    WebSockets and the HTTP API.
+  - **No memory cap per call.** A function that would fail on Convex past 64 MiB keeps running, and a large one can
+    take the backend's memory.
+  - **An unhandled promise rejection does not fail the function.** It is printed to the backend's log, and the
+    function goes on: a mutation that Convex would fail commits its writes. Await or catch every promise.
+  - **Module-level variables are shared.** A module is evaluated once per deployed version, and its top-level
+    variables live between calls (on Convex, only for functions that opt into `experimental_reuseContext`). Do not
+    keep one user's data in a module variable.
+- `process`: each call runs in a separate process, with a real timeout and a 96 MiB memory cap per call
+  (`ISOLATE_MAX_USER_HEAP_SIZE` + `ISOLATE_MAX_HEAP_EXTRA_SIZE`), and an unhandled rejection fails the call, as on
+  Convex. It costs about 55–140 µs more per call and 40–280 µs more per database call. This release runs it only
+  with `BUNVEX_FUNCTION_SANDBOX_ISOLATION=none`, which adds no OS isolation, so it is not a security boundary yet;
+  `auto`, `namespaces` and `landlock` (Linux only) refuse to start until they are built. `"use node"` actions are
+  not available under it yet. Not on Windows.
 
 A value outside these lists stops the backend at start. `bunvex dev` passes its environment to the local
 backend it starts, and never sets the variable itself.
