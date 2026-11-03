@@ -8,14 +8,17 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type CallOutcome, defineSchema, Engine, encodeCallOutcome } from "@bunvex/core";
+import { type CallOutcome, defineSchema, Engine, encodeCallOutcome, type Persistence } from "@bunvex/core";
 import { SqlitePersistence } from "@bunvex/core/persistence/sqlite";
 import { MemoryBlobStore } from "@bunvex/file-storage";
+import { MysqlPersistence } from "@bunvex/persistence/mysql";
+import { PostgresPersistence } from "@bunvex/persistence/postgres";
+import { SQL } from "bun";
 import { adminKeyCipherKey, issueAdminKey } from "../src/admin-keys.ts";
 import { encodeCallError } from "../src/call-errors.ts";
 import type { ModuleSource } from "../src/code-version.ts";
 import { Functions } from "../src/functions.ts";
-import { outcomeMismatch } from "../src/query-workers.ts";
+import { connectionSplit, outcomeMismatch } from "../src/query-workers.ts";
 import { createServer } from "../src/server.ts";
 
 const SECRET = "ef".repeat(32);
@@ -70,10 +73,33 @@ export const countThenAll = query({ args: { x: v.number() }, handler: async (ctx
 export const version = query({ args: { x: v.number() }, handler: (_ctx, { x }) => ["${version}", x] });`,
   );
 
-async function deployment(o: { workers?: number } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "bunvex-query-workers-"));
-  dirs.push(dir);
-  const engine = await new Engine(defineSchema({}), new SqlitePersistence(join(dir, "db.sqlite"), { durable: true }), {
+// STUDY-194 step v: a database server's store too, when PG_URL or MYSQL_URL names one (an EMPTY scratch database).
+const PG_URL = process.env.PG_URL;
+const MYSQL_URL = process.env.MYSQL_URL;
+const STORES = ["sqlite", ...(PG_URL ? ["postgres" as const] : []), ...(MYSQL_URL ? ["mysql" as const] : [])] as const;
+type Store = (typeof STORES)[number];
+
+/** A store of `kind`, empty. */
+async function emptyStore(kind: Store): Promise<Persistence> {
+  if (kind === "sqlite") {
+    const dir = mkdtempSync(join(tmpdir(), "bunvex-query-workers-"));
+    dirs.push(dir);
+    return new SqlitePersistence(join(dir, "db.sqlite"), { durable: true });
+  }
+  const url = kind === "postgres" ? PG_URL! : MYSQL_URL!;
+  // Bun's MySQL client authenticates as MySQL 8's default asks only over TLS: its own certificates, unverified.
+  const sql = kind === "mysql" ? new SQL(url, { tls: { rejectUnauthorized: false } }) : new SQL(url);
+  try {
+    await sql.unsafe("drop table if exists documents, indexes, leases, read_only, persistence_globals");
+  } finally {
+    await sql.close();
+  }
+  const tls = { requireSsl: !process.env.DO_NOT_REQUIRE_SSL };
+  return kind === "postgres" ? PostgresPersistence.open(url, 16, tls) : MysqlPersistence.open(url, 16, tls);
+}
+
+async function deployment(o: { workers?: number; store?: Store } = {}) {
+  const engine = await new Engine(defineSchema({}), await emptyStore(o.store ?? "sqlite"), {
     instanceName: NAME,
     instanceSecret: SECRET,
     storedSchema: true,
@@ -154,127 +180,128 @@ function noMismatch(r: Record<string, any>) {
   expect(String(r.errorMessage ?? "")).not.toContain("differs from the in-thread one");
 }
 
-describe("queries on execution workers answer as in-thread", () => {
-  test("generated programs: writes, then queries of every kind, each checked against an in-thread run", async () => {
-    const d = await deployment();
-    const before = d.workers.counts.answered;
-    let ran = 0;
-    for (const seed of [1, 2, 3]) {
-      const r = rng(seed);
-      const ids: string[] = [];
-      for (let step = 0; step < 60; step++) {
-        const roll = r.next();
-        if (roll < 0.3 || ids.length === 0) {
-          const w = await d.mutation("q:add", {
-            k: r.pick(KEYS),
-            n: r.int(3),
-            body: `${r.pick(WORDS)} ${r.pick(WORDS)}`,
-          });
-          ids.push(w.value);
-          continue;
-        }
-        if (roll < 0.35) {
-          const id = ids.splice(r.int(ids.length), 1)[0]!;
-          await d.mutation("q:remove", { id });
-          continue;
-        }
-        const x = step + seed * 1000;
-        const calls: [string, object][] = [
-          ["q:all", { order: r.pick(["asc", "desc"]) }],
-          ["q:range", { lo: r.pick(KEYS), hi: r.pick(KEYS) }],
-          ["q:latest", { k: r.pick(KEYS) }],
-          ["q:where", { n: r.int(4) }],
-          ["q:counted", {}],
-          ["q:page", { cursor: null, n: 1 + r.int(4) }],
-          ["q:found", { text: r.pick(WORDS) }],
-          ["q:one", { k: r.pick(KEYS) }],
-          ["q:get", { id: r.pick([...ids, "nope"]) }],
-          ["q:env", { x }],
-          ["q:clock", { x }],
-          ["q:chatty", { n: r.int(5) }],
-          ["q:thrown", { code: x }],
-          ["q:broken", { x }],
-          ["q:countThenAll", { x }],
-        ];
-        const [path, args] = r.pick(calls);
-        const out = await d.query(path, args);
-        noMismatch(out);
-        ran++;
-        // The next page, from the cursor the first gave.
-        if (path === "q:page" && out.status === "success" && !out.value.isDone) {
-          noMismatch(await d.query("q:page", { cursor: out.value.continueCursor, n: 2 }));
+for (const store of STORES)
+  describe(`queries on execution workers answer as in-thread (${store})`, () => {
+    test("generated programs: writes, then queries of every kind, each checked against an in-thread run", async () => {
+      const d = await deployment({ store });
+      const before = d.workers.counts.answered;
+      let ran = 0;
+      for (const seed of [1, 2, 3]) {
+        const r = rng(seed);
+        const ids: string[] = [];
+        for (let step = 0; step < 60; step++) {
+          const roll = r.next();
+          if (roll < 0.3 || ids.length === 0) {
+            const w = await d.mutation("q:add", {
+              k: r.pick(KEYS),
+              n: r.int(3),
+              body: `${r.pick(WORDS)} ${r.pick(WORDS)}`,
+            });
+            ids.push(w.value);
+            continue;
+          }
+          if (roll < 0.35) {
+            const id = ids.splice(r.int(ids.length), 1)[0]!;
+            await d.mutation("q:remove", { id });
+            continue;
+          }
+          const x = step + seed * 1000;
+          const calls: [string, object][] = [
+            ["q:all", { order: r.pick(["asc", "desc"]) }],
+            ["q:range", { lo: r.pick(KEYS), hi: r.pick(KEYS) }],
+            ["q:latest", { k: r.pick(KEYS) }],
+            ["q:where", { n: r.int(4) }],
+            ["q:counted", {}],
+            ["q:page", { cursor: null, n: 1 + r.int(4) }],
+            ["q:found", { text: r.pick(WORDS) }],
+            ["q:one", { k: r.pick(KEYS) }],
+            ["q:get", { id: r.pick([...ids, "nope"]) }],
+            ["q:env", { x }],
+            ["q:clock", { x }],
+            ["q:chatty", { n: r.int(5) }],
+            ["q:thrown", { code: x }],
+            ["q:broken", { x }],
+            ["q:countThenAll", { x }],
+          ];
+          const [path, args] = r.pick(calls);
+          const out = await d.query(path, args);
+          noMismatch(out);
           ran++;
+          // The next page, from the cursor the first gave.
+          if (path === "q:page" && out.status === "success" && !out.value.isDone) {
+            noMismatch(await d.query("q:page", { cursor: out.value.continueCursor, n: 2 }));
+            ran++;
+          }
         }
       }
-    }
-    // Most of them ran on a worker (a cached result or a call made while none was ready did not).
-    expect(d.workers.counts.answered - before).toBeGreaterThan(ran / 2);
-    expect(d.workers.counts.died + d.workers.counts.stuck).toBe(0);
-  }, 120_000);
+      // Most of them ran on a worker (a cached result or a call made while none was ready did not).
+      expect(d.workers.counts.answered - before).toBeGreaterThan(ran / 2);
+      expect(d.workers.counts.died + d.workers.counts.stuck).toBe(0);
+    }, 120_000);
 
-  test("a worker's query does not see a commit after its snapshot, and its result is not served after it", async () => {
-    const d = await deployment({ workers: 1 });
-    await d.mutation("q:add", { k: "a", n: 1, body: "x" });
-    // Hold the query's count on the main thread while a mutation commits.
-    let release!: () => void;
-    const held = new Promise<void>((r) => {
-      release = r;
-    });
-    const answer = d.engine.answerOp.bind(d.engine);
-    let asked = false;
-    d.engine.answerOp = (text: string) => {
-      if (!asked && text[0] === "n") {
-        asked = true;
-        return held.then(() => answer(text)) as unknown as string;
-      }
-      return answer(text);
-    };
-    const pending = d.query("q:countThenAll", { x: 1 });
-    for (let i = 0; i < 200 && !asked; i++) await Bun.sleep(5);
-    expect(asked).toBe(true);
-    await d.mutation("q:add", { k: "b", n: 2, body: "y" });
-    release();
-    const r = await pending;
-    noMismatch(r);
-    expect(r.value).toEqual([1, 1]);
-    // The same query again: its read set covered the new document, so it runs again and sees it.
-    expect((await d.query("q:countThenAll", { x: 1 })).value).toEqual([2, 2]);
-  });
-
-  test("a query that waited for its permit reads at the snapshot it was given, not at the commits since", async () => {
-    const d = await deployment({ workers: 1 });
-    await d.mutation("q:add", { k: "a", n: 1, body: "x" });
-    // Every permit taken: the query chooses its snapshot, then waits.
-    const limiter = d.functions.limits.query;
-    const held = await Promise.all(Array.from({ length: limiter.max }, () => limiter.acquire()));
-    const pending = d.query("q:countThenAll", { x: 2 });
-    for (let i = 0; i < 200 && limiter.outstanding.queued === 0; i++) await Bun.sleep(5);
-    expect(limiter.outstanding.queued).toBe(1);
-    // A commit the worker hears before the query reaches it.
-    await d.mutation("q:add", { k: "b", n: 2, body: "y" });
-    await Bun.sleep(20);
-    for (const release of held) release();
-    const r = await pending;
-    noMismatch(r);
-    expect(r.value).toEqual([1, 1]);
-  });
-
-  test("a push while queries are in flight: each answers from the code it was checked against, none fails", async () => {
-    const d = await deployment();
-    const calls: Promise<Record<string, any>>[] = [];
-    for (let i = 0; i < 100; i++) calls.push(d.query("q:version", { x: i }));
-    const pushed = d.push("v2");
-    for (let i = 100; i < 200; i++) calls.push(d.query("q:version", { x: i }));
-    await pushed;
-    const out = await Promise.all(calls);
-    for (const r of out) {
+    test("a worker's query does not see a commit after its snapshot, and its result is not served after it", async () => {
+      const d = await deployment({ workers: 1, store });
+      await d.mutation("q:add", { k: "a", n: 1, body: "x" });
+      // Hold the query's count on the main thread while a mutation commits.
+      let release!: () => void;
+      const held = new Promise<void>((r) => {
+        release = r;
+      });
+      const answer = d.engine.answerOp.bind(d.engine);
+      let asked = false;
+      d.engine.answerOp = (text: string) => {
+        if (!asked && text[0] === "n") {
+          asked = true;
+          return held.then(() => answer(text)) as unknown as string;
+        }
+        return answer(text);
+      };
+      const pending = d.query("q:countThenAll", { x: 1 });
+      for (let i = 0; i < 200 && !asked; i++) await Bun.sleep(5);
+      expect(asked).toBe(true);
+      await d.mutation("q:add", { k: "b", n: 2, body: "y" });
+      release();
+      const r = await pending;
       noMismatch(r);
-      expect(r.status).toBe("success");
-      expect(["v1", "v2"]).toContain(r.value[0]);
-    }
-    expect((await d.query("q:version", { x: 1000 })).value).toEqual(["v2", 1000]);
-  }, 60_000);
-});
+      expect(r.value).toEqual([1, 1]);
+      // The same query again: its read set covered the new document, so it runs again and sees it.
+      expect((await d.query("q:countThenAll", { x: 1 })).value).toEqual([2, 2]);
+    });
+
+    test("a query that waited for its permit reads at the snapshot it was given, not at the commits since", async () => {
+      const d = await deployment({ workers: 1, store });
+      await d.mutation("q:add", { k: "a", n: 1, body: "x" });
+      // Every permit taken: the query chooses its snapshot, then waits.
+      const limiter = d.functions.limits.query;
+      const held = await Promise.all(Array.from({ length: limiter.max }, () => limiter.acquire()));
+      const pending = d.query("q:countThenAll", { x: 2 });
+      for (let i = 0; i < 200 && limiter.outstanding.queued === 0; i++) await Bun.sleep(5);
+      expect(limiter.outstanding.queued).toBe(1);
+      // A commit the worker hears before the query reaches it.
+      await d.mutation("q:add", { k: "b", n: 2, body: "y" });
+      await Bun.sleep(20);
+      for (const release of held) release();
+      const r = await pending;
+      noMismatch(r);
+      expect(r.value).toEqual([1, 1]);
+    });
+
+    test("a push while queries are in flight: each answers from the code it was checked against, none fails", async () => {
+      const d = await deployment({ store });
+      const calls: Promise<Record<string, any>>[] = [];
+      for (let i = 0; i < 100; i++) calls.push(d.query("q:version", { x: i }));
+      const pushed = d.push("v2");
+      for (let i = 100; i < 200; i++) calls.push(d.query("q:version", { x: i }));
+      await pushed;
+      const out = await Promise.all(calls);
+      for (const r of out) {
+        noMismatch(r);
+        expect(r.status).toBe("success");
+        expect(["v1", "v2"]).toContain(r.value[0]);
+      }
+      expect((await d.query("q:version", { x: 1000 })).value).toEqual(["v2", 1000]);
+    }, 60_000);
+  });
 
 describe("the page cache (STUDY-194 Q9)", () => {
   test("the store's own connection keeps half of the deployment's cache once workers can start", async () => {
@@ -362,5 +389,19 @@ describe("the differential check's comparison", () => {
   test("the app's own frames and the error's other fields are", () => {
     expect(outcomeMismatch(failed(at(479, "app.js:12:79")), failed(at(479, "app.js:13:79")))).toStartWith("error: ");
     expect(outcomeMismatch(failed({ code: 1 }), failed({ code: 2 }))).toStartWith("error: ");
+  });
+});
+
+describe("the connections of a database server's store (STUDY-194 Q6, Q8)", () => {
+  test("the main thread keeps a quarter, at least 8; the workers share the rest, at least 2 each, one per core", () => {
+    expect(connectionSplit(128, 2, 4)).toEqual({ main: 32, workers: 2, each: 48 });
+    expect(connectionSplit(128, 16, 4)).toEqual({ main: 32, workers: 4, each: 24 });
+    expect(connectionSplit(16, 8, 8)).toEqual({ main: 8, workers: 4, each: 2 });
+    expect(connectionSplit(10, 4, 4)).toEqual({ main: 8, workers: 1, each: 2 });
+  });
+
+  test("a pool too small for one worker's 2 stays whole: no worker starts", () => {
+    expect(connectionSplit(9, 4, 4)).toBeNull();
+    expect(connectionSplit(128, 0, 4)).toBeNull();
   });
 });

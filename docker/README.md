@@ -106,18 +106,16 @@ loopback and private networks, `none` nothing).
   whose functions each run in an isolate of their own:
   - **A synchronous loop is not stopped.** The 1 s limit of a query or mutation is checked at each database call and
     at the end, so code that never yields (`for (;;) {}`) blocks the whole backend: every function, the sync
-    WebSockets and the HTTP API. A query an execution worker answers is the exception: on a SQLite file store, the
-    queries of your deployed code run on worker threads once one has started, and one that never yields is stopped at
-    its limit ("Function execution timed out"), its worker replaced, while the backend goes on answering. Mutations,
+    WebSockets and the HTTP API. A query an execution worker answers is the exception: the queries of your deployed
+    code run on worker threads once one has started, and one that never yields is stopped at its limit ("Function execution timed out"), its worker replaced, while the backend goes on answering. Mutations,
     actions, and the first queries after a start or a deploy still run on the backend's own thread.
   - **No memory cap per call.** A function that would fail on Convex past 64 MiB keeps running, and a large one can
     take the backend's memory.
   - **An unhandled promise rejection does not fail the function.** It is printed to the backend's log, and the
     function goes on: a mutation that Convex would fail commits its writes. Await or catch every promise.
   - **Module-level variables are shared.** A module is evaluated once per deployed version, and its top-level
-    variables live between calls (on Convex, only for functions that opt into `experimental_reuseContext`). On a
-    SQLite file store each execution worker evaluates it once more, so a query sees the variables of the worker it
-    ran on. Do not keep one user's data in a module variable.
+    variables live between calls (on Convex, only for functions that opt into `experimental_reuseContext`). Each
+    execution worker evaluates it once more, so a query sees the variables of the worker it ran on. Do not keep one user's data in a module variable.
 - `process`: each call runs in a separate process, with a real timeout and a 96 MiB memory cap per call
   (`ISOLATE_MAX_USER_HEAP_SIZE` + `ISOLATE_MAX_HEAP_EXTRA_SIZE`), and an unhandled rejection fails the call, as on
   Convex. It costs about 55–140 µs more per call and 40–280 µs more per database call. This release runs it only
@@ -171,10 +169,13 @@ Each variable below is read by the backend in the container; add the ones you se
   and `cache_size = 0` keeps its minimum, the slowest setting. For SQLite's 2 000 KiB, set `2048000`. It applies to
   SQLite stores only. It is the backend's total: with execution workers, the backend's own connection keeps half
   and the workers share the other half.
-- **Execution workers.** On a SQLite file store, the queries of your deployed code run on worker threads, so
-  they use more than one core. `MAX_ISOLATE_WORKERS` (Convex's name; default: the host's cores) caps how many
-  start; `0` runs every query on the backend's own thread. A worker starts when a query finds none free, and each
-  holds its share of the page cache (above) and of the index cache.
+- **Execution workers.** The queries of your deployed code run on worker threads, so they use more than one core.
+  `MAX_ISOLATE_WORKERS` (Convex's name; default: the host's cores) caps how many start; `0` runs every query on the
+  backend's own thread. A worker starts when a query finds none free, and each holds its share of the page cache
+  (above) and of the index cache. On Postgres and MySQL each worker opens connections of its own, within
+  `POSTGRES_MAX_CONNECTIONS` / `MYSQL_MAX_CONNECTIONS` (128), which stay the backend's total: the backend keeps a
+  quarter (at least 8), and the workers share the rest, at least 2 each, so a small pool starts fewer workers, and
+  one under 10 none.
 - **Metrics.** `DISABLE_METRICS_ENDPOINT=false` serves Prometheus metrics at `/metrics` (see the table above).
 - **Logs.** `bunvex logs` follows the functions' log lines; log streams send them, with audit and other events, to
   a webhook, Datadog, Axiom, Sentry or PostHog.

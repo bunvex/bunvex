@@ -188,14 +188,25 @@ export async function openPersistence(c: PersistenceConfig): Promise<Persistence
 
 // An execution worker's connection to the store (STUDY-194 §10.2).
 /**
- * Opens a store for reading from another thread than its writer's, as `Persistence.reader` described it, with a page
- * cache of `cacheBytes`.
+ * Opens a store for reading from another thread than its writer's, as `Persistence.reader` described it: a SQLite
+ * file with a page cache of `cacheBytes`, a database server's with a pool of `connections`.
  */
-export async function openStoreReader(d: StoreReader, opts: { cacheBytes: number }): Promise<Persistence> {
+export async function openStoreReader(
+  d: StoreReader,
+  opts: { cacheBytes: number; connections?: number },
+): Promise<Persistence> {
   switch (d.driver) {
     case "sqlite": {
       const { SqliteStoreReader } = await import("@bunvex/core/persistence/sqlite");
       return new SqliteStoreReader(d.path, opts);
+    }
+    case "postgres": {
+      const { PostgresPersistence } = await external<ReaderDriver<"PostgresPersistence">>("postgres");
+      return PostgresPersistence.openReader(d.url, opts.connections ?? 1, d.options);
+    }
+    case "mysql": {
+      const { MysqlPersistence } = await external<ReaderDriver<"MysqlPersistence">>("mysql");
+      return MysqlPersistence.openReader(d.url, opts.connections ?? 1, d.options);
     }
     default:
       throw new Error(`no reader for the ${(d as { driver: string }).driver} store`);
@@ -208,6 +219,10 @@ export async function openStoreReader(d: StoreReader, opts: { cacheBytes: number
  */
 // biome-ignore lint/suspicious/noExplicitAny: each driver's open() takes its own options
 type Driver<Name extends string> = { [K in Name]: { open(url: string, ...rest: any[]): Promise<Persistence> } };
+/** A driver's reader open (`openStoreReader`). */
+type ReaderDriver<Name extends string> = {
+  [K in Name]: { openReader(url: string, pool: number, options: Record<string, unknown>): Promise<Persistence> };
+};
 
 /** @bunvex/persistence is an optional dependency of the server: loaded only when an external driver is asked for. */
 async function external<T>(name: string): Promise<T> {

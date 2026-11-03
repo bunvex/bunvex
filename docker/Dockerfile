@@ -6,11 +6,12 @@ WORKDIR /src
 COPY . .
 RUN bun install --frozen-lockfile
 ARG BUNVEX_VERSION=docker
-# The Workers (the SQLite writer, the execution worker) are entry points of their own, embedded at their paths under
-# packages/ (as scripts/build-binary.ts).
+# The Workers (the SQLite writer, the execution worker) and the drivers an execution worker imports are entry points
+# of their own, embedded at their paths under packages/ (as scripts/build-binary.ts).
 RUN bun build --compile --minify-syntax --define "BUNVEX_BUILD_VERSION=\"${BUNVEX_VERSION}\"" \
   --root=packages apps/local-backend/local-backend.ts \
   packages/core/src/persistence/sqlite-writer-thread.ts packages/server/src/execution-worker.ts \
+  packages/persistence/src/executable.ts \
   --outfile /bunvex-local-backend
 
 FROM debian:bookworm-slim

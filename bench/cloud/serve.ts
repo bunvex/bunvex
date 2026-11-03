@@ -3,7 +3,8 @@
 // bench/scale/independent.ts, nothing is shared between the servers. SQLite copies the seed's files; Postgres
 // makes each database from the seed as a template, in one Postgres container listening on 127.0.0.1 only.
 // The seed (bench/seed.ts) is made once per persistence and kept for later runs.
-// Env: N (1), PERSISTENCE (sqlite | postgres), HOST (0.0.0.0), BASE_PORT (3500), DATA (/root/bench-data).
+// Env: N (1), PERSISTENCE (sqlite | postgres), HOST (0.0.0.0), BASE_PORT (3500), DATA (/root/bench-data),
+// PG_HOST (a Postgres already running on another box, password `bench`, instead of the container here).
 import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 
 const root = `${import.meta.dir}/../..`;
@@ -12,7 +13,8 @@ const persistence = process.env.PERSISTENCE ?? "sqlite";
 const host = process.env.HOST ?? "0.0.0.0";
 const basePort = Number(process.env.BASE_PORT ?? 3500);
 const data = process.env.DATA ?? "/root/bench-data";
-const pg = "postgres://postgres:bench@127.0.0.1:5432";
+const pgHost = process.env.PG_HOST;
+const pg = `postgres://postgres:bench@${pgHost ?? "127.0.0.1"}:5432`;
 if (persistence !== "sqlite" && persistence !== "postgres") throw new Error(`PERSISTENCE=${persistence}`);
 
 async function run(cmd: string[]): Promise<string> {
@@ -26,9 +28,15 @@ async function run(cmd: string[]): Promise<string> {
   return out;
 }
 const psql = (sql: string) =>
-  run(["docker", "exec", "bench-pg", "psql", "-U", "postgres", "-v", "ON_ERROR_STOP=1", "-qc", sql]);
+  run(
+    (pgHost
+      ? ["docker", "run", "--rm", "--network", "host", "-e", "PGPASSWORD=bench", "postgres:17", "psql", "-h", pgHost]
+      : ["docker", "exec", "bench-pg", "psql"]
+    ).concat(["-U", "postgres", "-v", "ON_ERROR_STOP=1", "-qc", sql]),
+  );
 
 async function startPostgres() {
+  if (pgHost) return psql("select 1");
   if ((await run(["docker", "ps", "-q", "-f", "name=^bench-pg$"])).trim()) return;
   await run(["docker", "rm", "-f", "bench-pg"]).catch(() => {});
   await run(
@@ -89,7 +97,7 @@ const serve = (store: string, port: number) =>
 if (persistence === "postgres") await startPostgres();
 
 const seed = persistence === "sqlite" ? `${data}/sqlite-seed` : "seed";
-const seeded = `${data}/${persistence}-seeded`;
+const seeded = `${data}/${persistence}${pgHost ? `-${pgHost}` : ""}-seeded`;
 if (!existsSync(seeded)) {
   mkdirSync(data, { recursive: true });
   if (persistence === "sqlite") {

@@ -100,6 +100,8 @@ describe("execution workers", () => {
       const init = (reader: unknown): QueryWorkerInit => ({
         store: reader as StoreReader,
         cacheBytes: 1 << 20,
+        connections: 0,
+        drivers: null,
         indexCacheBytes: 0,
         start: engine.followerStart(),
         filesOrigin: null,

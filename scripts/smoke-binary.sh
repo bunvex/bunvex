@@ -58,12 +58,32 @@ export const add = mutation(async ({ db }, { n }: { n: number }) => {
   await db.insert("items", { n });
 });
 export const all = query(async ({ db }) => (await db.query("items").collect()).map((d) => d.n));
+let calls = 0;
+export const counted = query(async (_ctx, _args: { r: number }) => ++calls);
 TS
 cli() { (cd "$WORK/app" && BUNVEX_SELF_HOSTED_URL="http://127.0.0.1:$PORT" BUNVEX_SELF_HOSTED_ADMIN_KEY="$KEY" bun "$ROOT/packages/cli/bin/bunvex.ts" "$@"); }
 cli deploy --typecheck=disable >/dev/null 2>&1 || fail "deploy failed"
 cli run items:add '{ n: 42 }' >/dev/null 2>&1 || fail "run failed"
 [ "$(cli run items:all 2>/dev/null | tr -d ' \n')" = "[42]" ] || fail "unexpected data"
 [ "$want" = postgres ] || [ -d "$WORK/bunvex_local_storage/modules" ] || fail "no pushed code in bunvex_local_storage"
+# A client's queries run on the execution workers (STUDY-194): the first starts one, the next run there. Each worker
+# opens the store itself, with the drivers embedded beside it; one that cannot is in the log. Module state is per
+# worker (DV-573), so a count that starts again shows a worker answered (each call's args differ: none is cached).
+counted() {
+  curl -sf "http://127.0.0.1:$PORT/api/query" -H 'content-type: application/json' \
+    -d "{\"path\":\"items:counted\",\"args\":{\"r\":$1},\"format\":\"json\"}"
+}
+last=0
+restarted=""
+for i in $(seq 1 20); do
+  got=$(counted "$i" | sed -nE 's/.*"value":([0-9]+).*/\1/p')
+  [ -n "$got" ] || fail "a client's query failed"
+  [ "$got" -gt "$last" ] || restarted=1
+  last=$got
+  sleep 0.05
+done
+[ -n "$restarted" ] || fail "no execution worker answered a client's query"
+! grep -q "execution worker" "$WORK/backend.log" || fail "an execution worker failed"
 
 kill "$PID"; wait "$PID" 2>/dev/null || true; PID=""
 start

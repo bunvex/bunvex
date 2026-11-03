@@ -17,9 +17,12 @@ const ENTRY = join(ROOT, "apps/local-backend/local-backend.ts");
  * the executable every module's `import.meta.url` is `/$bunfs/root/<executable>`.
  */
 const WORKERS_ROOT = join(ROOT, "packages");
-const WORKERS = ["core/src/persistence/sqlite-writer-thread.ts", "server/src/execution-worker.ts"].map((f) =>
-  join(WORKERS_ROOT, f),
-);
+const WORKERS = [
+  "core/src/persistence/sqlite-writer-thread.ts",
+  "server/src/execution-worker.ts",
+  // Imported by an execution worker on a database server's store: the drivers it registers (STUDY-194 step v).
+  "persistence/src/executable.ts",
+].map((f) => join(WORKERS_ROOT, f));
 export const EXE = "bunvex-local-backend";
 
 /** Convex's targets, and the Bun target that builds each. */

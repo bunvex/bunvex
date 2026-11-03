@@ -215,6 +215,12 @@ jobs:
           PG_URL: postgres://postgres:bunvex@127.0.0.1:5432/bunvex_k
           DO_NOT_REQUIRE_SSL: "1"
         run: bun test bench/index-cache-verify.test.ts
+      # STUDY-194 step v: execution workers reading the store on their own connections.
+      - name: execution workers on Postgres, each outcome checked against an in-thread run
+        env:
+          PG_URL: postgres://postgres:bunvex@127.0.0.1:5432/bunvex_k
+          DO_NOT_REQUIRE_SSL: "1"
+        run: bun test packages/persistence/test/store-readers.test.ts packages/server/test/query-workers.test.ts
       - name: TLS defaults on Postgres without TLS (refused by default; DO_NOT_REQUIRE_SSL connects)
         env:
           TLS_PG_PLAIN_URL: postgres://postgres:bunvex@127.0.0.1:5432/bunvex_k
@@ -258,6 +264,11 @@ jobs:
           MYSQL_URL: mysql://root:bunvex@127.0.0.1:3306/bunvex_k
           DO_NOT_REQUIRE_SSL: "1"
         run: bun test bench/index-cache-verify.test.ts
+      - name: execution workers on MySQL, each outcome checked against an in-thread run
+        env:
+          MYSQL_URL: mysql://root:bunvex@127.0.0.1:3306/bunvex_k
+          DO_NOT_REQUIRE_SSL: "1"
+        run: bun test packages/persistence/test/store-readers.test.ts packages/server/test/query-workers.test.ts
       - name: TLS defaults on MySQL with its own certificates (refused by default; DO_NOT_REQUIRE_SSL connects)
         env:
           TLS_MYSQL_URL: mysql://root:bunvex@127.0.0.1:3306/bunvex_k

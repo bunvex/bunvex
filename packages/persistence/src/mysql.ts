@@ -71,6 +71,7 @@ import {
   renewTimeoutMs,
   retryN,
   type SplitRow,
+  type StoreReader,
   scanLatest,
   smartChunks,
   splitKey,
@@ -256,6 +257,34 @@ export function connectTimedOut(e: unknown): boolean {
 /** A live index entry's document id and its document at the entry's ts (`found` false: no such version). */
 type JoinedEntry = { id: Buffer; json: Buffer | null; found: boolean; deleted: boolean };
 
+// STUDY-194 §10.2: the same connections for the store and for an execution worker's reader.
+/** The options a MySQL store was opened with that its readers open with too: plain data. */
+type MysqlReaderOptions = { timeoutMs?: number; documentEncoding?: 0 | 1; idleMs?: number } & TlsOptions;
+
+/** How a store's pools are made: the URL with its TLS, and each connection's settings. */
+async function pools(url: string, opts: MysqlReaderOptions) {
+  const mysql = await loadPeer<typeof mysqlDriver>("mysql2/promise", "mysql2");
+  const { uri, ssl } = mysqlTls(url, opts);
+  const timeoutMs = opts.timeoutMs ?? 19_000;
+  const newPool = (max: number) =>
+    mysql.createPool({
+      uri,
+      ...(ssl ? { ssl: ssl as mysqlDriver.SslOptions } : {}),
+      connectionLimit: max,
+      // A connection idle that long is closed (Convex's MYSQL_INACTIVE_CONNECTION_LIFETIME_SECS, 90 s; the server
+      // passes it), down to none kept, as Convex's pool minimum of 0.
+      ...(opts.idleMs ? { idleTimeout: opts.idleMs, maxIdle: 0 } : {}),
+      multipleStatements: false,
+      // BIGINT columns (timestamps: nanoseconds, above 2^53) come back exact, as decimal strings.
+      supportBigNumbers: true,
+      bigNumberStrings: true,
+      // A connect and its handshake are bounded by the call's timeout too (Convex's `with_timeout` around
+      // `get_conn`); `call` reports mysql2's connect timeout as that `DatabaseTimeoutError` (`connectTimedOut`).
+      ...(timeoutMs > 0 && timeoutMs < Infinity ? { connectTimeout: timeoutMs } : {}),
+    });
+  return { newPool, timeoutMs };
+}
+
 export class MysqlPersistence implements Persistence, Lease, ReadOnlyFlag, RetentionStore {
   readonly driver = "mysql";
   /** PERSIST-01 C7 as Convex's lease: the newest process wins (DV-413). */
@@ -272,13 +301,26 @@ export class MysqlPersistence implements Persistence, Lease, ReadOnlyFlag, Reten
   private acquired = 0;
   /** Opened with `allowReadOnly`: the lease is taken even while the store is marked read-only. */
   private allowReadOnly = false;
+  /** The current pool; replaced when its size changes (`setPoolSize`). */
+  private pool: mysqlDriver.Pool;
+  /** Replaced pools, still ending (closed with the store). */
+  private retired = new Set<Promise<void>>();
+  /** How many calls run on each pool. */
+  private using = new Map<mysqlDriver.Pool, number>();
   private constructor(
-    private pool: mysqlDriver.Pool,
+    /** A pool of at most `max` connections. */
+    private newPool: (max: number) => mysqlDriver.Pool,
+    /** How many connections the pool opens at most (`setPoolSize`). */
+    private poolSize: number,
+    /** How another thread opens a reader of this store (`reader`); null for a reader itself. */
+    private readerOf: StoreReader | null,
     /** The client-side timeout of one round trip (STUDY-25 L3). */
     private timeoutMs: number,
     /** The encoding new document versions are written in (`documentEncodingFromEnv`). */
     readonly documentEncoding: 0 | 1,
-  ) {}
+  ) {
+    this.pool = newPool(poolSize);
+  }
 
   /**
    * TLS (STUDY-25 L8, as Convex): required, with the CA and the host name verified, by default;
@@ -298,25 +340,15 @@ export class MysqlPersistence implements Persistence, Lease, ReadOnlyFlag, Reten
     opts: OpenOptions & TlsOptions & { timeoutMs?: number; documentEncoding?: 0 | 1; idleMs?: number } = {},
   ) {
     const documentEncoding = opts.documentEncoding ?? documentEncodingFromEnv();
-    const mysql = await loadPeer<typeof mysqlDriver>("mysql2/promise", "mysql2");
-    const { uri, ssl } = mysqlTls(url, opts);
-    const timeoutMs = opts.timeoutMs ?? 19_000;
-    const p = mysql.createPool({
-      uri,
-      ...(ssl ? { ssl: ssl as mysqlDriver.SslOptions } : {}),
-      connectionLimit: pool,
-      // A connection idle that long is closed (Convex's MYSQL_INACTIVE_CONNECTION_LIFETIME_SECS, 90 s; the server
-      // passes it), down to none kept, as Convex's pool minimum of 0.
-      ...(opts.idleMs ? { idleTimeout: opts.idleMs, maxIdle: 0 } : {}),
-      multipleStatements: false,
-      // BIGINT columns (timestamps: nanoseconds, above 2^53) come back exact, as decimal strings.
-      supportBigNumbers: true,
-      bigNumberStrings: true,
-      // A connect and its handshake are bounded by the call's timeout too (Convex's `with_timeout` around
-      // `get_conn`); `call` reports mysql2's connect timeout as that `DatabaseTimeoutError` (`connectTimedOut`).
-      ...(timeoutMs > 0 && timeoutMs < Infinity ? { connectTimeout: timeoutMs } : {}),
-    });
-    const store = new MysqlPersistence(p, timeoutMs, documentEncoding);
+    const { newPool, timeoutMs } = await pools(url, opts);
+    const options: MysqlReaderOptions = {
+      documentEncoding,
+      ...(opts.timeoutMs === undefined ? {} : { timeoutMs: opts.timeoutMs }),
+      ...(opts.idleMs === undefined ? {} : { idleMs: opts.idleMs }),
+      ...(opts.requireSsl === undefined ? {} : { requireSsl: opts.requireSsl }),
+      ...(opts.caFile === undefined ? {} : { caFile: opts.caFile }),
+    };
+    const store = new MysqlPersistence(newPool, pool, { driver: "mysql", url, options }, timeoutMs, documentEncoding);
     try {
       await store.bootstrap(opts);
     } catch (e) {
@@ -324,6 +356,39 @@ export class MysqlPersistence implements Persistence, Lease, ReadOnlyFlag, Reten
       throw explainTlsError(e, "MySQL", "MYSQL_CA_FILE");
     }
     return store;
+  }
+
+  // STUDY-194 §10.2: an execution worker's connections, opened from `reader()`'s description.
+  /**
+   * Opens a store that another process or thread writes, to read it only, with a pool of `pool` connections: no
+   * checks, no tables created, no lease taken. A write fails, as one without the lease does.
+   */
+  static async openReader(url: string, pool: number, opts: MysqlReaderOptions = {}) {
+    const { newPool, timeoutMs } = await pools(url, opts);
+    return new MysqlPersistence(newPool, pool, null, timeoutMs, opts.documentEncoding ?? documentEncodingFromEnv());
+  }
+
+  /** How another thread opens this store to read it: its URL and connection options. None for a reader. */
+  reader(): StoreReader | undefined {
+    return this.readerOf ?? undefined;
+  }
+
+  /** How many connections the pool opens at most. */
+  get connections() {
+    return this.poolSize;
+  }
+
+  /**
+   * Opens at most `n` connections from now on: the pool is replaced (calls running on the old one finish there).
+   * The server gives its execution workers the rest of the deployment's connections.
+   */
+  setPoolSize(n: number) {
+    if (n === this.poolSize) return;
+    this.poolSize = n;
+    const old = this.pool;
+    this.pool = this.newPool(n);
+    // Calls running on the old pool finish there; it ends with the last of them.
+    if (!this.using.get(old)) this.retire(old);
   }
 
   /**
@@ -334,11 +399,13 @@ export class MysqlPersistence implements Persistence, Lease, ReadOnlyFlag, Reten
   private call<T>(fn: (c: Conn, progress: () => void) => Promise<T>, ms = this.timeoutMs): Promise<T> {
     let c: Conn | null = null;
     let timedOut = false;
+    const pool = this.pool;
+    this.using.set(pool, (this.using.get(pool) ?? 0) + 1);
     return withTimeout(
       "MySQL",
       ms,
       async (progress) => {
-        const got = await this.pool.getConnection().catch((e: unknown) => {
+        const got = await pool.getConnection().catch((e: unknown) => {
           // mysql2's own connect timeout (`connectTimeout`, set to the call's timeout) is this call's timeout
           // firing while it gets a connection: Convex bounds `pool.get_conn()` by the same `with_timeout`, which
           // fails with `DatabaseTimeoutError` (transient: the committer retries the flush), never `Io(TimedOut)`.
@@ -365,7 +432,25 @@ export class MysqlPersistence implements Persistence, Lease, ReadOnlyFlag, Reten
         timedOut = true;
         if (c) drop(c);
       },
-    );
+    ).finally(() => this.done(pool));
+  }
+
+  /** A call on `pool` ended: a replaced pool ends once its last call has (mysql2's `end` fails those waiting). */
+  private done(pool: mysqlDriver.Pool) {
+    const n = (this.using.get(pool) ?? 1) - 1;
+    if (n > 0 || pool === this.pool) {
+      this.using.set(pool, n);
+      return;
+    }
+    this.using.delete(pool);
+    this.retire(pool);
+  }
+
+  private retire(pool: mysqlDriver.Pool) {
+    const ending: Promise<void> = withTimeout("MySQL", this.timeoutMs, () => pool.end())
+      .catch(() => {})
+      .finally(() => this.retired.delete(ending));
+    this.retired.add(ending);
   }
 
   /**
@@ -976,7 +1061,7 @@ export class MysqlPersistence implements Persistence, Lease, ReadOnlyFlag, Reten
 
   /** Ends the pool; on a database that does not answer, gives up after one timeout. */
   async close() {
-    await withTimeout("MySQL", this.timeoutMs, () => this.pool.end());
+    await Promise.all([withTimeout("MySQL", this.timeoutMs, () => this.pool.end()), ...this.retired]);
   }
 }
 
