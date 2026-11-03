@@ -1,7 +1,9 @@
 # STUDY-203 — The default executor: what `vm` costs an app, and what `process` and execution workers change
-<!-- index: the divergences an app can observe because functions run in `vm` contexts by default (DV-528 unhandled rejections, DV-208/DV-146 synchronous loops, DV-553 memory, DV-165/DV-492/DV-573 module state, DV-02 determinism), how Convex's isolates avoid each, and what the `process` sandbox (AD-44) and the execution workers (STUDY-190/194) change; which default to aim for | open: owner questions E-1–E-4 -->
+<!-- index: the divergences an app can observe because functions run in `vm` contexts by default (DV-528 unhandled rejections, DV-208/DV-146 synchronous loops, DV-553 memory, DV-165/DV-492/DV-573 module state, DV-02 determinism), how Convex's isolates avoid each, and what the `process` sandbox (AD-44) and the execution workers (STUDY-190/194) change; which default to aim for | decided (owner, 2026-11-03): E-1–E-4 as recommended; E-2's docs built, E-3 after mutations and actions move to workers -->
 
-- **Status:** open. Owner questions E-1–E-4 (§6). Docs only; nothing is built here.
+- **Status:** decided (owner, 2026-11-03: "aceito as recommendações"): E-1 **D**, E-2 yes, E-3 yes (a spike after
+  PR 3–4, no gain no merge), E-4 yes. E-2's user docs are in their own PR. The rows DV-528, DV-208, DV-146, DV-553
+  and DV-165 point here.
 - **Why now:** the owner asked (2026-11-02) which divergences could make an app behave differently on bunvex
   than on Convex. Most of the ~180 app-visible rows are names and message text. The ones that change behaviour
   come from one choice: functions run in `vm` contexts in the server's own process (DV-164). The owner approved
@@ -157,10 +159,10 @@ proposes how they could close. If E-1 changes the target, the affected rows get 
 
 | # | Question | Recommendation |
 |---|---|---|
-| E-1 | Which default to aim for: A (`vm`), B (`process`), C (workers) or D (workers, with `process` opt-in for untrusted code)? | **D** |
-| E-2 | Until workers cover mutations and actions, document the `vm` limits for self-hosters (README, `docker/README.md`, `docs/upgrading.md`)? The text would say: a synchronous loop blocks the server, there is no memory cap per function, an unhandled rejection does not fail the function, and module state is shared | **yes**, a docs PR now |
-| E-3 | Spike a worker mode that runs one call at a time, measured on c-4, to see whether it can match Convex on unhandled rejections (DV-528) and the memory cap (DV-553) at an acceptable throughput? It would be built in the execution-workers area (bunvex-55), after PR 3–4 | **yes**, after PR 3–4, as a spike: no gain, no merge |
-| E-4 | Keep module state per code version (DV-165/DV-573), and say in the user docs that it behaves like Convex's `experimental_reuseContext` for every function? | **yes** |
+| E-1 | **Decided: D.** Which default to aim for: A (`vm`), B (`process`), C (workers) or D (workers, with `process` opt-in for untrusted code)? | **D** |
+| E-2 | **Decided: yes.** Until workers cover mutations and actions, document the `vm` limits for self-hosters (README, `docker/README.md`, `docs/upgrading.md`)? The text would say: a synchronous loop blocks the server, there is no memory cap per function, an unhandled rejection does not fail the function, and module state is shared | **yes**, a docs PR now |
+| E-3 | **Decided: yes, after PR 3–4.** Spike a worker mode that runs one call at a time, measured on c-4, to see whether it can match Convex on unhandled rejections (DV-528) and the memory cap (DV-553) at an acceptable throughput? It would be built in the execution-workers area (bunvex-55), after PR 3–4 | **yes**, after PR 3–4, as a spike: no gain, no merge |
+| E-4 | **Decided: yes.** Keep module state per code version (DV-165/DV-573), and say in the user docs that it behaves like Convex's `experimental_reuseContext` for every function? | **yes** |
 
 ## 7. Tests
 
