@@ -473,7 +473,7 @@ providerAccountId: <uuid>, profile: {}})`. Every call creates a new account and 
     `Unauthenticated` guards; `src/routes/logIn.tsx`, `signUp.tsx`: the hooks with a message per `userError`;
     `dashboard.tsx`: user and sign-out; `PasswordSettings.tsx`: `changePassword` with the "sign out other
     sessions" checkbox.
-  - `convex/password.test.ts`: 23 tests (sign-up/in, wrong password, unknown user, taken and case-insensitive
+  - `convex/password.test.ts`: 20 tests (sign-up/in, wrong password, unknown user, taken and case-insensitive
     usernames, empty username, too-short password creates no account, change password incl. other sessions,
     rate limit).
 - **`examples/react-minimal/`** (anonymous): `app.use(auth); app.use(anonymous)`; `setupAnonymous(auth,
@@ -556,7 +556,7 @@ callbacks are a fixture module injected as `testApp.ts` (`component/testApp.fixt
 | `browser/storage.test.ts`, `keyedStore.test.ts`, `retry.test.ts` | 3, 8, 4 | default storage fallback and warning; KeyedStore; retry backoff with fake timers |
 | `react/client.test.tsx`, `index.test.tsx`, `methods.test.tsx` | 10, 5, 3 | hooks outside a provider, init/dispose, hydration, setSession, signOut, cross-tab; ambient sign-ins of the provider |
 | `methods/username-password/react.test.tsx`, `methods/anonymous/react.test.tsx` | 6, 2 | hooks with a stubbed `AuthSignInApi` (`react/testSignInApi.ts`); `OTHER_ERROR` folding, `pending` |
-| `examples/react-password/convex/password.test.ts`, `examples/react-minimal/convex/auth.test.ts` | 23, 3 | the methods end to end through the app (§1.13) |
+| `examples/react-password/convex/password.test.ts`, `examples/react-minimal/convex/auth.test.ts` | 20, 3 | the methods end to end through the app (§1.13) |
 
 ### 1.17 Known issues (`KNOWN_ISSUES.md` at `db15c82e`) for the core
 
@@ -810,7 +810,10 @@ Everything §1.14 lists is in bunvex, with the file that provides it, except two
      suites ported, the default `oauth()` checked through its published value since `useOauth` comes with OAuth, and a
      failed anonymous sign-in rejecting; a component may now import `@bunvex/client` (its HTTP client, as v2 uses
      `convex/browser`), `scripts/check-deps.ts`).
-6. The examples: username + password, and anonymous.
+6. The examples: username + password, and anonymous (built: `examples/auth-password`, `examples/auth-anonymous`, each
+   with upstream's example suite ported to `@bunvex/testing` on the example's own project (20 and 3, plus one each) and an
+   end-to-end test on a deployment where the access tokens are verified through `auth.config.ts`; upstream's password
+   suite has 20 tests, not the 23 §1.13 first counted).
 7. Later: the `init` CLI (C-8).
 
 ## 4. Divergences
