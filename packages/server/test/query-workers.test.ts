@@ -8,12 +8,14 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { defineSchema, Engine } from "@bunvex/core";
+import { type CallOutcome, defineSchema, Engine, encodeCallOutcome } from "@bunvex/core";
 import { SqlitePersistence } from "@bunvex/core/persistence/sqlite";
 import { MemoryBlobStore } from "@bunvex/file-storage";
 import { adminKeyCipherKey, issueAdminKey } from "../src/admin-keys.ts";
+import { encodeCallError } from "../src/call-errors.ts";
 import type { ModuleSource } from "../src/code-version.ts";
 import { Functions } from "../src/functions.ts";
+import { outcomeMismatch } from "../src/query-workers.ts";
 import { createServer } from "../src/server.ts";
 
 const SECRET = "ef".repeat(32);
@@ -321,4 +323,44 @@ describe("failures", () => {
     expect(r.errorMessage).toContain("Function execution timed out (maximum duration: 1s)");
     expect(d.workers.counts.stuck).toBe(1);
   }, 30_000);
+});
+
+describe("the differential check's comparison", () => {
+  const failed = (fields: Record<string, unknown>): string => {
+    const e = Object.assign(new Error("unique() query returned more than one result"), fields);
+    const o: CallOutcome = {
+      id: 1,
+      status: "failed",
+      result: null,
+      error: encodeCallError(e),
+      report: null,
+      reads: [],
+      searchReads: [],
+      identityObserved: false,
+      observedTime: false,
+      endCursor: null,
+      documentsRead: 0,
+      bytesRead: 0,
+      writes: null,
+    };
+    return encodeCallOutcome(o);
+  };
+  const at = (line: number, app: string) => ({
+    line,
+    column: line + 1,
+    originalLine: line + 2,
+    originalColumn: line + 3,
+    sourceURL: "/srv/packages/server/src/functions.ts",
+    stack: `Error: x\n    at handler (${app})\n    at run (/srv/packages/server/src/functions.ts:${line}:9)`,
+  });
+
+  test("where in the server's code an error was thrown is not the outcome's", () => {
+    // Coverage instruments the main thread's modules, not a worker's: the same throw is at other lines.
+    expect(outcomeMismatch(failed(at(479, "app.js:12:79")), failed(at(2042, "app.js:12:79")))).toBeNull();
+  });
+
+  test("the app's own frames and the error's other fields are", () => {
+    expect(outcomeMismatch(failed(at(479, "app.js:12:79")), failed(at(479, "app.js:13:79")))).toStartWith("error: ");
+    expect(outcomeMismatch(failed({ code: 1 }), failed({ code: 2 }))).toStartWith("error: ");
+  });
 });

@@ -136,7 +136,7 @@ export function outcomeMismatch(here: string, there: string): string | null {
       for (const l of report.lines) delete l.timestamp;
       if (report.figures) delete report.figures.userMs;
     }
-    return { ...o, id: 0, report };
+    return { ...o, id: 0, report, error: o.error === null ? null : hostPositionsOut(o.error) };
   };
   const a = view(here);
   const b = view(there);
@@ -154,6 +154,33 @@ export function outcomeMismatch(here: string, there: string): string | null {
     return `${k}: in-thread ${x.slice(0, 400)}, worker ${y.slice(0, 400)}`;
   }
   return null;
+}
+
+/** The fields the runtime gives an error thrown in the server's own code: where in that code it was thrown. */
+const HOST_POSITIONS = new Set(["line", "column", "originalLine", "originalColumn", "sourceURL"]);
+
+/**
+ * An error's text without where in the server's code it was thrown: its position fields, and the line and column of
+ * each frame of its stack in a server file (an absolute path). The server's modules are not the same code on both
+ * sides when one is instrumented (`bun test --coverage` instruments the main thread's), and the position is not the
+ * outcome's. The app's own frames (`app.js:12:79`) are kept.
+ */
+function hostPositionsOut(error: string): string {
+  const out = (v: unknown): unknown => {
+    if (Array.isArray(v)) {
+      const fields = v.filter(
+        (f) => !(Array.isArray(f) && f.length === 3 && typeof f[0] === "string" && HOST_POSITIONS.has(f[0])),
+      );
+      return fields.map((f) =>
+        Array.isArray(f) && f.length === 3 && f[0] === "stack" && typeof f[1] === "string"
+          ? [f[0], f[1].replace(/(\/[^\s():]+):\d+:\d+/g, "$1"), f[2]]
+          : out(f),
+      );
+    }
+    if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, out(x)]));
+    return v;
+  };
+  return JSON.stringify(out(JSON.parse(error)));
 }
 
 const stringify = (v: unknown) =>
