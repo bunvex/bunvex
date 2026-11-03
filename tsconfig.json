@@ -23,6 +23,7 @@
     "components/auth/src/methods/oauth",
     "components/auth/src/react",
     "components/auth/src/methods/username-password/react.tsx",
-    "components/auth/src/methods/anonymous/react.tsx"
+    "components/auth/src/methods/anonymous/react.tsx",
+    "components/auth/src/ssr/nextjs"
   ]
 }

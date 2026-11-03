@@ -1,8 +1,7 @@
 # STUDY-202 — Built-in auth under server rendering, and Next.js
-<!-- index: built-in auth under server rendering (STUDY-191 §3.4 step 7): Convex Auth v2's `./ssr` (the refresh token in an httpOnly cookie; refresh, sign-out and the allowlisted sign-in proxy as WHATWG handlers; the Origin check) and `./ssr/nextjs` (the proxy, the Server Component token, the providers); written from convex/convex-auth `reboot` at db15c82e | no divergence of its own; `./ssr` built, `./ssr/nextjs` next (§3.4) -->
+<!-- index: built-in auth under server rendering (STUDY-191 §3.4 step 7): Convex Auth v2's `./ssr` (the refresh token in an httpOnly cookie; refresh, sign-out and the allowlisted sign-in proxy as WHATWG handlers; the Origin check) and `./ssr/nextjs` (the proxy, the Server Component token, the providers); written from convex/convex-auth `reboot` at db15c82e | no divergence of its own; built (§3.4) -->
 
-- **Status:** no divergence of its own, so nothing for the owner to decide. `./ssr` built; `./ssr/nextjs` and the
-  example next (§3.4). The names and the cookie names follow C-4 (DV-577, rule 5), the proxy's
+- **Status:** no divergence of its own, so nothing for the owner to decide. Built (§3.4). The names and the cookie names follow C-4 (DV-577, rule 5), the proxy's
   wire names DV-307 and DV-315 (§4).
 - **Scope:** STUDY-191 §3.4 step 7, "SSR and Next.js", taken before steps 4–6 (email, OAuth, passkeys) at the
   owner's request (2026-11-03). Everything the core of [STUDY-201](STUDY-201-auth-core.md) left out: `./ssr` and
@@ -274,6 +273,11 @@ The proxy speaks the HTTP client's wire, and bunvex's is bunvex-named: the body'
    (the site's example count, the sandbox parity corpus, `examples/README.md`). Of `oauth.test.tsx`, the callback
    through the proxy and the router-aware URL strip are ported with the inert `oauth()` client (STUDY-201 C-5) and a
    pending flow seeded in storage; "start on the backend client" needs a provider's hook and comes with OAuth.
+   Built: `components/auth/src/ssr/nextjs/`; `test-react/nextjsProvider.test.tsx` (those two, the server's token
+   adopted, sign-out through the route); `examples/auth-nextjs`, whose `test/e2e.test.ts` builds it, serves it with
+   `next start` against a deployment and drives it with a cookie jar (a sign-up through the route, the page rendered
+   signed in on the server, the redirects both ways, the proxy refreshing a request without its access token, the
+   refresh route, another site refused on every route, sign-out ending the session).
 
 ## 4. Divergences
 
