@@ -2,7 +2,11 @@
 // (PERSISTENCE=memory|sqlite|postgres|mysql, PERSISTENCE_URL, DATA, DURABLE, POOL, PORT; Convex's
 // POSTGRES_URL / MYSQL_URL too). TLS is required by default: DO_NOT_REQUIRE_SSL=1 for a local store without it.
 //   PERSISTENCE=sqlite bun bench/server.ts
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Engine } from "@bunvex/core";
+import { MemoryBlobStore } from "@bunvex/file-storage";
 import { createServer, Functions, openPersistence, persistenceConfigFromEnv } from "@bunvex/server";
 import { bench, benchSchema } from "./functions.ts";
 
@@ -18,15 +22,49 @@ const engine = await new Engine(benchSchema, await openPersistence(config), {
   // PERSIST-01 C7: the store's lease (drivers that have one). LEASE_WAIT_MS > 0 waits for a held lease.
   lease: { ttlMs: Number(process.env.LEASE_TTL_MS ?? 5000), waitMs: Number(process.env.LEASE_WAIT_MS ?? 0) },
 }).init();
-const functions = new Functions(engine).register("bench", bench);
+// BENCH_DEPLOY=1: the functions are deployed as a push's code (one bundled module, `bench.js`), as an app's are,
+// instead of registered in the process: only then can execution workers run its queries (STUDY-194 2b). The query
+// workers' cap is MAX_ISOLATE_WORKERS (0: in-thread), as on any server.
+const deploy = process.env.BENCH_DEPLOY === "1";
+const functions = deploy ? new Functions(engine) : new Functions(engine).register("bench", bench);
 const app = createServer({
   engine,
   functions,
+  ...(deploy ? { deployable: true, moduleStorage: new MemoryBlobStore() } : {}),
   port: Number(process.env.PORT ?? 3210),
   // BENCH_HOSTNAME=127.0.0.1 keeps a measurement off the public interfaces. Unset listens as before.
   ...(process.env.BENCH_HOSTNAME ? { hostname: process.env.BENCH_HOSTNAME } : {}),
   label: config.kind,
 });
+if (deploy) {
+  await app.codeReady;
+  await app.deployCode([{ path: "bench.js", source: await benchModule(), environment: "isolate" }]);
+}
+
+/** `bench/functions.ts` as one module of a push: each function exported by name, the server's packages linked. */
+async function benchModule(): Promise<string> {
+  const dir = mkdtempSync(join(tmpdir(), "bench-module-"));
+  try {
+    const entry = join(dir, "bench.ts");
+    writeFileSync(
+      entry,
+      `import { bench } from ${JSON.stringify(`${import.meta.dir}/functions.ts`)};\n${Object.keys(bench)
+        .map((name) => `export const ${name} = bench.${name};`)
+        .join("\n")}\n`,
+    );
+    const out = await Bun.build({
+      entrypoints: [entry],
+      target: "bun",
+      format: "esm",
+      external: ["@bunvex/server", "@bunvex/values"],
+    });
+    if (!out.success) throw new Error(out.logs.join("\n"));
+    return await out.outputs[0]!.text();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 for (const signal of ["SIGINT", "SIGTERM"] as const)
   process.once(signal, async () => {
     await app.shutdown();
@@ -34,5 +72,6 @@ for (const signal of ["SIGINT", "SIGTERM"] as const)
   });
 console.log(
   `bunvex: persistence=${config.kind} durable=${config.durable} port=${process.env.PORT ?? 3210} ` +
-    `max-bytes-written-per-second=${process.env.MAX_BYTES_WRITTEN_PER_SECOND}`,
+    `max-bytes-written-per-second=${process.env.MAX_BYTES_WRITTEN_PER_SECOND} deployed=${deploy} ` +
+    `query-workers=${app.queryWorkers ? "on" : "off"}`,
 );

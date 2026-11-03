@@ -785,9 +785,9 @@ A query's body is `Functions.callBody` → `queryRun` (F:1977, F:2036) in a `Tx`
 | Text search | `searchHits`, synchronous metadata and search (T:1042, T:2537-2598) | the metadata from the epoch; the search an op |
 | Retention | `retention.minIndexTs` (E:3839) | `minTs` in the request; the main thread checks again after the run, as Convex (§10.3) |
 | Cursor sealing, storage URLs | `cursorCodec` (E:906-913), `fileStorage.reader` | derived keys in `init` |
-| Console lines, `log.audit` lines | thread scopes (`core/src/logs.ts:105`, `log-audit.ts:7`) | captured in the worker, carried in the outcome, replayed on the main thread (the sandbox's `captureLines` / `logChildLine`) |
-| Errors | objects the dispatcher tests with `instanceof` (`errors.ts:49-62`) | STUDY-171 §8.3's codec, rebuilt by name on the main thread; stacks mapped in the worker, where the version's source maps are |
-| The function log's figures | `tx.io()`, `tableStats`, `usage`, user time (F:1545-1555) | new outcome fields |
+| Console lines, `log.audit` lines | thread scopes (`core/src/logs.ts:105`, `log-audit.ts:7`) | captured where the call runs, carried in the outcome's `report`, replayed on the main thread (0b: `CallBodies.capture` / `replay`, `logs.ts` `apartLines` / `replayLines`, as the sandbox's `captureLines` / `logChildLine`). Audit lines are resolved where the call runs (their limits fail the run) and sent to the log streams by the main thread. A mutation's per-attempt scope is on the main thread's side, so a retried attempt's lines replace the one before |
+| Errors | objects the dispatcher tests with `instanceof` (`errors.ts:49-62`) | `server/src/call-errors.ts` (0b): every error class the server's packages and modules export is rebuilt as itself with all its own fields (a test holds the list to the modules); an app's error as STUDY-171 §8.3's, in a realm of its own, unless it was made in the server's realm (a driver's); whether the store calls it transient (`Persistence.isTransient`) is asked where it was made and carried as a mark, as Convex's `ErrorMetadata` crosses its runner; an error whose fields do not cross becomes a system error naming it. Stacks mapped in the worker, where the version's source maps are |
+| The function log's figures | `tx.io()`, `tableStats`, `usage`, user time (F:1545-1555) | in the outcome's `report` (0b: `CallFigures`, set on the logged execution as `Running.call`); the run itself no longer reaches its logged execution, in-thread too, so these come only through the outcome |
 
 ### 10.2 Store connections
 
@@ -843,12 +843,329 @@ Each one is green on its own. 0a–0d change nothing observable and run under th
 | 0b | the outcome carries errors, console and audit lines, the function log's figures; the retention check after a run (§10.3) | every suite through the codec; sabotage: the codec drops `BunvexError` data, or one line |
 | 0c | `Functions` reaches the engine through a narrow `FunctionsHost`; one registry per code version; a code epoch | push and component suites |
 | 0d | the catalog and search-state codec, and the epoch window (lifted from `packages/sandbox/src/host-call.ts`) | a property test; in tests the in-thread runner reads the catalog through the codec; sabotage: drop `staged` |
-| i | the worker runtime: `init`, `ready`/`failed`, `alive`, `close`; lazy start up to `MAX_ISOLATE_WORKERS`; a dead or stuck worker replaced (Q3); the compiled binary's entry | kill and restart; a stuck worker terminated (first proving `Worker.terminate` stops a tight loop in Bun) |
+| i | the worker runtime: `init`, `ready`/`failed`, `alive` (built as a shared counter, §10.5.4), `close`; lazy start up to `MAX_ISOLATE_WORKERS`; a dead or stuck worker replaced (Q3); the compiled binary's entry | kill and restart; a stuck worker terminated (first proving `Worker.terminate` stops a tight loop in Bun) |
 | ii | the SQLite reader in a worker | PERSIST-01's reads through the worker; a commit after `ts` is invisible |
 | iii | `version`, `release`, `epoch` | the worker's registry resolves as the main thread's for every example app |
 | iv | queries dispatched to workers on SQLite; `count` and `search` ops | the differential test, in-thread vs workers, on result text, errors, lines and read sets interval by interval; snapshot isolation; a push under load; retention; death; stuck; sabotage: run at `visibleTs`, drop an interval |
 | v | Postgres, MySQL and MongoDB readers; the connection split | the differential test on the Postgres job; connections counted in `pg_stat_activity` |
-| vi | the profile and the DO `c-4` measurement | §6's 2b row |
+| vi | the profile and the DO `c-4` measurement | §6's 2b row (§10.5.8) |
+
+### 10.5.1 0c, as read (2026-10-28)
+
+What a query's or mutation's body takes from `Functions` and the engine, by lifetime:
+
+- **Per code version:** the app's `fns`, `rooms`, `moduleHashes` and `deployed`, each component's `componentFns`,
+  `componentRuntimes` (env, router, hashes), and the maps keyed by function: `componentOf`, `names`, `moduleLoads`,
+  `deployedFns`. None of these has a version id; `CallIn.fn` pins a query's function by object (§10.3).
+- **Deployment-wide, read in the transaction:** `backendState.read`, `environment.reader`, `readCanonicalUrls`.
+- **Deployment-wide, outside it:** the catalog (`tableOfFn`'s `publicNameOf` and components), `fileStorage`, `roomHub`,
+  `instanceName`, the runtime's clocks, the knobs and limits, `builtinEnv`.
+- **The whole `Engine` handed on:** `inHandleScope`, `functionNameOf` and a nested `useStaleSnapshot` query's
+  `engine.query`. These become `FunctionsHost` methods.
+
+**A push is not atomic in memory.** Convex's `finish_push` applies the app's and every component's config in one
+transaction (`crates/application/src/deploy_config.rs:837-880`), so every run sees either all of the old code or all
+of the new. bunvex's `installCodeVersion` swaps the app's functions, then awaits a mutation (the function handles)
+and the crons, and `installComponents` then installs each component in turn with awaits between them
+(`server/src/server.ts:2345-2420`). A query that runs in those gaps sees the new app code with an old component's.
+This is a parity gap of its own, fixed before 0c in its own PR: build the version's whole registry (the app and
+every component), then swap it in one step. 0c's per-version registry is that object, with an epoch the worker's
+`version` message names.
+
+### 10.5.2 The spike (2026-11-01)
+
+Before 0c, the owner asked whether 2b would pay for itself. A spike answered it: queries on worker threads, with no
+versions, catalog changes or Postgres (branch `spike/query-workers`, not product code). Each worker opened the SQLite
+store read-only through an `Engine` that only reads (`openReader`: the catalog at its newest commit, no lease, no
+committer), registered the bench's functions in a `Functions` on it, and ran the call runner on each request's text.
+The main thread kept the permits, the query cache and the commits. Answers were the same with and without workers,
+and a read after a write saw it.
+
+Measured on two DO `c-4` (Xeon 8168, sfo2), SQLite, 64 VUs (`bench/results/cloud/2026-11-01-s194-spike/`):
+
+| | in-thread | 1 worker | 2 workers | 3 workers |
+|---|--:|--:|--:|--:|
+| uncached, req/s · p99 | 1 850 · 65 ms | 2 750 | **3 990 · 38 ms (2.1×)** | 3 160 (run 1) |
+| cached | 6 500–8 400 in every column (noise) | | | |
+| insert | 2 700 | −4 % | −5 % | −7 % (run 1) |
+
+What it changes in the plan:
+
+- **0c's narrow `FunctionsHost` is not needed.** `Functions` ran unchanged on the read-only engine. 0c keeps the
+  registry per code version and its epoch, and the worker gets a read-only `Engine` (ii), whose writing methods are
+  never reached from a query's body.
+- **0d carries each commit's writes to the workers.** Without an index cache a worker's query cost 165 µs against 68 µs
+  in-thread, measured in one thread: 46 % of it was SQLite scans that the main thread's index cache answers. The cache
+  needs the write log to check an entry, so the epoch window carries each commit's written keys, posted before any
+  request at or past its ts. That is the cost on `insert`; iv sends them batched and as text.
+- **iv must not parse a worker's result on the main thread.** The HTTP API answers with the outcome's text; parsing it
+  for a value nobody read took 2.1× down to 1.8× (run 1).
+- **More workers than cores do not help.** On the `c-4`'s two cores, 3 workers measured as 2. DV-574's default (the
+  core count, workers started lazily) stays. Whether it should be the core count minus one needs a larger box.
+
+### 10.5.3 0d, as built (2026-11-01)
+
+- **The epoch.** `Engine.metadataEpoch` numbers what a transaction takes when it begins: the catalog and the text
+  indexes' states. It moves when the catalog is replaced (`catalog` is now a setter) or changed in place (a mutation
+  that created a table adds it to the live catalog, `engine.ts`'s commit), and when the text indexes' registry
+  changes (`SearchIndexes.generation`, which now also counts a pending push's indexes, a built index and a resumed
+  one: before, it counted only the set of names, which is all the sandbox's child needs).
+- **The request names it** (`CallRequest.metadata`, in the codec). Under the codec (the tests, Q7), the dispatcher
+  sends each epoch once through `encodeMetadata`/`decodeMetadata` before the first request that names it, keeping
+  the last four as a worker will (`EpochWindow` on the sending side, `MetadataCopies` on the other, as the sandbox's
+  `EpochWindow` and its child's map), and a query's transaction begins with that copy's catalog, not the engine's
+  object. Every core and server suite runs that way. A mutation keeps the live catalog: mutations stay on the main
+  thread in 2b.
+- **The text indexes' states** cross as their definitions and flags (`SearchIndexStates`, answering `get` and
+  `forTablet` as the registry does), not their contents: the search itself is an op to the main thread (0a), which
+  must also return the index's size, charged per search (`textQueryBytes`). That is iv's.
+- **The commits.** `encodeCommits` carries each commit's ts and written keys, the main thread's visible ts and its
+  write log's `purgedTs`. `WriteLogCopy` keeps them in the committer's own `WritesByIndex` and answers
+  `changedBetween` as the committer does (a property test against the whole log, in batches, with purges). The
+  worker's index cache checks against it (iv); before the worker started nothing is proven.
+- **Created tables join the catalog as their commit becomes visible.** They were added after the commit returned,
+  so after the commit listeners, which rerun subscriptions at that commit's ts. In-thread that went unseen: the rerun's
+  transaction held the live catalog, which the engine changed in place before the query read. A copy (a worker's, or
+  the codec's in the tests) missed the table for good: `bunvex run --watch` stayed at `[]` after the first insert.
+  They are now added in the commit's `onVisible`, where the search indexes and table counts are applied, before the
+  listeners. A table a deployment finds missing from its catalog, deleted, also crosses: a table being deleted may be
+  left with no enabled `by_id` (`_scheduled_jobs` in the OpenAPI test), and the codec keeps that as it is.
+- **Proof.** Property tests for the catalog, the states, the window and the write log. A call test where a table
+  created by an insert is a new epoch (sabotage: no in-place count → the query misses the table), and one where a
+  query on a staged index through the codec still fails as staged (sabotage: the codec drops `staged` → it answers
+  "backfilling").
+
+### 10.5.4 i, as built (2026-11-02)
+
+- **`Worker.terminate` stops a function that never yields,** measured first (Bun 1.4.4): a Worker in `for (;;) {}`,
+  and one in `for (;;) await null`, end within 12 ms of `terminate()`, and the process's CPU drops to nothing. An
+  uncaught error, or a rejection no one handles, ends a Bun Worker too (its `close` event, code 1 or 0): `close` is
+  the one sign of a death.
+- **The pool** (`server/src/execution-workers.ts`) and the worker's side (`server/src/execution-thread.ts`), with the
+  messages of §4.3 that i needs: the start (a shared buffer and the init text), `r` ready, `f` failed, a call `c` and
+  its outcome `o` (or `e`, failed in the worker itself), `x` close. `MAX_ISOLATE_WORKERS` is read by
+  `maxExecutionWorkers()` (the core count by default, DV-574; 0 starts none, AD-47). Dispatch and lazy starts as
+  §4.13; a call made while no worker is ready answers null, for the caller to run in-thread (§10.4). Nothing calls
+  it yet: iv dispatches to it, and adds its counts (started, failed starts, died, stuck) to `/metrics`.
+- **Stuck by a shared counter, not `alive` messages.** §4.12 had each worker send `alive`. That cannot tell a busy
+  worker from a stuck one: a query whose store reads are synchronous (SQLite in the worker) resumes on microtasks
+  only, so no timer of the worker fires until it ends, and it would look silent. Instead the worker adds to a counter
+  in a `SharedArrayBuffer` each time a call starts or resumes (`running(id)`, which iv calls where the user timer
+  resumes, `pausingUserTime`), and from a 10 ms timer while it has calls, which fires only when its event loop is
+  free; it also writes the id of the call that ran last. The main thread's watchdog (every 25 ms while calls are in
+  flight) terminates a worker whose counter has not moved for the longest user time limit of its calls plus 50 ms
+  (the sandbox's backstop slack); the call named in the buffer fails with "Function execution timed out (maximum
+  duration: …)", the others as system errors. A follower process (§4.15) has no shared memory and will need a
+  message after all; that is for then. One case this cannot tell: a single store statement that blocks the worker
+  longer than the limit (user time is paused there, so it is not a timeout on Convex). Whether that happens is for
+  iv's measurements.
+- **A failed start** (the store cannot open, or no answer within 30 s) is logged at most once a minute; the pool
+  waits 1 s before starting another, doubling up to 60 s, and calls run in-thread meanwhile.
+- **The executable.** `scripts/build-binary.ts` embeds every Worker module with `--root` at `packages/`, so each is at
+  its path under it; inside the executable every module's `import.meta.url` is the executable's own path at that
+  root, so `threadEntry` (core) finds a Worker module beside its starter in the sources and at
+  `<dir>/<file>` in the executable. Checked with `scripts/smoke-binary.sh` (the SQLite writer thread) and an
+  executable that starts `server/src/execution-worker.ts`.
+- **Proof** (`server/test/execution-workers.test.ts`): lazy starts and the cap, the least busy worker, 0; a worker that
+  exits or throws, and the next call on a new one; `for (;;) {}` and `for (;;) await null` time out while the other
+  worker answers; a call past its limit that keeps resuming, and one waiting idle, are not stopped; a failed and a
+  silent start; close. Sabotages, each caught: no watchdog; a dead worker kept; no idle tick; `running` without
+  progress; the first ready worker instead of the least busy; the stuck call not named.
+
+### 10.5.5 ii, as built (2026-11-02)
+
+- **The reads, in one module.** `core/src/persistence/sqlite-reads.ts` (`SqliteReads`) holds every statement that
+  reads the store: the scan, `get`, `getVersions`, `maxTs`, the document log and the globals. `SqlitePersistence`
+  reads through it on its connection, and so does a worker's reader on its own: the same statements either way.
+- **The reader.** `SqliteStoreReader` (`core/src/persistence/sqlite.ts`) opens the file read-only, with a page cache of
+  the size it is given. It takes no lock, runs no DDL and starts no writer thread. It cannot create the file, and it
+  changes nothing in it. Its writes throw. No read is wrapped in a transaction: every row is versioned by its ts, a
+  read names its ts, and the connection sees a group only once the writer thread committed it, which is before the
+  commit's ts becomes visible.
+- **The description.** `Persistence.reader()` says how another thread opens the store (`StoreReader`, plain data for
+  the worker's init): a SQLite file gives its absolute path, a store in memory gives none. Wrappers do not forward
+  it, so they keep running in-thread (§10.2). The server's `openStoreReader` opens one; v adds Postgres and MySQL
+  there.
+- **The page cache split (Q9)** is the caller's: the reader takes its size. iv sets it when the server starts workers
+  (half of `BUNVEX_SQLITE_CACHE_SIZE` for the main connection, the other half shared by the workers).
+- **Proof.**
+  - `core/test/sqlite-store-reader.test.ts`: the reader answers as the writer's connection at every ts of a random
+    history, both scan directions; a commit after a read's ts is not seen at that ts, and is seen at its own once
+    flushed. It also checks the globals, no lock, no file created, nothing changed, writes refused, and the cache
+    size.
+  - PERSIST-01 through a Worker (`bench/drivers/sqlite-worker-reads.ts`, in `bench/conformance.test.ts`): the
+    suite's writes go to the writer. Its reads (`get`, `getVersions`, `scan`, `maxTs`, `getGlobal`) cross to a
+    Worker that opened the reader from `reader()`, as an execution worker will. This runs K1, K2, K8 and K9, and the
+    engines of K3–K5 and K24 run on it too. All pass.
+- **Sabotages,** each caught:
+  - a reader that reads at its newest state instead of `ts` (K2, K8, K9 and K3 fail through the Worker; the unit
+    test too);
+  - a reader that takes the store's lock;
+  - a reader that may create the file.
+
+### 10.5.6 iii, as built (2026-11-02)
+
+- **Where a registry came from.** 0c's registry now remembers the loaded versions its functions came from:
+  - the app's comes from `Functions.installVersion`;
+  - each component instance's comes from `installComponentVersion`, which the server's `installCodeVersion` now
+    calls.
+
+  Functions given as maps (`register`, `install`) mark it unsourced. `codeSources()` is null then: an embedded
+  server's calls stay in-thread (§10.4). `loadCode` records what each version was loaded from: its sources and its
+  load options (`loadInputsOf`).
+- **The messages** (`server/src/execution-code.ts`), each sent before the first call that needs it:
+  - `v<id>:<json>`: a version's sources, seed, timestamp, import-time variables, import timeout and `node_modules`
+    path. Each version is loaded once per worker, with the same loader (`loadCode`, `vm`).
+  - `k<epoch>:<json>`: a code epoch, which names the app's version and each mounted instance's, with its runtime
+    (id, path, variables, HTTP prefix).
+  - `f<epoch>`: forget an epoch. A version goes with the last epoch that holds it. This is §4.8's `release`, per
+    epoch: the main thread knows which epochs its calls in flight name, and it decides when to forget (iv).
+
+  `CodeShipper` numbers the versions and says what a worker lacks, keeping a `CodeHeld` per worker. `WorkerCode`
+  holds the versions and builds one `Functions` per epoch, so an older call keeps resolving against its own epoch
+  while a newer one runs.
+- **No `beside`.** A component's code is loaded beside the app's version only under `process`, in that version's
+  child. A worker loads with `vm`, which loads every version alike, so `beside` does not cross.
+- **Import-time variables** cross as they were when the version was loaded. That is what the main thread's modules
+  saw at their import; `process.env` inside an execution reads the deployment's variables from the store, which iv's
+  worker reads.
+- **Proof** (`server/test/execution-code.test.ts`):
+  - The corpus covers every example app and every load the server's pushed-code suites make (the sandbox's analysis
+    corpus). For each of its loads that succeeds, the worker's registry describes as the main thread's
+    (`Functions.describeCode`: each function's kind, visibility, validators, name, module loads and component; the
+    rooms, hashes, components and their routes).
+  - The same holds with an app and two component instances. A later epoch sends only what is new, and forgetting
+    drops exactly the versions no other epoch holds. A registry given as maps cannot be sent.
+  - Sabotages, each caught:
+    - the worker skips the components;
+    - `forget` keeps the versions;
+    - a component's path is wrong;
+    - versions are sent again;
+    - the app is installed without its module loads.
+
+### 10.5.7 iv, as built (2026-11-02)
+
+- **Where queries go.** A server starts query workers (`server/src/query-workers.ts`) when:
+  - its store describes a reader (a SQLite file);
+  - it runs under `vm` and the process's own clock;
+  - `executionWorkers` (default `MAX_ISOLATE_WORKERS`, else the core count; the local backend reads its own
+    environment) is above 0.
+
+  A call goes to a worker when it is a client's query whose code has sources, with no system identity and no tracer
+  on. The query's arguments then cross as text. `callSpec` binds the code epoch they were checked against (§10.3),
+  and a ready worker must exist; otherwise the call runs in-thread as before.
+- **What a worker gets first.** The dispatcher posts what the chosen worker lacks:
+  - the request's metadata epoch (0d's message, a window of four per worker);
+  - the code epoch (iii's messages, the last four kept per worker).
+
+  The call's text is `<code epoch>:<request>`. Every commit's written keys go to every worker as it becomes visible
+  (`Engine.postCommits`, 0d's `encodeCommits`).
+- **The worker's engine** (`Engine.follow`; `server/src/execution-worker.ts`) is not `init`ed and never writes.
+  - It reads its own `SqliteStoreReader` at each request's ts, with the epoch's catalog and text index states.
+  - Its index cache is checked against `WriteLogCopy`.
+  - Its run-state and variables caches are fed by the commits it hears (`Committer.followed`), and nothing before
+    its start counts as known (`unknownBefore`).
+  - It also adopts the newest metadata catalog as its own, where those caches look their tables up.
+  - Counts and searches are ops to the main thread (`core/src/follower-ops.ts`), which pins the counts at the
+    request's ts for the call. A search answers its hits and the index's size, charged per search (DV-317's
+    `textQueryBytes`). A wait for an answer counts as in-flight work and is not user time, as a store call's is.
+  - A failure the transaction treats as the system's crosses as its own class.
+  - Progress for the stuck check (i) is marked each time a call resumes after a store call (`onUserTimeResume`).
+- **Outcomes.** The worker's outcome text is decoded on the main thread, and its report replayed where an in-thread
+  run's would be. The value is parsed from the result's text. A worker that dies fails the call as a system error. The
+  call that never yielded fails with "Function execution timed out (maximum duration: …)".
+- **Caches split (Q9).** The store's own connection keeps half of the page cache it was opened with (AD-46). Each
+  worker gets the other half divided by the cap, and the main thread's index cache divided by the cap.
+- **The differential check.** Under the tests (`checkWorkerOutcomes`, in the root preload beside Q7's codec), every
+  query a worker runs also runs in-thread on the same request text. The two outcomes are compared field by field:
+  result, error, log lines and figures, read set interval by interval, counters. Only what measures time is left
+  out (user time, a line's timestamp). A difference fails the call. Every suite that runs a deployable server on a
+  SQLite file therefore checks the workers.
+- **What the check found on `main`,** fixed in their own PR (`fix/unrecorded-table-use`): two ways a query's
+  outcome depended on whether a cache was warm.
+  - `Tx.unrecorded` dropped its intervals but kept the tables it had used marked as used. A cold run-state or
+    variables cache therefore made the query lose the table mapping read (STUDY-187 X22).
+  - A cold variables cache counted its rows in the table figures.
+- **Proof** (`server/test/query-workers.test.ts`):
+  - Seeded programs of writes, deletes and queries: collect in both orders, index ranges, `take`, `filter`, `count`,
+    two pages of `paginate`, text search, `unique`, `normalizeId` and `get`, variables, the clock, logs, a
+    `BunvexError` and a `TypeError`. Each query is checked against in-thread, and most of them ran on a worker.
+  - A commit while a worker's count is held is not seen, and the query's next run sees it.
+  - A query that waited for its permit reads at the snapshot it was given, though its worker heard a later commit.
+  - A push during 200 queries: none fails, and each answers from v1 or v2.
+  - The page cache halved.
+  - A worker terminated mid-call: the call fails as a system error and the next succeeds on a new worker.
+  - `for (;;) {}` times out at 1 s while another worker answers.
+  - Sabotages, each caught:
+    - the worker reads at its newest commit instead of the request's ts;
+    - the worker drops an interval;
+    - the worker keeps no catalog of its own (the run-state reads lost).
+- **Not yet:**
+  - the function log's and `/metrics`' worker counts (the pool counts started, answered, failed starts, died,
+    stuck);
+  - a worker's index cache on a commit stream larger than its log (purges follow the main thread's);
+  - a lazy parse of the result for the HTTP API (the spike's 2.1× against 1.8×), to measure first in vi.
+
+### 10.5.8 vi, measured (2026-11-02)
+
+Two DO `c-4` (sfo2), SQLite, 64 VUs, 20 s, 3 repeats per point, all on the same droplets
+(`bench/results/cloud/2026-11-02-s194-vi/`). `BENCH_DEPLOY=1` deploys the bench's functions as a push's code: queries
+go to workers only then (§10.4).
+
+| median req/s (p99 ms) | uncached | cached | insert |
+|---|--:|--:|--:|
+| `main`, functions registered | 1941 (64) | 7894 (17) | 2682 (50) |
+| branch, registered | 1771 (68) | 8089 (17) | 2581 (52) |
+| branch, pushed, 0 workers | 1562 · 1553 (78) | 8097 · 7173 (17–18) | 2186 · 2171 (57–62) |
+| branch, pushed, 2 workers | 3128 · 3074 (47–51) | 7122 · 6905 (19) | 2160 · 2204 (60–69) |
+
+- **The gain, for a pushed app** (every real deployment): uncached 1.56k → 3.1k req/s (**2.0×**), p99 78 → 49 ms,
+  with the server using 2.45 cores instead of 0.97. Inserts are unchanged (2.18k either way): mutations stay
+  in-thread, and the commits sent to the workers cost nothing measurable.
+- **Pushed code costs more than registered code, in-thread.** On the branch, uncached is −12% and insert −16% against
+  the bench's registered functions. That is what a push's code costs, on `main` too: `vm` contexts, the deployment's
+  variables read per call, the `_modules` reads counted. It is not the workers' cost (with 0 workers nothing is sent).
+  `main` has no `BENCH_DEPLOY` to show the same row; measuring it there is the next step.
+- **What the branch costs a server without workers.** With the functions registered, the branch is uncached −9%
+  (1771 against 1941, ranges 1739–1798 and 1801–2032) and insert −4% (2581 against 2682). The candidates, all from
+  0c, 0d and iv:
+  - the metadata epoch computed per dispatch;
+  - the registry's per-version maps;
+  - `offloads` per call;
+  - the `unrecorded` change.
+
+  Each is to be measured alone before 2b's PR.
+- **Cached, with workers:** 7.0k against 7.6k without (ranges 6431–7878 and 7154–8404). Too noisy to call, and the
+  lead suspect is `callSpec` making the arguments' text and the code's sources for a query that the cache then
+  answers. That should be measured, and if needed only done when a worker is about to run the query.
+
+### 10.5.9 vi, the costs removed (2026-11-02)
+
+Three more rounds on new `c-4` pairs (`bench/results/cloud/2026-11-02-s194-vi/round2`–`round4-cached`), with `main`
+pushed too (a local commit adding `BENCH_DEPLOY`):
+
+- **A server with registered functions paid for workers it could not use.** Once a pool existed (any server on a
+  SQLite file), every query made its request's text, pinned the counts and wrote the identity as text before the
+  dispatcher found no worker would run it. Now the engine asks first (`QueryWorkers.wants`: the call's code has
+  sources and a worker is ready, else one starts for the calls after). A query's arguments become text only for a
+  worker (`Call.argsText`).
+- **0b's report was text in-thread too.** Every call's console lines, audit lines and figures were made JSON and parsed
+  back by the dispatcher. A bisection of the branch put that at about 2% of an insert in-process. The report is now a
+  value in the thread (`CallLocal.report`) and becomes text only when an outcome crosses.
+- **After both (round 3, each side twice):**
+  - registered: uncached 1929 · 2017 against `main`'s 1938 · 1953, cached the same, insert 2273 · 2191 against
+    2258 · 2309;
+  - pushed with 0 workers: 1716 · 1720 / 7946 · 7959 / 2078 · 2038 against `main` pushed 1741 · 1764 / 7901 · 8009 /
+    2113 · 2071;
+  - pushed with 2 workers: uncached **3201 (1.83× `main` pushed)**, inserts 2057.
+
+  What is left without workers is about 1–2% on inserts, inside the runs' spread, not tied to one function in a
+  profile.
+- **Cached with workers** looked 10–14% lower in rounds 1 and 3, equal in round 2. Round 4 alternated 0 and 2 workers on
+  the cached scenario alone, 5 repeats each: 9417 · 9851 against 10209 · 9865 · 9164. Equal. In-process the cache's hits
+  are the same with and without workers (about 320k/s).
+- **Pushed code against registered, on `main`:** uncached −9%, insert −8% (`main` pushed against registered). Every
+  real deployment runs pushed code; this is outside 2b.
 
 ### 10.6 Owner questions for 2b
 

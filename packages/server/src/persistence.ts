@@ -22,7 +22,14 @@
 // set to any non-empty value (`0` and `false` too, as the shell's `${VAR:+…}` reads it). PG_CA_FILE and
 // MYSQL_CA_FILE add a trusted CA.
 import { mkdirSync } from "node:fs";
-import { bundledModule, DEFAULT_INSTANCE_NAME, knob, type Persistence, secondsKnob } from "@bunvex/core";
+import {
+  bundledModule,
+  DEFAULT_INSTANCE_NAME,
+  knob,
+  type Persistence,
+  type StoreReader,
+  secondsKnob,
+} from "@bunvex/core";
 
 export type PersistenceConfig = {
   kind: string;
@@ -176,6 +183,22 @@ export async function openPersistence(c: PersistenceConfig): Promise<Persistence
     }
     default:
       throw new Error(`unknown PERSISTENCE=${c.kind} (memory, sqlite, postgres, mysql)`);
+  }
+}
+
+// An execution worker's connection to the store (STUDY-194 §10.2).
+/**
+ * Opens a store for reading from another thread than its writer's, as `Persistence.reader` described it, with a page
+ * cache of `cacheBytes`.
+ */
+export async function openStoreReader(d: StoreReader, opts: { cacheBytes: number }): Promise<Persistence> {
+  switch (d.driver) {
+    case "sqlite": {
+      const { SqliteStoreReader } = await import("@bunvex/core/persistence/sqlite");
+      return new SqliteStoreReader(d.path, opts);
+    }
+    default:
+      throw new Error(`no reader for the ${(d as { driver: string }).driver} store`);
   }
 }
 

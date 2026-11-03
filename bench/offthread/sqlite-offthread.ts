@@ -107,7 +107,7 @@ export class OffThreadSqlite extends SqlitePersistence {
     });
   }
 
-  private reader(): Thread | null {
+  private readerThread(): Thread | null {
     if (!this.readers.length) return null;
     // The least busy of the pool, round robin among equals.
     let best = this.readers[this.nextReader++ % this.readers.length]!;
@@ -116,17 +116,17 @@ export class OffThreadSqlite extends SqlitePersistence {
   }
 
   override scan(...args: Parameters<SqlitePersistence["scan"]>): any {
-    const r = this.reader();
+    const r = this.readerThread();
     return r ? r.call({ op: "scan", args }) : super.scan(...args);
   }
 
   override get(...args: Parameters<SqlitePersistence["get"]>): any {
-    const r = this.reader();
+    const r = this.readerThread();
     return r ? r.call({ op: "get", args }) : super.get(...args);
   }
 
   override getVersions(...args: Parameters<SqlitePersistence["getVersions"]>): any {
-    const r = this.reader();
+    const r = this.readerThread();
     return r ? r.call({ op: "getVersions", args }) : super.getVersions(...args);
   }
 

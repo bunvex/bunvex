@@ -41,6 +41,14 @@ export class BackendStateCache {
 
   constructor(private readonly byIdIndex: () => IndexId | undefined) {}
 
+  /**
+   * @internal What happened before `ts` is not known (an execution worker that started then): no state read at a
+   * snapshot before it is cached as current.
+   */
+  unknownBefore(ts: bigint) {
+    if (ts > this.writtenTs) this.writtenTs = ts;
+  }
+
   /** Commits, as they become visible (before any transaction can begin at their ts). */
   observe(entries: LogEntry[]) {
     const index = this.byIdIndex();

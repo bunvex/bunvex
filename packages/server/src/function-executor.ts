@@ -197,12 +197,27 @@ export const vmExecutor: Executor = {
  * Load code in `executor` (the server's; `vm` by default), a component instance's `beside` the app's version. Every
  * load of an app's modules goes through here.
  */
-export const loadCode = (
+export const loadCode = async (
   sources: ModuleSource[],
   opts: LoadOptions,
   executor: Executor = vmExecutor,
   beside?: LoadedCode,
-): Promise<LoadedCode> => (beside ? executor.load(sources, opts, beside) : executor.load(sources, opts));
+): Promise<LoadedCode> => {
+  const version = await (beside ? executor.load(sources, opts, beside) : executor.load(sources, opts));
+  loads.set(version, { sources, opts, beside });
+  return version;
+};
+
+// STUDY-194 §4.8: an execution worker loads the same version from what made it.
+/** What each version `loadCode` made was made from. */
+const loads = new WeakMap<LoadedCode, { sources: ModuleSource[]; opts: LoadOptions; beside?: LoadedCode }>();
+
+/**
+ * The sources, options and app version a version was loaded from, if `loadCode` loaded it.
+ *
+ * @internal
+ */
+export const loadInputsOf = (version: LoadedCode) => loads.get(version);
 
 /** Evaluate a standalone module's default export in `executor` (`Executor.evaluateDefault`). */
 export const evaluateDefault = (

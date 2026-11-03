@@ -27,6 +27,10 @@ function recording(run: (db: Tx, args: unknown) => Promise<unknown>) {
       return run(db, parseValue(request.args));
     },
     record: (value) => ({ result: JSON.stringify(value), logLines: [] }),
+    encodeError: (e) => String((e as Error).message),
+    decodeError: (text) => new Error(text),
+    capture: (run) => ({ result: run(), report: () => null }),
+    replay: () => {},
   };
   const call = (kind: "query" | "mutation", args: unknown): Call => ({
     spec: { kind, name: "m:f", args: JSON.stringify(args), internal: false, session: null },
@@ -94,4 +98,49 @@ test("without the codec, as outside the tests: the same request and identity obj
   await e.mutationWithTs(writer.call("mutation", { n: 5 }), "m:f");
   expect(await e.queryJson(call("query", {}), "key", undefined, caller)).toBe("1");
   expect(seen.length).toBe(2);
+});
+
+// STUDY-194 §4.7, 2b commit 0d: a request names the metadata's epoch at dispatch; under the codec a query's call
+// begins with that epoch's catalog as a worker would have been sent it, not the engine's own object.
+test("a query's call begins with its epoch's catalog, sent through the codec; a table a mutation created is a new epoch", async () => {
+  const e = await engine();
+  const catalogs: unknown[] = [];
+  const { seen, call } = recording(async (db) => {
+    catalogs.push((db as unknown as { catalog: unknown }).catalog);
+    return (await db.query("notes").collect()).length;
+  });
+  expect(await e.queryJson(call("query", {}))).toBe("0");
+  const before = e.metadataEpoch;
+  expect(e.metadataEpoch).toBe(before);
+  // Created by an insert: the catalog changes in place.
+  await e.mutation((db) => db.insert("notes", { text: "hi" }));
+  expect(e.metadataEpoch).toBe(before + 1);
+  expect(await e.queryJson(call("query", {}))).toBe("1");
+  expect(seen.map((s) => s.request.metadata)).toEqual([before, before + 1]);
+  expect(catalogs[1]).not.toBe(e.catalog);
+  expect(catalogs[1]).toEqual(e.catalog);
+});
+
+test("a query's call through the codec sees an index's state as the engine does: a staged index stays staged", async () => {
+  const e = await new Engine(
+    defineSchema({ items: defineTable({ n: v.number() }).index("by_n", { fields: ["n"], staged: true }) }),
+    await MemoryPersistence.open(null, { durable: false }),
+  ).init();
+  const { call } = recording(async (db) => db.query("items").withIndex("by_n").collect());
+  await expect(e.queryJson(call("query", {}))).rejects.toThrow(
+    "Index items.by_n is currently staged and not available to query until it is enabled.",
+  );
+});
+
+// What a subscription does: a commit's listener reruns the query at that commit. A table the commit created is in the
+// catalog by then (before, it was added after the listeners, and a query's copy of the catalog missed it for good).
+test("a query a commit's listener dispatches finds the table that commit created", async () => {
+  const e = await engine();
+  const { call } = recording(async (db) => (await db.query("notes").collect()).length);
+  let rerun: Promise<string> | undefined;
+  e.committer.onCommit(() => {
+    rerun ??= e.queryJson(call("query", {})) as Promise<string>;
+  });
+  await e.mutation((db) => db.insert("notes", { text: "hi" }));
+  expect(await rerun).toBe("1");
 });

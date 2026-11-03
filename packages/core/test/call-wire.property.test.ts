@@ -51,6 +51,7 @@ const request: fc.Arbitrary<CallRequest> = fc.record({
   tracked: fc.boolean(),
   journal: optText,
   refused: fc.boolean(),
+  metadata: fc.nat(),
 });
 
 const outcome: fc.Arbitrary<CallOutcome> = fc.record({
@@ -60,6 +61,8 @@ const outcome: fc.Arbitrary<CallOutcome> = fc.record({
     value.map((v) => stringifyValue(v)),
     { nil: null },
   ),
+  error: optText,
+  report: optText,
   reads: fc.array(fc.record({ index: id, lo: key, hi: key }), { maxLength: 8 }),
   searchReads: fc.array(
     fc.record({
@@ -142,6 +145,7 @@ describe("the call boundary's codec", () => {
             tracked: false,
             journal: null,
             refused: false,
+            metadata: 0,
           }),
         );
         expect(parseValue(r.args)).toEqual(v as Value);
@@ -188,6 +192,8 @@ describe("the call boundary's codec", () => {
     id: 7,
     status: "ok",
     result: "1",
+    error: null,
+    report: null,
     reads: [
       { index: "i1", lo: new Uint8Array([1]), hi: new Uint8Array([2]) },
       { index: "i2", lo: new Uint8Array([3, 4]), hi: new Uint8Array([5]) },
@@ -223,7 +229,7 @@ describe("the call boundary's codec", () => {
       "A malformed call outcome: reads[1].hi: a byte past 255",
     );
     const flags = encodeCallOutcome({ ...sample, reads: [] });
-    expect(() => decodeCallOutcome(flags.replace("1:k1:10:0:", "1:k1:12:0:"))).toThrow(
+    expect(() => decodeCallOutcome(flags.replace("1:k1:1__0:0:", "1:k1:1__2:0:"))).toThrow(
       "A malformed call outcome: identityObserved: expected 0 or 1, got 2",
     );
     expect(() => decodeCallOutcome(s.replace(":2:2:", ":2:99999:"))).toThrow(

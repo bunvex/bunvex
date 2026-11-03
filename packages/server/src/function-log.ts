@@ -4,7 +4,16 @@
 //
 // A part is a Completion (one per execution) or a Progress event (lines an action printed as it ran). The
 // newest MAX_UDF_EXECUTION parts are kept, each under a cursor: wall-clock ms, strictly increasing.
-import { clearLongTimer, knob, type LongTimer, longTimeout, type UserTimer, userTimeMs, wallClock } from "@bunvex/core";
+import {
+  clearLongTimer,
+  knob,
+  type LongTimer,
+  longTimeout,
+  type Tx,
+  type UserTimer,
+  userTimeMs,
+  wallClock,
+} from "@bunvex/core";
 import { type LogLine, type LogOwner, prettyLogLine, type RunFigures } from "./logs.ts";
 import { ISOLATE_MEMORY_MB, NODE_MEMORY_MB } from "./usage-limits.ts";
 
@@ -162,6 +171,33 @@ export type Progress = {
 
 export type Part = Completion | Progress;
 
+/**
+ * A query's or mutation's figures as its call's outcome reports them (STUDY-194 §10.2, 2b commit 0b), read where it
+ * ran: its user time (null: it failed before its timer started), its transaction's I/O as if it committed, its
+ * per-table rows, and its reads.
+ */
+export type CallFigures = {
+  userMs: number | null;
+  io: ReturnType<Tx["io"]>;
+  tables: [table: string, rows: { rowsRead: number; rowsWritten: number }][];
+  documentsRead: number;
+  bytesRead: number;
+};
+
+/** A call's I/O (`CallFigures.io`): its writes count only once it committed, as `Tx.io`'s. */
+export function callIo(io: CallFigures["io"], committed: boolean): CallFigures["io"] {
+  if (committed) return io;
+  return {
+    ...io,
+    writeBytes: 0,
+    writeDocuments: 0,
+    writeIndexRows: 0,
+    textWriteBytes: 0,
+    vectorWriteBytes: 0,
+    vectorWriteQueryBytes: 0,
+  };
+}
+
 /** An execution being logged: the owner of the lines it prints (logs.ts). */
 export class Running implements LogOwner {
   onLine: ((line: LogLine) => void) | null = null;
@@ -177,6 +213,8 @@ export class Running implements LogOwner {
   tokenIdentifier: string | null = null;
   ip: string | null = null;
   tx: unknown = null;
+  /** A query's or mutation's run through the call boundary: its figures from its outcome, instead of `tx` and `timer`. */
+  call: CallFigures | null = null;
   /** How an action's `fetch` goes out (STUDY-80): checked, and through the deployment's proxy. */
   send: typeof fetch | null = null;
   /**
@@ -247,7 +285,12 @@ export class Running implements LogOwner {
       // A query's or mutation's user time excludes its store and nested calls, as Convex's; an action's is its
       // wall time, as Convex pauses an action's clock only while its isolate starts (STUDY-71).
       // Never above the wall time, which bunvex reads from a coarser clock.
-      userExecutionTime: this.timer ? Math.min(userTimeMs(this.timer as UserTimer) / 1000, seconds) : seconds,
+      userExecutionTime:
+        this.call?.userMs != null
+          ? Math.min(this.call.userMs / 1000, seconds)
+          : this.timer && !this.call
+            ? Math.min(userTimeMs(this.timer as UserTimer) / 1000, seconds)
+            : seconds,
       // Convex's memory per execution: its isolate heap (64 MiB), a Node action's 512 MB (STUDY-61).
       memoryUsedMb: this.environment === "node" ? NODE_MEMORY_MB : ISOLATE_MEMORY_MB,
       executionTimestamp: this.start / 1000,

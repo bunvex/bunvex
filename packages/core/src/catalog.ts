@@ -587,6 +587,12 @@ export class Catalog {
     return out;
   }
 
+  /** @internal (metadata codec) Index the active tables by number, as `add` and the copies do. */
+  indexNumbers() {
+    this.numbers.clear();
+    for (const t of this.tables.values()) this.numbers.set(t.number, t);
+  }
+
   /** The table of this namespace whose persistence id is `tablet`, if any. */
   byTablet(tablet: TabletId): TableDef | undefined {
     for (const t of this.tables.values()) if (t.id === tablet) return t;

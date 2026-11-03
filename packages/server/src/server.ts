@@ -26,6 +26,7 @@ import {
   orderEnvVarChanges,
   parseValue,
   readBackendState,
+  realRuntime,
   resolveComponentPath,
   SCHEDULED_JOB_ARGS_TABLE,
   SCHEDULED_JOBS_TABLE,
@@ -113,6 +114,7 @@ import {
   newRequestId,
   withRequestId,
 } from "./errors.ts";
+import { maxExecutionWorkers } from "./execution-workers.ts";
 import { EXECUTOR_SOURCES, ExecutorInvalidations } from "./executor-invalidations.ts";
 import { ExportError, ExportService } from "./exports.ts";
 import {
@@ -181,6 +183,7 @@ import {
 } from "./otlp.ts";
 import { evaluateAuthConfig, PushError, PushService } from "./push.ts";
 import { QueryArgsError, type QueryField, queryArgs } from "./query-args.ts";
+import { startQueryWorkers } from "./query-workers.ts";
 import { RequestLimit, requestLimitFromEnv, withRequestLimit } from "./request-limit.ts";
 import { REQUEST_TIMEOUT_MS, withRequestTimeout } from "./request-timeout.ts";
 import { withRequestTracing } from "./request-tracing.ts";
@@ -228,6 +231,12 @@ type WsData = { session: SyncSession; waiting?: Promise<void> };
 export type ServerOptions = {
   engine: Engine;
   functions: Functions;
+  // DV-574, AD-47, STUDY-194 Q10.
+  /**
+   * The most execution workers queries run on (default `MAX_ISOLATE_WORKERS`, else the core count); 0 runs every
+   * call on the main thread. Workers start only on a store they can read themselves (a SQLite file).
+   */
+  executionWorkers?: number;
   /**
    * How many days of the audit log may be read (STUDY-48, Convex's `_backend_info.auditLogRetentionDays`):
    * -1 (the default) all of it, null none. Events are always recorded.
@@ -2073,6 +2082,19 @@ export function createServer(opts: ServerOptions) {
   };
   functions.builtinEnv = builtinEnv;
   functions.httpRoutes = () => (httpOptions.router?.getRoutes() ?? []).map(([path, method]) => [method, path] as const);
+  // STUDY-194 2b: queries on execution workers, where a worker can read the store itself and run the code as here:
+  // the `vm` executor and the process's own clock (§10.4).
+  const queryWorkers =
+    executor.kind === "vm" && engine.runtime === realRuntime
+      ? startQueryWorkers({
+          engine,
+          functions,
+          persistence: engine.persistence,
+          max: opts.executionWorkers ?? maxExecutionWorkers(),
+          filesOrigin: files?.origin ?? null,
+          builtinEnv,
+        })
+      : null;
   /** The deployment's variables with the built-ins, as `auth.config` sees them. */
   const deploymentEnv = async () => {
     const [vars, canonical] = await engine.query(
@@ -2360,50 +2382,53 @@ export function createServer(opts: ServerOptions) {
     o: { crons?: boolean; auth?: AuthInfo[]; components?: boolean } = {},
   ) => {
     const components = o.components === false ? null : await readComponents(version);
-    // The swap: synchronous from here to the routing.
-    const changed = functions.install(version.functions, version.moduleHashes, version.rooms, version.moduleLoads);
-    liveVersion = version;
-    executor.installed?.(version);
-    httpOptions.router = version.router;
-    if (o.auth !== undefined) useAuth(o.auth);
-    /** Each namespace's function handles to sync (STUDY-50, STUDY-155): `null` is the app's. */
-    const handles = new Map<string | null, string[]>([[null, functions.functionPaths()]]);
-    if (components) {
-      for (const id of functions.installedComponents())
-        if (!components.live.has(id)) {
-          functions.removeComponent(id);
-          replaceComponentVersion(id, null);
-          changed.add(id);
-          // Its handles soft-deleted (Convex's `apply_config_diff(component, None)` at an unmount).
-          handles.set(id, []);
+    /** Each namespace's function handles to sync (STUDY-50, STUDY-155): `null` is the app's, first. */
+    const handles = new Map<string | null, string[]>([[null, []]]);
+    // The swap: synchronous, and the functions' registry published as one version (STUDY-194 §10.5, 0c).
+    const changed = functions.swap(() => {
+      const changed = functions.installVersion(version);
+      liveVersion = version;
+      executor.installed?.(version);
+      httpOptions.router = version.router;
+      if (o.auth !== undefined) useAuth(o.auth);
+      if (components) {
+        for (const id of functions.installedComponents())
+          if (!components.live.has(id)) {
+            functions.removeComponent(id);
+            replaceComponentVersion(id, null);
+            changed.add(id);
+            // Its handles soft-deleted (Convex's `apply_config_diff(component, None)` at an unmount).
+            handles.set(id, []);
+          }
+        for (const { meta, path, code } of components.loaded) {
+          if (meta.parent === null) continue;
+          if (!code) {
+            functions.removeComponent(meta._id);
+            replaceComponentVersion(meta._id, null);
+            continue;
+          }
+          functions.installComponentVersion(
+            {
+              id: meta._id,
+              path: path.join("/"),
+              definitionName: definitionNameOf(components.routing.definitions.get(meta.definitionId)),
+              env: new Map(meta.env),
+              httpPrefix: meta.httpPrefix,
+            },
+            code,
+          );
+          replaceComponentVersion(meta._id, code);
+          // A handle row per function of the component, any visibility (Convex's `FunctionHandlesModel`, STUDY-155).
+          handles.set(meta._id, [...code.functions.keys()].map(canonicalPath));
+          for (const key of code.functions.keys())
+            changed.add(Functions.moduleOf(componentFunctionName(meta._id, key)));
         }
-      for (const { meta, path, code } of components.loaded) {
-        if (meta.parent === null) continue;
-        if (!code) {
-          functions.removeComponent(meta._id);
-          replaceComponentVersion(meta._id, null);
-          continue;
-        }
-        functions.installComponent(
-          {
-            id: meta._id,
-            path: path.join("/"),
-            definitionName: definitionNameOf(components.routing.definitions.get(meta.definitionId)),
-            env: new Map(meta.env),
-            httpPrefix: meta.httpPrefix,
-          },
-          code.functions,
-          code.moduleHashes,
-          code.moduleLoads,
-          code.router,
-        );
-        replaceComponentVersion(meta._id, code);
-        // A handle row per function of the component, any visibility (Convex's `FunctionHandlesModel`, STUDY-155).
-        handles.set(meta._id, [...code.functions.keys()].map(canonicalPath));
-        for (const key of code.functions.keys()) changed.add(Functions.moduleOf(componentFunctionName(meta._id, key)));
       }
-      httpOptions.routing = httpRouting(components.routing);
-    }
+      return changed;
+    });
+    // Read after the swap, with no await between: inside it, reads see the version before.
+    handles.set(null, functions.functionPaths());
+    if (components) httpOptions.routing = httpRouting(components.routing);
     // The swap is done: what follows may await.
     for (const [id, paths] of handles)
       await engine.mutation(
@@ -2762,7 +2787,10 @@ export function createServer(opts: ServerOptions) {
     serverMetrics,
     /** The topology at `/api/debug/topology` (STUDY-131 §11, AD-04). */
     topology,
+    /** The execution workers queries run on (STUDY-194 2b), when the server starts them. */
+    queryWorkers,
     stop: () => {
+      void queryWorkers?.close();
       serverMetrics.stop();
       topology.stop();
       builtinScreen?.stop();
@@ -2802,8 +2830,10 @@ export function createServer(opts: ServerOptions) {
       server?.stop(true);
       builtinScreen?.stop();
       functionLog.close();
-      // The function sandbox's children (by their own pids), once nothing can call them.
+      // The function sandbox's children (by their own pids), once nothing can call them; the execution workers, whose
+      // connections close before the store's own (the last to close checkpoints it).
       await executor.close?.();
+      await queryWorkers?.close();
       await engine.close();
       // The last spans (the final commits' included) are sent before the process goes.
       await spanExporter?.close();

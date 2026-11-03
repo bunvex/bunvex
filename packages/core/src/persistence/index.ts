@@ -29,6 +29,9 @@ export type IndexedDoc = { id: InternalId; ts: bigint; json: string };
 /** An index entry at a past ts: an index backfill's, at its document version's own ts (PERSIST-01 C17). */
 export type IndexEntryAt = IndexWrite & { ts: bigint };
 
+/** What another thread needs to open a store for reading (`Persistence.reader`): plain data, sent to it as JSON. */
+export type StoreReader = { driver: "sqlite"; path: string };
+
 export interface Persistence {
   /** Apply one commit's writes at `ts`. Called by the committer, possibly several times per group. */
   apply(ts: bigint, docs: DocWrite[], idx: IndexWrite[]): void;
@@ -89,6 +92,13 @@ export interface Persistence {
    * fail-stop (the embedded drivers).
    */
   isTransient?(e: unknown): boolean;
+  // STUDY-194 §10.2: an execution worker opens a reader of its own from this description.
+  /**
+   * How another thread opens this store to read it, on a connection of its own (`StoreReader`): no lock, no
+   * writes, nothing created. Absent or undefined when no other thread can: a store in memory, or a wrapper,
+   * which a reader would bypass. Execution workers run calls only on a store that describes one.
+   */
+  reader?(): StoreReader | undefined;
   /**
    * PERSIST-01 C14: a persistence global (Convex's `persistence_globals`), JSON, or null if unset. Required:
    * a start finds the catalog from the bootstrap globals (STUDY-133 §5.2). An integer above 2^53 is a

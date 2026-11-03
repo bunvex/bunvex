@@ -2,6 +2,7 @@
 // with validators, as Convex — STUDY-13), the registry that names them ("module:fn"), internal functions,
 // and the calls the transports make. Transactions themselves run in
 // the engine (@bunvex/core); this layer only decides WHICH body runs and with what context.
+import { AsyncLocalStorage } from "node:async_hooks";
 import vm from "node:vm";
 import {
   boolKnob,
@@ -188,9 +189,13 @@ import {
 
 export { componentFunctionName, splitComponentFunctionName };
 
+import { decodeCallError, encodeCallError } from "./call-errors.ts";
+import type { LoadedCode } from "./code-version.ts";
 import {
   type CallerName,
+  type CallFigures,
   type Completion,
+  callIo,
   type ExecutionLinks,
   type FunctionLog,
   type IdentityType,
@@ -206,6 +211,7 @@ import { collectingAuditLines, resolveAuditLines } from "./log-audit.ts";
 import { type FunctionSource, type LogEvent, type RunReason, stackFrames } from "./log-events.ts";
 import type { LogManager } from "./log-sinks.ts";
 import {
+  apartLines,
   cachedQueryLogs,
   currentLogLines,
   currentOwner,
@@ -214,6 +220,7 @@ import {
   type LogLine,
   logSystemLine,
   perAttempt,
+  replayLines,
   withOwner,
   withSubFunction,
 } from "./logs.ts";
@@ -735,9 +742,8 @@ function functionSpanEnd(span: Span, r: Running, res: { ok: boolean; error?: unk
     .set("bunvex.function.environment", r.environment)
     .set("bunvex.function.cached", r.cached)
     .set("bunvex.request_id", r.requestId);
-  const tx = r.tx as Tx | null;
-  if (tx) {
-    const used = tx.usage;
+  const used = r.call ?? (r.tx as Tx | null)?.usage;
+  if (used) {
     span.set("bunvex.function.documents_read", used.documentsRead).set("bunvex.function.bytes_read", used.bytesRead);
   }
   if (!res.ok) span.fail(res.error);
@@ -748,6 +754,8 @@ function functionSpanEnd(span: Span, r: Running, res: { ok: boolean; error?: unk
 function noteTx(db: Tx) {
   const owner = currentOwner();
   if (owner) owner.tx = db;
+  const call = callScope.getStore();
+  if (call) call.tx = db;
 }
 
 /** The running action a storage call or `fetch` is charged to (STUDY-71); a Node action's fetch is not. */
@@ -940,6 +948,8 @@ function trackedFormData(request: Request): Request {
 function timed(timer: UserTimer): UserTimer {
   const owner = currentOwner();
   if (owner) owner.timer = timer;
+  const call = callScope.getStore();
+  if (call) call.timer = timer;
   return timer;
 }
 
@@ -1068,24 +1078,113 @@ function systemArgsError(message: string): Error {
   return e;
 }
 
+/**
+ * A mounted component instance's code: its runtime, its modules' hashes and its router, and the loaded version they
+ * came from when they came from one (`installComponentVersion`).
+ */
+type ComponentCode = {
+  runtime: ComponentRuntime;
+  hashes: Map<string, string>;
+  router: HttpRouter | undefined;
+  code: LoadedCode | null;
+};
+
+// STUDY-194 §4.8 (2b step iii): what an execution worker loads to hold the same registry.
+/**
+ * Where a registry's functions came from, when every one came from a loaded version: the app's (none before the first
+ * push) and each mounted component's, with its runtime.
+ */
+export type CodeSources = {
+  app: LoadedCode | null;
+  components: { runtime: ComponentRuntime; code: LoadedCode }[];
+};
+
+// STUDY-194 §10.5 (2b commit 0c): what a worker will hold per code version, named by its epoch.
+/**
+ * One version of the code a call resolves its name against: the app's functions, rooms and module hashes, and each
+ * mounted component's. Published whole by `Functions.swap` and never changed after; a change makes the next version,
+ * with the next epoch.
+ */
+class CodeRegistry {
+  constructor(
+    readonly epoch: number,
+    public fns: Map<string, FunctionDef>,
+    /** Every room and presence definition (AD-42), by registry key, as `fns` keys functions. */
+    public rooms: Map<string, AnyRoomDef>,
+    /** Each module's code hash (a deployed code version's modules); empty for registered (embedded) code. */
+    public moduleHashes: Map<string, string>,
+    // STUDY-154.
+    /** Each mounted component's functions, by `componentFunctionName`. */
+    readonly componentFns: Map<string, FunctionDef>,
+    /** Each mounted component's code, by its `_components` id. */
+    readonly componentRuntimes: Map<string, ComponentCode>,
+    // STUDY-37 E3.
+    /** Whether the functions are pushed code, which sees the deployment's variables. */
+    public deployed: boolean,
+    /** The loaded version the app's functions came from (`installVersion`); null before one, or when given as maps. */
+    public app: LoadedCode | null = null,
+    /** Whether some function or room was given as maps, not from a loaded version (`install`, `register`). */
+    public unsourced = false,
+  ) {}
+
+  static empty() {
+    return new CodeRegistry(0, new Map(), new Map(), new Map(), new Map(), new Map(), false);
+  }
+
+  /** A copy to change, as the next version. */
+  next() {
+    return new CodeRegistry(
+      this.epoch + 1,
+      new Map(this.fns),
+      new Map(this.rooms),
+      new Map(this.moduleHashes),
+      new Map(this.componentFns),
+      new Map(this.componentRuntimes),
+      this.deployed,
+      this.app,
+      this.unsourced,
+    );
+  }
+}
+
 export class Functions {
-  private fns = new Map<string, FunctionDef>();
-  /** Every room and presence definition (AD-42), by registry key, as `fns` keys functions. */
-  rooms = new Map<string, AnyRoomDef>();
+  /** The code calls resolve against now. */
+  private code = CodeRegistry.empty();
+  /** The next version while `swap` builds it. */
+  private draft: CodeRegistry | null = null;
+  /** Every room and presence definition, by registry key. */
+  get rooms(): ReadonlyMap<string, AnyRoomDef> {
+    return this.code.rooms;
+  }
+  /** The installed code's version: it changes with every install, registration or removal. */
+  get codeEpoch(): number {
+    return this.code.epoch;
+  }
+  /**
+   * Make every code change `apply` makes one version: a call resolves against the code before it or after it, never
+   * in between. Changes made outside a `swap` are each their own.
+   */
+  swap<T>(apply: () => T): T {
+    if (this.draft) return apply();
+    const draft = this.code.next();
+    this.draft = draft;
+    try {
+      const r = apply();
+      this.code = draft;
+      return r;
+    } finally {
+      this.draft = null;
+    }
+  }
+  /** The version a change writes: `swap`'s draft. */
+  private get writing(): CodeRegistry {
+    if (!this.draft) throw new Error("a code change outside Functions.swap");
+    return this.draft;
+  }
   /** The rooms' members in memory (AD-42); set by `createServer`. */
   roomHub: RoomHub | null = null;
   /** Each function's name as its key (`module:fn`), for `ctx.meta.getFunctionMetadata()`. */
   private names = new WeakMap<FunctionDef, string>();
-  /** Each module's code hash (a deployed code version's modules); empty for registered (embedded) code. */
-  private moduleHashes = new Map<string, string>();
-  // STUDY-154.
-  /** Each mounted component's functions, by `componentFunctionName`. */
-  private componentFns = new Map<string, FunctionDef>();
-  /** Each mounted component's runtime and module hashes, by its `_components` id. */
-  private componentRuntimes = new Map<
-    string,
-    { runtime: ComponentRuntime; hashes: Map<string, string>; router: HttpRouter | undefined }
-  >();
   /** The component each of its functions belongs to. */
   private componentOf = new WeakMap<FunctionDef, ComponentRuntime>();
 
@@ -1102,9 +1201,20 @@ export class Functions {
     /** Its `http.js` router, mounted where its parent's definition says (STUDY-157). */
     router?: HttpRouter,
   ) {
+    this.swap(() => this.installComponentIn(runtime, fns, moduleHashes, moduleLoads, router));
+  }
+
+  private installComponentIn(
+    runtime: ComponentRuntime,
+    fns: Map<string, FunctionDef>,
+    moduleHashes: Map<string, string>,
+    moduleLoads: Map<string, string[]>,
+    router: HttpRouter | undefined,
+  ) {
     this.removeComponent(runtime.id);
+    const w = this.writing;
     for (const [key, f] of fns) {
-      this.componentFns.set(componentFunctionName(runtime.id, key), f);
+      w.componentFns.set(componentFunctionName(runtime.id, key), f);
       this.componentOf.set(f, runtime);
       this.deployedFns.add(f);
       this.names.set(f, key);
@@ -1115,25 +1225,93 @@ export class Functions {
         (moduleLoads.get(m) ?? [m]).map((p) => `${runtime.id}\0${p}`),
       );
     }
-    this.componentRuntimes.set(runtime.id, { runtime, hashes: new Map(moduleHashes), router });
+    w.componentRuntimes.set(runtime.id, { runtime, hashes: new Map(moduleHashes), router, code: null });
+  }
+
+  /** Install a component instance's loaded version (`installComponent`), remembering it as the functions' source. */
+  installComponentVersion(runtime: ComponentRuntime, code: LoadedCode) {
+    this.swap(() => {
+      this.installComponentIn(runtime, code.functions, code.moduleHashes, code.moduleLoads, code.router);
+      this.writing.componentRuntimes.get(runtime.id)!.code = code;
+    });
+  }
+
+  /**
+   * The loaded versions this registry's functions came from, or null when some came as maps (`register`, `install`,
+   * `installComponent`): only then can another thread load the same registry.
+   *
+   * @internal
+   */
+  codeSources(): CodeSources | null {
+    const c = this.code;
+    if (c.unsourced) return null;
+    const components: CodeSources["components"] = [];
+    for (const { runtime, code } of c.componentRuntimes.values()) {
+      if (!code) return null;
+      components.push({ runtime, code });
+    }
+    return { app: c.app, components };
+  }
+
+  /**
+   * What calls resolve against, as plain data: each function's kind, visibility, validators, name, module loads and
+   * component; the rooms, hashes, components and their routes. Two registries that describe alike resolve alike (an
+   * execution worker's, against the main thread's).
+   *
+   * @internal
+   */
+  describeCode(): unknown {
+    const c = this.code;
+    const sorted = <T>(m: Iterable<[string, T]>) => [...m].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    const fn = (f: FunctionDef) => ({
+      kind: f.kind,
+      visibility: f.visibility,
+      node: NODE_FUNCTIONS.has(f),
+      args: f.args ? JSON.stringify(f.args.json) : null,
+      returns: f.returns ? JSON.stringify(f.returns.json) : null,
+      name: this.names.get(f) ?? null,
+      loads: this.moduleLoads.get(f) ?? null,
+      component: this.componentOf.get(f)?.id ?? null,
+    });
+    return {
+      deployed: c.deployed,
+      fns: sorted(c.fns).map(([k, f]) => [k, fn(f)]),
+      rooms: sorted(c.rooms).map(([k, r]) => [k, r.kind]),
+      moduleHashes: sorted(c.moduleHashes),
+      componentFns: sorted(c.componentFns).map(([k, f]) => [k, fn(f)]),
+      components: sorted(c.componentRuntimes).map(([id, { runtime, hashes, router }]) => [
+        id,
+        {
+          path: runtime.path,
+          definitionName: runtime.definitionName ?? null,
+          env: sorted(runtime.env),
+          httpPrefix: runtime.httpPrefix,
+          hashes: sorted(hashes),
+          routes: router ? router.getRoutes().map(([path, method]) => [path, method]) : null,
+        },
+      ]),
+    };
   }
 
   // Calling one is "not found", as on Convex.
   /** Remove a component's functions (unmounted or deleted): calling one is "not found". */
   removeComponent(id: string) {
     const prefix = componentFunctionName(id, "x:x").slice(0, -"x:x".length);
-    for (const key of [...this.componentFns.keys()]) if (key.startsWith(prefix)) this.componentFns.delete(key);
-    this.componentRuntimes.delete(id);
+    this.swap(() => {
+      const w = this.writing;
+      for (const key of [...w.componentFns.keys()]) if (key.startsWith(prefix)) w.componentFns.delete(key);
+      w.componentRuntimes.delete(id);
+    });
   }
 
   /** An installed component's runtime and router, or undefined. */
   componentRuntime(id: string): { runtime: ComponentRuntime; router: HttpRouter | undefined } | undefined {
-    return this.componentRuntimes.get(id);
+    return this.code.componentRuntimes.get(id);
   }
 
   /** The components whose code is installed, by id. */
   installedComponents(): string[] {
-    return [...this.componentRuntimes.keys()];
+    return [...this.code.componentRuntimes.keys()];
   }
 
   /** A function name's module, as the registry and code versions key it (`dir/file` of `dir/file:fn`). */
@@ -1153,8 +1331,8 @@ export class Functions {
     try {
       const c = splitComponentFunctionName(name);
       const hash = c
-        ? this.componentRuntimes.get(c.id)?.hashes.get(Functions.moduleOf(c.name))
-        : this.moduleHashes.get(Functions.moduleOf(name));
+        ? this.code.componentRuntimes.get(c.id)?.hashes.get(Functions.moduleOf(c.name))
+        : this.code.moduleHashes.get(Functions.moduleOf(name));
       return cacheKeyOf(hash ?? "", name, args, fromClient);
     } catch (e) {
       // Arguments too deep for the stack to stringify are past the nesting limit: no key, and the run's own
@@ -1175,21 +1353,36 @@ export class Functions {
     rooms: Map<string, AnyRoomDef> = new Map(),
     moduleLoads: Map<string, string[]> = new Map(),
   ): Set<string> {
-    const changed = new Set<string>();
-    for (const [m, h] of moduleHashes) if (this.moduleHashes.get(m) !== h) changed.add(m);
-    for (const m of this.moduleHashes.keys()) if (!moduleHashes.has(m)) changed.add(m);
-    for (const k of this.fns.keys()) if (!fns.has(k)) changed.add(Functions.moduleOf(k));
-    for (const k of fns.keys()) if (!this.fns.has(k)) changed.add(Functions.moduleOf(k));
-    this.fns = new Map(fns);
-    this.rooms = new Map(rooms);
-    this.moduleHashes = new Map(moduleHashes);
-    for (const [k, f] of fns) {
-      const m = Functions.moduleOf(k);
-      this.moduleLoads.set(f, moduleLoads.get(m) ?? [m]);
-      this.deployedFns.add(f);
-    }
-    this.deployed = true;
-    return changed;
+    return this.swap(() => {
+      const w = this.writing;
+      const changed = new Set<string>();
+      for (const [m, h] of moduleHashes) if (w.moduleHashes.get(m) !== h) changed.add(m);
+      for (const m of w.moduleHashes.keys()) if (!moduleHashes.has(m)) changed.add(m);
+      for (const k of w.fns.keys()) if (!fns.has(k)) changed.add(Functions.moduleOf(k));
+      for (const k of fns.keys()) if (!w.fns.has(k)) changed.add(Functions.moduleOf(k));
+      w.fns = new Map(fns);
+      w.rooms = new Map(rooms);
+      w.moduleHashes = new Map(moduleHashes);
+      w.app = null;
+      w.unsourced = fns.size > 0 || rooms.size > 0;
+      for (const [k, f] of fns) {
+        const m = Functions.moduleOf(k);
+        this.moduleLoads.set(f, moduleLoads.get(m) ?? [m]);
+        this.deployedFns.add(f);
+      }
+      w.deployed = true;
+      return changed;
+    });
+  }
+
+  /** Install a loaded code version (`install`), remembering it as the app functions' source. */
+  installVersion(version: LoadedCode): Set<string> {
+    return this.swap(() => {
+      const changed = this.install(version.functions, version.moduleHashes, version.rooms, version.moduleLoads);
+      this.writing.app = version;
+      this.writing.unsourced = false;
+      return changed;
+    });
   }
 
   /**
@@ -1215,9 +1408,6 @@ export class Functions {
     db.countModuleLoads(this.moduleLoads.get(f) ?? ["\0unknown"]);
   }
 
-  // STUDY-37 E3.
-  /** Whether the functions are pushed code, which sees the deployment's variables. */
-  private deployed = false;
   /** The built-in variables (the server's origins), read after the deployment's (which cannot hold them). */
   builtinEnv: Record<string, string> = {};
   /** The HTTP routes served (method, path), for `apiSpec`; the server sets it. */
@@ -1225,7 +1415,7 @@ export class Functions {
 
   /** A query's or mutation's `process.env`: each read in `db`'s read set. */
   private async txEnv(db: Tx, component?: ComponentRuntime): Promise<EnvReader | null> {
-    if (!this.deployed) return null;
+    if (!this.code.deployed) return null;
     const read = await this.engine.environment.reader(db);
     // The canonical URLs in place of the origins (STUDY-49), read here so a change re-runs what read them.
     const builtin = withCanonical(this.builtinEnv, await readCanonicalUrls(db));
@@ -1259,7 +1449,7 @@ export class Functions {
   // Convex's `get_all`.
   /** An action's `process.env`: the variables at its start, no reactivity. */
   private async actionEnv(): Promise<{ all: Record<string, string>; read: EnvReader } | null> {
-    if (!this.deployed) return null;
+    if (!this.code.deployed) return null;
     const [vars, canonical] = await this.engine.query(
       async (db) => [await this.engine.environment.snapshot(db), await readCanonicalUrls(db)] as const,
     );
@@ -1374,7 +1564,7 @@ export class Functions {
       udfType === "Action" && this.isNodeAction(name) ? "node" : "isolate",
     );
     r.clock = this.engine.runtime;
-    if (inComponent) r.componentPath = this.componentRuntimes.get(inComponent.id)?.runtime.path ?? null;
+    if (inComponent) r.componentPath = this.code.componentRuntimes.get(inComponent.id)?.runtime.path ?? null;
     r.tokenIdentifier = ((caller?.identity as { tokenIdentifier?: unknown } | null)?.tokenIdentifier as string) ?? null;
     r.ip = caller?.request?.ip ?? null;
     if (!system && (udfType === "Action" || udfType === "HttpAction"))
@@ -1447,7 +1637,7 @@ export class Functions {
   }
 
   private isNodeAction(name: string): boolean {
-    const f = this.fns.get(registryKey(name)) ?? this.fns.get(name);
+    const f = this.code.fns.get(registryKey(name)) ?? this.code.fns.get(name);
     return f !== undefined && NODE_FUNCTIONS.has(f);
   }
 
@@ -1652,7 +1842,7 @@ export class Functions {
         failed: c.error !== null,
         cached: c.cachedResult,
         executionTime: c.executionTime,
-        ...(r.tx ? { tables: (r.tx as Tx).tableStats } : {}),
+        ...(r.call ? { tables: new Map(r.call.tables) } : r.tx ? { tables: (r.tx as Tx).tableStats } : {}),
       });
     this.serverMetrics?.execution(c.udfType, c.error !== null, c.executionTime);
     this.meterCompletion(r, c, true);
@@ -1662,7 +1852,8 @@ export class Functions {
     const end = this.engine.runtime.now();
     const e = o.error;
     // A mutation's writes count once it committed (Convex meters them in `track_commit`).
-    const used = (r.tx as Tx | null)?.io(r.udfType === "Mutation" && e === undefined);
+    const committed = r.udfType === "Mutation" && e === undefined;
+    const used = r.call ? callIo(r.call.io, committed) : (r.tx as Tx | null)?.io(committed);
     const seconds = (end - r.start) / 1000;
     // An HTTP action that ran to the end is named, and measured, by its route.
     if (o.route) r.metricsName = o.route.metricsName;
@@ -1753,18 +1944,22 @@ export class Functions {
   }
 
   register(module: string, fns: Record<string, FunctionDef | AnyRoomDef>) {
-    for (const [n, f] of Object.entries(fns))
-      if (isRoomDef(f)) this.rooms.set(`${module}:${n}`, f);
-      else {
-        this.fns.set(`${module}:${n}`, f);
-        this.moduleLoads.set(f, [module]);
-      }
+    this.swap(() => {
+      const w = this.writing;
+      w.unsourced = true;
+      for (const [n, f] of Object.entries(fns))
+        if (isRoomDef(f)) w.rooms.set(`${module}:${n}`, f);
+        else {
+          w.fns.set(`${module}:${n}`, f);
+          this.moduleLoads.set(f, [module]);
+        }
+    });
     return this;
   }
 
   /** A room or presence definition by name (`rooms:doc`, or `rooms.doc`-style paths as functions take). */
   roomDef(name: string): AnyRoomDef | undefined {
-    return this.rooms.get(registryKey(name));
+    return this.code.rooms.get(registryKey(name));
   }
 
   // Convex's `require_operation`.
@@ -1796,8 +1991,8 @@ export class Functions {
   private fn<K extends FunctionDef["kind"]>(name: string, kind: K, fromClient: boolean, caller?: Caller) {
     // `dir/file` is its default export, and `.js` is optional, as Convex canonicalizes a path.
     const c = splitComponentFunctionName(name);
-    const key = c ? componentFunctionName(c.id, c.name) : this.fns.has(name) ? name : registryKey(name);
-    const f = c ? this.componentFns.get(key) : this.fns.get(key);
+    const key = c ? componentFunctionName(c.id, c.name) : this.code.fns.has(name) ? name : registryKey(name);
+    const f = c ? this.code.componentFns.get(key) : this.code.fns.get(key);
     if (f) this.names.set(f, key);
     // As Convex (crates/udf/src/validation.rs): a missing function and an internal one called from a
     // client read the same, with the path stripped (no `.js`, no `:default`); a function of another kind
@@ -1808,7 +2003,7 @@ export class Functions {
     if (f.kind !== kind) {
       // A component's function names itself and its component (Convex's `in_component_str`, STUDY-155).
       const shown = c ? c.name : name;
-      const where = c ? ` in '${this.componentRuntimes.get(c.id)?.runtime.path ?? ""}'` : "";
+      const where = c ? ` in '${this.code.componentRuntimes.get(c.id)?.runtime.path ?? ""}'` : "";
       const i = shown.lastIndexOf(":");
       const kindName = (k: string) => k[0].toUpperCase() + k.slice(1);
       const message = `Trying to execute ${shown.slice(0, i)}.js${shown.slice(i)}${where} as ${kindName(kind)}, but it is defined as ${kindName(f.kind)}.`;
@@ -1834,8 +2029,8 @@ export class Functions {
   /** A function by name, an app's or a component's (`componentFunctionName`), or undefined. */
   private lookup(name: string): FunctionDef | undefined {
     const c = splitComponentFunctionName(name);
-    if (c) return this.componentFns.get(componentFunctionName(c.id, c.name));
-    return this.fns.get(name) ?? this.fns.get(registryKey(name));
+    if (c) return this.code.componentFns.get(componentFunctionName(c.id, c.name));
+    return this.code.fns.get(name) ?? this.code.fns.get(registryKey(name));
   }
 
   /** Whether a function is internal (false when it does not exist). */
@@ -1856,14 +2051,17 @@ export class Functions {
     // routes (STUDY-157).
     const routes = (
       componentId
-        ? (this.componentRuntimes.get(componentId)?.router?.getRoutes() ?? []).map(([path, method]) => [method, path])
+        ? (this.code.componentRuntimes.get(componentId)?.router?.getRoutes() ?? []).map(([path, method]) => [
+            method,
+            path,
+          ])
         : this.httpRoutes()
     ).map(([method, path]) => ({ functionType: "HttpAction", method, path }));
     const prefix = componentId ? componentFunctionName(componentId, "x:x").slice(0, -"x:x".length) : null;
     const entries: [string, FunctionDef][] =
       prefix === null
-        ? [...this.fns]
-        : [...this.componentFns]
+        ? [...this.code.fns]
+        : [...this.code.componentFns]
             .filter(([key]) => key.startsWith(prefix))
             .map(([key, f]) => [key.slice(prefix.length), f]);
     const fns = entries.map(([key, f]) => {
@@ -2039,8 +2237,16 @@ export class Functions {
     const checked = this.callSpec("query", name, args, fromClient, caller);
     if (!checked) return this.queryBody(name, args, fromClient, caller);
     // It runs the function its arguments were checked against, whatever a push installs while it waits for its permit.
-    const local: CallIn = { args: checked.args, fn: checked.fn };
-    return { spec: checked.spec, bodies: this.bodies, permit: this.queryPermit, local };
+    const local: CallIn = { args: checked.args, fn: checked.fn, ...(checked.code ? { code: checked.code } : {}) };
+    const value = checked.args;
+    return {
+      spec: checked.spec,
+      bodies: this.bodies,
+      permit: this.queryPermit,
+      local,
+      // Made only when a worker runs it (the engine asks).
+      ...(checked.code && value ? { argsText: () => argsText(value.value) } : {}),
+    };
   }
 
   /**
@@ -2081,7 +2287,7 @@ export class Functions {
     args: unknown,
     fromClient: boolean,
     caller: Caller | undefined,
-  ): { spec: CallSpec; fn: FunctionDef; args?: { value: unknown } } | null {
+  ): { spec: CallSpec; fn: FunctionDef; args?: { value: unknown }; code?: CallIn["code"] } | null {
     if (isSystemPath(name)) return null;
     // A query on a deployment known not to run fails before its permit (Convex's `fail_while_not_running`).
     const state = kind === "query" ? this.engine.backendState.latest() : null;
@@ -2095,12 +2301,24 @@ export class Functions {
       return null;
     }
     const internal = !fromClient || f.visibility === "internal";
+    // A query an execution worker may run: the code its arguments were checked against (their text is made when a
+    // worker runs it, `Call.argsText`).
+    const sources = kind === "query" && this.offloadQueries ? this.codeSources() : null;
+    const code = sources ? { code: { epoch: this.code.epoch, sources } } : {};
     // Without the codec (outside the tests, STUDY-194 Q7) the arguments go beside the request as they are.
     if (!this.engine.callCodec)
-      return { spec: { kind, name, args: "", internal, session: null }, fn: f, args: { value: a } };
+      return { spec: { kind, name, args: "", internal, session: null }, fn: f, args: { value: a }, ...code };
     const text = argsText(a);
     if (text === null) return null;
-    return { spec: { kind, name, args: text, internal, session: null }, fn: f };
+    return { spec: { kind, name, args: text, internal, session: null }, fn: f, ...code };
+  }
+
+  /** @internal Whether queries may run on execution workers: their calls carry what a worker needs (`callSpec`). */
+  offloadQueries = false;
+
+  /** @internal The code side of the call boundary, as an execution worker's runner takes it. */
+  get callBodies(): CallBodies {
+    return this.bodies;
   }
 
   // STUDY-194 §4.1.
@@ -2108,6 +2326,46 @@ export class Functions {
   private readonly bodies: CallBodies = {
     body: (request, local) => this.callBody(request, local as CallIn | undefined),
     record: (value) => ({ result: stringifyValue(value), logLines: currentLogLines() }),
+    encodeError: (e) => encodeCallError(e, (x) => this.engine.persistence.isTransient?.(x) === true),
+    capture: (run) => {
+      const scope: CallScope = { audit: [], tx: null, timer: null };
+      const apart = apartLines(() => callScope.run(scope, run));
+      return {
+        result: apart.result,
+        report: () => {
+          const lines = apart.lines();
+          const { audit, tx, timer } = scope;
+          const figures: CallFigures | null = tx && {
+            userMs: timer ? userTimeMs(timer) : null,
+            io: tx.io(true),
+            tables: [...tx.tableStats],
+            documentsRead: tx.usage.documentsRead,
+            bytesRead: tx.usage.bytesRead,
+          };
+          if (lines.length === 0 && audit.length === 0 && !figures) return null;
+          return { lines, audit, figures } satisfies CallReport;
+        },
+      };
+    },
+    replay: (report, local) => {
+      const parsed = (typeof report === "string" ? JSON.parse(report) : report) as CallReport | null;
+      const owner = currentOwner();
+      if (owner instanceof Running) owner.call = parsed?.figures ?? null;
+      const put = () => {
+        if (!parsed) return;
+        replayLines(parsed.lines);
+        for (const a of parsed.audit) this.sendAudit(a);
+      };
+      // A mutation's attempt: its lines replace those of the attempt before (`perAttempt`).
+      const attempt = (local as CallIn | undefined)?.attempt;
+      if (attempt)
+        void attempt(() => {
+          put();
+          return Promise.resolve();
+        });
+      else put();
+    },
+    decodeError: decodeCallError,
   };
 
   /**
@@ -2127,9 +2385,7 @@ export class Functions {
     };
     // A query's arguments were checked on the main thread (`callSpec`): the same text, so not again.
     if (request.kind === "query") return noCommitTs(request.name, this.queryRun(callee("query"), args, false, true));
-    const body = this.mutationRun(callee("mutation"), args, undefined, local?.deadline, false);
-    const attempt = local?.attempt;
-    return attempt ? (db) => attempt(() => body(db)) : body;
+    return this.mutationRun(callee("mutation"), args, undefined, local?.deadline, false);
   }
 
   // Convex's approaching-limit warnings, and when it adds them (STUDY-76).
@@ -2265,6 +2521,10 @@ export class Functions {
     return value;
   }
 
+  /**
+   * A run's audit lines, resolved with its request's variables (over the limits, the run fails with that); a call's
+   * go in its outcome (`bodies.capture`), sent once the dispatcher has it, else they are sent now.
+   */
   private emitAudit(lines: Parameters<typeof resolveAuditLines>[0], db: Tx) {
     const request = db.request;
     const now = wallClock();
@@ -2276,9 +2536,16 @@ export class Functions {
       // Convex's `convex_actor_var`: a member's or an access token's; a self-hosted admin key is neither.
       bunvexActor: null,
     });
+    const sent = { at: now, bodies };
+    const call = callScope.getStore();
+    if (call) call.audit.push(sent);
+    else this.sendAudit(sent);
+  }
+
+  private sendAudit({ at, bodies }: AuditSent) {
     if (this.logManager?.active)
       outsideExecution(() =>
-        this.logManager!.send(bodies.map((body) => ({ timestamp: now, event: { topic: "custom_audit", body } }))),
+        this.logManager!.send(bodies.map((body) => ({ timestamp: at, event: { topic: "custom_audit", body } }))),
       );
   }
 
@@ -2457,7 +2724,7 @@ export class Functions {
   // STUDY-50.
   /** Every function's canonical path (`dir/module.js:function`), for its handle. */
   functionPaths(): string[] {
-    return [...this.fns.keys()].map(canonicalPath);
+    return [...this.code.fns.keys()].map(canonicalPath);
   }
 
   // Convex's `setupQueryMeta` / `setupMutationMeta` / `setupActionMeta` and their syscalls (STUDY-44).
@@ -2707,7 +2974,7 @@ export class Functions {
     // Its lines name it (Convex's `SubFunction`): its own name and its component's path.
     const inner = splitComponentFunctionName(name);
     const sub = {
-      componentPath: inner ? (this.componentRuntimes.get(inner.id)?.runtime.path ?? null) : null,
+      componentPath: inner ? (this.code.componentRuntimes.get(inner.id)?.runtime.path ?? null) : null,
       path: strippedPath(inner ? inner.name : name),
     };
     if (depth >= MAX_NESTED_CALL_DEPTH)
@@ -2839,7 +3106,7 @@ export class Functions {
     const key = registryKey(name);
     const i = key.lastIndexOf(":");
     const [module, fn] = [key.slice(0, i), key.slice(i + 1)];
-    const component = c ? (this.componentRuntimes.get(c.id)?.runtime.path ?? "") : "";
+    const component = c ? (this.code.componentRuntimes.get(c.id)?.runtime.path ?? "") : "";
     const fns = this.functionsIn(c ? c.id : null);
     if (![...fns.keys()].some((k) => k.slice(0, k.lastIndexOf(":")) === module))
       throw new Error(
@@ -2854,22 +3121,22 @@ export class Functions {
 
   /** The functions of component `id` (the app's for null), by `module:fn`. */
   private functionsIn(id: string | null): Map<string, FunctionDef> {
-    if (id === null) return this.fns;
+    if (id === null) return this.code.fns;
     const prefix = componentFunctionName(id, "x:x").slice(0, -"x:x".length);
     const out = new Map<string, FunctionDef>();
-    for (const [key, f] of this.componentFns) if (key.startsWith(prefix)) out.set(key.slice(prefix.length), f);
+    for (const [key, f] of this.code.componentFns) if (key.startsWith(prefix)) out.set(key.slice(prefix.length), f);
     return out;
   }
 
   /** The path of installed component `id` (`a/b`), the app's (`""`) for null; undefined when its code is not installed. */
   componentPathOf(id: string | null): string | undefined {
-    return id === null ? "" : this.componentRuntimes.get(id)?.runtime.path;
+    return id === null ? "" : this.code.componentRuntimes.get(id)?.runtime.path;
   }
 
   /** The id of the component at `path` whose code is installed (`""`: the app, null), or undefined. */
   private componentAt(path: string): string | null | undefined {
     if (path === "") return null;
-    for (const [id, { runtime }] of this.componentRuntimes) if (runtime.path === path) return id;
+    for (const [id, { runtime }] of this.code.componentRuntimes) if (runtime.path === path) return id;
     return undefined;
   }
 
@@ -2945,7 +3212,7 @@ export class Functions {
     if (isSystemPath(name)) {
       const n = name.replace(/:default$/, "");
       this.systemAccess(n, SYSTEM_QUERIES[n], "ViewData", "query", caller);
-    } else this.checkAccess(this.fns.get(name) ?? this.fns.get(registryKey(name)), name, "query", caller);
+    } else this.checkAccess(this.code.fns.get(name) ?? this.code.fns.get(registryKey(name)), name, "query", caller);
   }
 
   private systemQueryBody(name: string, args: unknown, fromClient: boolean, caller?: Caller, inProcess = false) {
@@ -3039,7 +3306,7 @@ export class Functions {
   cronTarget(identifier: string, name: string): string {
     const key = registryKey(name);
     const canonical = `${key.slice(0, key.lastIndexOf(":"))}.js${key.slice(key.lastIndexOf(":"))}`;
-    const f = this.fns.get(key);
+    const f = this.code.fns.get(key);
     if (!f) throw new Error(`The cron job '${identifier}' schedules a function that does not exist: ${canonical}`);
     if (f.kind === "query")
       throw new Error(
@@ -3132,7 +3399,7 @@ export class Functions {
     this.names.set(f, registryKey(name));
     if (componentId !== null) {
       // Convex's `must_component_path`: an id with no mounted component is a system error.
-      const runtime = this.componentRuntimes.get(componentId)?.runtime;
+      const runtime = this.code.componentRuntimes.get(componentId)?.runtime;
       if (!runtime) throw new Error(`Component ${componentId} not found`);
       this.componentOf.set(f, runtime);
     }
@@ -3649,9 +3916,18 @@ function noCommitTs(name: string, body: (db: Tx) => Promise<unknown>) {
   };
 }
 
+/** A run's resolved audit lines and when they were resolved, to send to the log streams. */
+type AuditSent = { at: number; bodies: unknown[] };
+/** What a call's outcome reports (`CallOutcome.report`): its console and audit lines, its figures. */
+type CallReport = { lines: LogLine[]; audit: AuditSent[]; figures: CallFigures | null };
+/** Where a call's run keeps what its outcome reports (`bodies.capture`): its audit lines, transaction and timer. */
+type CallScope = { audit: AuditSent[]; tx: Tx | null; timer: UserTimer | null };
+const callScope = new AsyncLocalStorage<CallScope>();
+
 /**
- * What an in-thread call hands the runner beside its request (`Call.local`): a sync mutation's deadline, and the
- * scope that keeps only the last attempt's console lines. A worker will get `cancel` and send lines in the outcome.
+ * What an in-thread call hands the runner beside its request (`Call.local`): a sync mutation's deadline, and on the
+ * dispatcher's side the scope that keeps only the last attempt's console lines (`bodies.replay`). A worker will get
+ * `cancel`.
  */
 type CallIn = {
   deadline?: Deadline;
@@ -3660,9 +3936,11 @@ type CallIn = {
   args?: { value: unknown };
   /**
    * A query's function as `callSpec` resolved it, the one its arguments were checked against (STUDY-194 §10.3).
-   * A worker will get the code version's id instead.
+   * A worker gets the code epoch instead (`code`).
    */
   fn?: FunctionDef;
+  /** The code epoch the arguments were checked against and its sources, for an execution worker (STUDY-194 §4.8). */
+  code?: { epoch: number; sources: CodeSources };
 };
 
 /**

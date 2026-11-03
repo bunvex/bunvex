@@ -10,6 +10,7 @@ import { v } from "@bunvex/values";
 import {
   instanceDatabase,
   openPersistence,
+  openStoreReader,
   persistenceConfigFromEnv,
   urlDatabase,
   withDatabase,
@@ -258,6 +259,25 @@ describe("opening the local drivers", () => {
 
   test("memory keeps its log in the data directory", () => roundTrip("memory", "bunvex.log"));
   test("sqlite keeps its file in the data directory", () => roundTrip("sqlite", "bunvex.sqlite"));
+
+  test("a SQLite store opens for reading from its reader's description, and sees its commits", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "bunvex-reader-"));
+    dirs.push(dataDir);
+    const store = await openPersistence({ kind: "sqlite", dataDir });
+    const e = await new Engine(schema, store).init();
+    await e.mutation((db) => db.insert("notes", { body: "read" }));
+    const reader = await openStoreReader(store.reader!()!, { cacheBytes: 1 << 20 });
+    expect(reader.maxTs!()).toBeGreaterThan(0n);
+    expect(reader.maxTs!()).toBe(store.maxTs!());
+    await reader.close();
+    await e.close();
+  });
+
+  test("a store with no reader of its kind is refused", async () => {
+    await expect(openStoreReader({ driver: "postgres" } as never, { cacheBytes: 0 })).rejects.toThrow(
+      "no reader for the postgres store",
+    );
+  });
 
   test("an unknown driver is refused, listing the known ones (mongodb among them: its driver is gone)", async () => {
     for (const kind of ["oracle", "mongodb"])

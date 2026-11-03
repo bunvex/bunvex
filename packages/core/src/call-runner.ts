@@ -5,7 +5,7 @@
 //
 // In PR 2a both sides are in the main thread and every query and mutation a client calls goes through the codec
 // (`call-wire.ts`) and back. What the outcome does not carry yet stays in the thread beside it (`CallLocal`): the
-// value an in-process caller gets, the error object, and what a mutation's commit still takes from its transaction
+// value an in-process caller gets, and what a mutation's commit still takes from its transaction
 // (after-commit callbacks, the search indexes' derived data, created tables, commit timestamps). PR 2b and PR 3 move
 // those into the outcome as each kind of call leaves the thread.
 import { toJsonValue, type Value } from "@bunvex/values";
@@ -41,6 +41,8 @@ export type TxStart = {
   /** A subscription's run: reactive pagination's journal, and no index cache (as `queryTracked` always ran). */
   tracked: boolean;
   journal: string | null;
+  /** A call's metadata epoch (`CallRequest.metadata`); absent for the engine's own transactions. */
+  metadata?: number;
 };
 
 /**
@@ -63,6 +65,22 @@ export interface CallBodies {
   body(request: CallRequest, local: unknown): TxBody<unknown>;
   /** A session mutation's outcome as recorded with its writes, from the value it returned. */
   record(value: unknown): SessionRequestOutcome;
+  /**
+   * Run a request's transaction keeping its report apart (its console and audit lines, the function log's figures):
+   * `report` is that, once `result` settled, as a value JSON can carry; null when there is none. It becomes the
+   * outcome's text only when the outcome crosses (`CallRunner.run`).
+   */
+  capture<T>(run: () => Promise<T>): { result: Promise<T>; report(): unknown };
+  /**
+   * On the dispatcher's side, a run's report (the value `capture` made, or an outcome's text of it): its lines where
+   * the run would have logged them, its figures for its logged execution; `local` as `body`'s. Called for every
+   * outcome, so a mutation's attempt replaces the lines of the one before.
+   */
+  replay(report: unknown, local: unknown): void;
+  /** What a run threw, as text for its outcome (STUDY-194 §10.2): its class, name, message, stack and fields. */
+  encodeError(error: unknown): string;
+  /** The error `encodeError` wrote, made again on the dispatcher's side as the same class. */
+  decodeError(text: string): unknown;
 }
 
 /** A call the engine runs through the boundary, instead of a transaction body. */
@@ -77,6 +95,11 @@ export type Call = {
   readonly permit?: () => Promise<() => void>;
   /** Beside the request, in-thread only: a sync mutation's deadline. A worker will get `cancel` (STUDY-194 §4.12). */
   readonly local?: unknown;
+  /**
+   * The arguments as the request's text, made only when an execution worker is to run the call (its `spec.args` is
+   * empty when they go beside it as a value); null when no text gives them back exactly, and the call runs in-thread.
+   */
+  readonly argsText?: () => string | null;
 };
 
 export const isCall = (b: unknown): b is Call => typeof b === "object" && b !== null && "spec" in b;
@@ -85,7 +108,7 @@ export const isCall = (b: unknown): b is Call => typeof b === "object" && b !== 
 export type Settled<T> = { tx: Tx; observedTime: boolean } & ({ ok: true; value: T } | { ok: false; error: unknown });
 
 /** What stays in the thread beside an outcome, in PR 2a (see the header). */
-export type CallLocal = { tx: Tx; value: unknown; error: unknown };
+export type CallLocal = { tx: Tx; value: unknown; report?: unknown };
 
 /** Run `body` in a new transaction from `host`, as a deterministic execution frozen at `start.now`. */
 export async function runTransaction<T>(host: CallHost, start: TxStart, body: TxBody<T>): Promise<Settled<T>> {
@@ -127,12 +150,15 @@ export function outcomeOf(
   run: Settled<unknown>,
   status: CallStatus,
   result: string | null,
+  error: string | null = null,
 ): CallOutcome {
   const tx = run.tx;
   return {
     id,
     status,
     result,
+    error,
+    report: null,
     reads: tx.reads,
     searchReads: tx.searchReads,
     identityObserved: tx.identityObserved,
@@ -194,6 +220,21 @@ export function roundTripCallsByDefault(on = true): void {
 /** @internal Whether a new engine round-trips its calls (`roundTripCallsByDefault`). */
 export const callsRoundTripByDefault = (): boolean => roundTripByDefault;
 
+/**
+ * Whether a query an execution worker ran is run in-thread too and the two outcomes compared (STUDY-194 2b's
+ * differential check): only under the tests, whose preload turns it on, so every suite that runs queries on workers
+ * checks them against the in-thread runner.
+ */
+let checkWorkers = false;
+
+/** @internal The test runs' preload: every query a worker runs is checked against an in-thread run. */
+export function checkWorkerOutcomes(on = true): void {
+  checkWorkers = on;
+}
+
+/** @internal Whether worker outcomes are checked (`checkWorkerOutcomes`). */
+export const workerOutcomesChecked = (): boolean => checkWorkers;
+
 /** Runs requests on `host`. */
 export class CallRunner {
   constructor(private readonly host: CallHost) {}
@@ -207,7 +248,11 @@ export class CallRunner {
       bodies,
       local,
     );
-    return { wire: encodeCallOutcome(r.outcome), local: r.local };
+    const report = r.local.report;
+    return {
+      wire: encodeCallOutcome({ ...r.outcome, report: report == null ? null : JSON.stringify(report) }),
+      local: r.local,
+    };
   }
 
   /**
@@ -223,30 +268,34 @@ export class CallRunner {
     const kind: CallKind = request.kind;
     const body = bodies.body(request, local);
     const session = request.session;
-    const run = await runTransaction(
-      this.host,
-      {
-        kind,
-        ts: request.ts,
-        now: request.now,
-        system: false,
-        identity,
-        systemIdentity: request.systemIdentity,
-        request: request.request,
-        tracked: request.tracked,
-        journal: request.journal,
-      },
-      session
-        ? (db) =>
-            inSession(
-              db,
-              session,
-              request.refused,
-              async () => body(db),
-              (v) => bodies.record(v),
-            )
-        : body,
+    const scope = bodies.capture(() =>
+      runTransaction(
+        this.host,
+        {
+          kind,
+          ts: request.ts,
+          now: request.now,
+          system: false,
+          identity,
+          systemIdentity: request.systemIdentity,
+          request: request.request,
+          tracked: request.tracked,
+          journal: request.journal,
+          metadata: request.metadata,
+        },
+        session
+          ? (db) =>
+              inSession(
+                db,
+                session,
+                request.refused,
+                async () => body(db),
+                (v) => bodies.record(v),
+              )
+          : body,
+      ),
     );
+    const run = await scope.result;
     let status: CallStatus = run.ok ? "ok" : "failed";
     let result: string | null = null;
     if (run.ok && run.value === REFUSED) status = "refused";
@@ -254,9 +303,10 @@ export class CallRunner {
       status = "replayed";
       result = JSON.stringify((run.value as { replayed: SessionRequestOutcome }).replayed);
     } else if (run.ok && kind === "query") result = resultText(run.value);
+    // The report stays a value in the thread; `run` makes it the outcome's text when the outcome crosses.
     return {
-      outcome: outcomeOf(request.id, kind, run, status, result),
-      local: { tx: run.tx, value: run.ok ? run.value : undefined, error: run.ok ? undefined : run.error },
+      outcome: outcomeOf(request.id, kind, run, status, result, run.ok ? null : bodies.encodeError(run.error)),
+      local: { tx: run.tx, value: run.ok ? run.value : undefined, report: scope.report() },
     };
   }
 }

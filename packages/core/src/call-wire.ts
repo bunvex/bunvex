@@ -49,6 +49,11 @@ export type CallRequest = CallSpec & {
    * the call ends `refused` without running and the main thread fails it with the permit's error.
    */
   refused: boolean;
+  /**
+   * The metadata's epoch at dispatch (`Engine.metadataEpoch`): the catalog and text indexes' states the transaction
+   * begins with, sent to a worker before the first request that names it.
+   */
+  metadata: number;
 };
 
 /** How a call ended: returned, threw, refused (`CallRequest.refused`), or answered from a session's record. */
@@ -71,6 +76,10 @@ export type CallOutcome = {
    * none). `replayed`: the session's recorded outcome as JSON text.
    */
   result: string | null;
+  /** `failed`: the error as its call's code wrote it (`CallBodies.encodeError`), which rebuilds it beside the dispatcher. */
+  error: string | null;
+  /** The run's lines and figures, as its call's code wrote them (`CallBodies.capture`); null: none. */
+  report: string | null;
   /** The read set, also of a failed run: a subscription reruns it when these change. */
   reads: Interval[];
   searchReads: SearchRead[];
@@ -84,15 +93,18 @@ export type CallOutcome = {
   writes: CallWrites | null;
 };
 
+/** The messages between the main thread and a worker: a call's two, and the metadata its transactions read. */
+export type WireMessage = "request" | "outcome" | "metadata" | "catalog" | "search state" | "commits";
+
 /** A message that does not parse: which message, and where in it. */
 export class MalformedCallMessageError extends Error {
   override name = "MalformedCallMessageError";
   constructor(
-    readonly which: "request" | "outcome",
+    readonly which: WireMessage,
     readonly path: string,
     problem: string,
   ) {
-    super(`A malformed call ${which}: ${path}: ${problem}`);
+    super(`A malformed ${which === "request" || which === "outcome" ? `call ${which}` : which}: ${path}: ${problem}`);
   }
 }
 
@@ -127,6 +139,7 @@ export function encodeCallRequest(r: CallRequest): string {
   w.num(flag(r.tracked));
   w.opt(r.journal);
   w.num(flag(r.refused));
+  w.num(r.metadata);
   return w.s;
 }
 
@@ -180,6 +193,8 @@ export function decodeCallRequest(s: string): CallRequest {
   const journal = r.opt();
   r.at("refused");
   const refused = r.bool();
+  r.at("metadata");
+  const metadata = r.int();
   r.close();
   return {
     id,
@@ -196,6 +211,7 @@ export function decodeCallRequest(s: string): CallRequest {
     tracked,
     journal,
     refused,
+    metadata,
   };
 }
 
@@ -203,6 +219,8 @@ export function encodeCallOutcome(o: CallOutcome): string {
   const w = new Out(`o${o.id}:`);
   w.str(STATUS[o.status]);
   w.opt(o.result);
+  w.opt(o.error);
+  w.opt(o.report);
   w.num(flag(o.identityObserved));
   w.num(flag(o.observedTime));
   w.opt(o.endCursor);
@@ -272,6 +290,10 @@ export function decodeCallOutcome(s: string): CallOutcome {
             : r.fail(`unknown status ${JSON.stringify(c)}`);
   r.at("result");
   const result = r.opt();
+  r.at("error");
+  const error = r.opt();
+  r.at("report");
+  const report = r.opt();
   r.at("identityObserved");
   const identityObserved = r.bool();
   r.at("observedTime");
@@ -339,6 +361,8 @@ export function decodeCallOutcome(s: string): CallOutcome {
     id,
     status,
     result,
+    error,
+    report,
     reads,
     searchReads,
     identityObserved,
@@ -350,8 +374,8 @@ export function decodeCallOutcome(s: string): CallOutcome {
   };
 }
 
-/** Builds one message as #878's `WireWriter` does: its parts, joined once into a flat string. */
-class Out {
+/** @internal Builds one message as #878's `WireWriter` does: its parts, joined once into a flat string. */
+export class Out {
   private parts: string[];
   constructor(head: string) {
     this.parts = [head];
@@ -378,8 +402,8 @@ class Out {
   }
 }
 
-/** Reads a message field by field, refusing anything `Out` would not have written. */
-class WireReader {
+/** @internal Reads a message field by field, refusing anything `Out` would not have written. */
+export class WireReader {
   private pos = 0;
   // Where it is, built into a path only when a field is refused.
   private base = "";
@@ -388,7 +412,7 @@ class WireReader {
 
   constructor(
     private readonly s: string,
-    private readonly what: "request" | "outcome",
+    private readonly what: WireMessage,
   ) {}
 
   at(field: string) {
@@ -412,6 +436,10 @@ class WireReader {
     if (this.s[0] !== kind) this.fail(`expected ${JSON.stringify(kind)}, got ${JSON.stringify(this.s.slice(0, 1))}`);
     this.pos = 1;
     return this.int();
+  }
+  /** Past a header the caller checked itself. */
+  skip(n: number) {
+    this.pos += n;
   }
   close() {
     this.at("end");

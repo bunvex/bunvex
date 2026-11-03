@@ -67,6 +67,23 @@ export type SearchIndexEntry = {
   touched: Set<string> | null;
 };
 
+/**
+ * A search index's definition and state without its contents: what a transaction checks before a search, from the
+ * engine's own index or from a copy of the states (an execution worker's, `SearchIndexStates`).
+ */
+export type SearchIndexState = Pick<
+  SearchIndexEntry,
+  "readIndex" | "table" | "tablet" | "name" | "def" | "staged" | "ready" | "bootstrapping"
+>;
+
+/** Where a transaction looks its search indexes up: the engine's registry, or a worker's copy of its states. */
+export type SearchIndexLookup = {
+  get(t: TableDef, name: string): SearchIndexState | undefined;
+  forTablet(tablet: TabletId): readonly SearchIndexState[];
+  /** Moves whenever the states change (`SearchIndexes.generation`); a copy, which never changes, has none. */
+  readonly generation?: number;
+};
+
 /** A document as `def` indexes it (Convex's `index_into_terms`): a non-string search field has no tokens. */
 export function indexedDoc(def: SearchIndexDef, doc: Doc): IndexedDoc {
   const text = fieldValue(doc, def.searchField);
@@ -175,6 +192,7 @@ export class SearchIndexes {
     }
     this.pending = next;
     this.pendingByTablet = byTablet(next);
+    this.changes++;
     return added;
   }
 
@@ -215,7 +233,10 @@ export class SearchIndexes {
   private byTablet = new Map<TabletId, SearchIndexEntry[]>();
   private changes = 0;
 
-  /** How many times the set of indexes changed: what a copy of their names (the sandbox child's) is checked by. */
+  /**
+   * How many times the indexes or their states changed (added, dropped, staged, built, pending): what a copy of
+   * them (the sandbox child's names, a worker's states) is checked by.
+   */
   get generation(): number {
     return this.changes;
   }
@@ -335,6 +356,13 @@ export class SearchIndexes {
   done(e: SearchIndexEntry) {
     e.ready = true;
     e.touched = null;
+    this.changes++;
+  }
+
+  /** An index found built before the process started, after all: a search meanwhile is a new index's error. */
+  resumed(e: SearchIndexEntry) {
+    e.bootstrapping = false;
+    this.changes++;
   }
 
   /**
