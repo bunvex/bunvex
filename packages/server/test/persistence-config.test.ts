@@ -273,6 +273,22 @@ describe("opening the local drivers", () => {
     await e.close();
   });
 
+  test("a database server's reader opens from its description without connecting: no checks, no lease", async () => {
+    // Nothing listens on port 1: the open would fail if it connected.
+    for (const [driver, url] of [
+      ["postgres", "postgres://u@127.0.0.1:1/app"],
+      ["mysql", "mysql://u@127.0.0.1:1/app"],
+    ] as const) {
+      const reader = await openStoreReader(
+        { driver, url, options: { requireSsl: false, timeoutMs: 1000 } },
+        { cacheBytes: 0, connections: 3 },
+      );
+      const r = reader as unknown as { driver: string; connections: number; reader(): unknown };
+      expect([r.driver, r.connections, r.reader()]).toEqual([driver, 3, undefined]);
+      await reader.close();
+    }
+  });
+
   test("a store with no reader of its kind is refused", async () => {
     await expect(openStoreReader({ driver: "mongodb" } as never, { cacheBytes: 0 })).rejects.toThrow(
       "no reader for the mongodb store",
