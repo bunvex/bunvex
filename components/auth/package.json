@@ -23,6 +23,7 @@
     "./browser": "./src/browser/index.ts",
     "./react": "./src/react/index.tsx",
     "./ssr": "./src/ssr/index.ts",
+    "./ssr/nextjs": "./src/ssr/nextjs/index.tsx",
     "./methods/username-password": "./src/methods/username-password/index.ts",
     "./methods/username-password/server": "./src/methods/username-password/server.ts",
     "./methods/username-password/react": "./src/methods/username-password/react.tsx",
@@ -94,6 +95,7 @@
     "@bunvex/react": "workspace:^",
     "@bunvex/server": "workspace:^",
     "@bunvex/values": "workspace:^",
+    "next": "^16.0.0",
     "react": "^19.0.0"
   },
   "peerDependenciesMeta": {
@@ -101,6 +103,9 @@
       "optional": true
     },
     "@bunvex/react": {
+      "optional": true
+    },
+    "next": {
       "optional": true
     },
     "react": {
@@ -118,7 +123,8 @@
     "hash-wasm": "^4.12.0",
     "@bunvex/testing": "workspace:*",
     "cookie": "1.1.1",
-    "jose": "^6.2.14"
+    "jose": "^6.2.14",
+    "next": "16.4.3"
   },
   "repository": {
     "type": "git",
