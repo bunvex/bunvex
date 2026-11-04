@@ -36,7 +36,7 @@ import {
   setCronState,
   truncateLogLines,
 } from "./cron-model.ts";
-import { describeUncaught } from "./errors.ts";
+import { describeUncaught, isSystemError } from "./errors.ts";
 import { type Functions, type SourcedCaller, THROTTLED } from "./functions.ts";
 import { collectLogs, currentLogLines } from "./logs.ts";
 import { inNamespace } from "./scheduler.ts";
@@ -424,7 +424,9 @@ export class CronJobExecutor {
         await this.engine.runtime.sleep(backoff(++occ, this.o.occInitialBackoffMs, this.o.occMaxBackoffMs));
         continue;
       }
-      if (r.error instanceof CommitterStoppedError) throw r.error;
+      // A system error (the committer stopped, a failed store read, the function sandbox gone…) is not the
+      // function's: the run is tried again with backoff, as Convex's (crates/application/src/cron_jobs/mod.rs).
+      if (isSystemError(r.error)) throw r.error;
       // The function's own error: log it and move on, in a new transaction.
       const error = describeUncaught(r.error).message;
       await this.engine.mutation(async (db) => {

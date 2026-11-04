@@ -437,6 +437,43 @@ describe("createServer({ crons })", () => {
     expect(unhandled.seen).toEqual([]);
   });
 
+  test("a store read failing during a cron mutation's run: retried, not logged as the function's error", async () => {
+    // As Convex (crates/application/src/cron_jobs/mod.rs): a non-deterministic error is retried with backoff; only
+    // the function's own error is logged as the run's and moves the cron on.
+    const { store, state } = failingReads(await MemoryPersistence.open(null, { durable: false }));
+    const engine = await new Engine(defineSchema({ items: defineTable(v.any()) }), store).init();
+    let runs = 0;
+    const functions = new Functions(engine).register("m", {
+      bill: internalMutation(async ({ db }) => {
+        if (++runs === 1) state.failing = true;
+        try {
+          await db.query("items").collect();
+        } finally {
+          state.failing = false;
+        }
+        await db.insert("items", { run: runs });
+      }),
+    });
+    const crons = cronJobs();
+    crons.interval("bill", { hours: 24 }, "m:bill");
+    const logged = captureErrors();
+    stops.push(logged.stop);
+    const ex = new CronJobExecutor(
+      engine,
+      functions,
+      cronSpecs(crons, (id, name) => functions.cronTarget(id, name)),
+      { cronSplaySeconds: 0, errorInitialBackoffMs: 1, errorMaxBackoffMs: 5 },
+    );
+    stops.push(() => ex.stop());
+    await ex.start();
+    const logs = () => engine.query((db) => db.asSystem(() => db.query(CRON_JOB_LOGS_TABLE).collect()));
+    await until(async () => (await logs()).length === 1, "the run to be logged");
+    expect(state.failed).toBeGreaterThan(0);
+    expect(runs).toBe(2);
+    expect((await logs()).map((l) => (l.status as { type: string }).type)).toEqual(["success"]);
+    expect((await engine.query((db) => db.query("items").collect())).map((d) => d.run)).toEqual([2]);
+  });
+
   test("stopping while the registration is retried ends it at once; nothing registered", async () => {
     const { store, state } = failingReads(await MemoryPersistence.open(null, { durable: false }));
     const engine = await new Engine(defineSchema({}), store).init();
