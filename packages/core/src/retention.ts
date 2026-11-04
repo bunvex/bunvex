@@ -15,7 +15,11 @@
 //   index rows (Convex's `expired_index_entries`, DV-154 reversed): for each document version at or below the
 //     window that replaced one (`prev_ts`), the replaced version's index entries are re-derived from it and
 //     deleted with every older version of their keys; where the key changed or the document was deleted, the
-//     tombstone the new version wrote is deleted too: chunks of 512, at most 10 000 entries a pass;
+//     tombstone the new version wrote is deleted too: chunks of 512, at most 10 000 entries a pass. An index
+//     whose table a backfill is scanning is skipped (Convex's `retention_started` check, "index backfill and
+//     retention interact poorly"): the scan writes each document's entries at the version's own ts, possibly after
+//     the deleter has passed a later version of it, and would leave an entry whose tombstone is gone. Once the scan
+//     is done, `catchUp` deletes what was skipped;
 //   document versions (Convex's `expired_documents`, DV-155 reversed): the replaced version (`prev_ts`), and a
 //     delete's own tombstone: chunks of 256, at most 10 000 scanned a pass, 256 a second, a pass a minute.
 //
@@ -119,7 +123,10 @@ export class Retention {
     private store: Persistence & RetentionStore,
     private committer: Committer,
     opts: RetentionOptions = {},
-    /** Every index of a table (enabled or being built) and how to read a stored document: for index keys. */
+    /**
+     * The indexes of a table whose superseded entries the deleter removes: the enabled ones and those being built,
+     * except while a backfill scans the table for them (`catchUp` does theirs once it is done).
+     */
     private indexesOf: (tablet: TabletId) => IndexDef[] = () => [],
   ) {
     this.opts = {
@@ -324,6 +331,39 @@ export class Retention {
     return this.exclusive("index", () => this.indexPass());
   }
 
+  /**
+   * The index deleter's work for indexes it skipped while a backfill scanned their table (Convex's
+   * `IndexWriter::run_retention` after `mark_retention_started`): the commits of `table` after `afterTs` up to the
+   * index window, each version's superseded entries in `indexes` only. Uncapped and uncheckpointed, as Convex's
+   * `delete_all_no_checkpoint`; it runs between the index deleter's passes, never alongside one, and rejects if
+   * retention stops first (the backfill then runs it again).
+   */
+  catchUp(table: TabletId, indexes: IndexDef[], afterTs: bigint): Promise<void> {
+    // An index created after the window (a new table's, or a backfill under 4 min) was skipped by nothing.
+    if (this.minIndexTs - 1n <= afterTs) return Promise.resolve();
+    return this.exclusive("index", async () => {
+      const upTo = this.minIndexTs - 1n;
+      let cursor = afterTs;
+      while (cursor < upTo) {
+        if (this.stopped) throw new Error("retention stopped before catching up a backfilled index");
+        const rows = await this.store.readDocumentLog(cursor, upTo, LOG_PAGE);
+        if (!rows.length) break;
+        const through = rows[rows.length - 1].ts;
+        const entries = await this.expiredIndexEntries(
+          rows.filter((r) => r.table === table),
+          () => indexes,
+        );
+        for (let i = 0; i < entries.length; i += this.opts.indexChunk)
+          this.stats.indexRowsDeleted += await this.store.pruneIndexes(
+            entries.slice(i, i + this.opts.indexChunk),
+            through,
+          );
+        cursor = through;
+      }
+      return false;
+    }).then(() => {});
+  }
+
   /** One pass of the document deleter (Convex's `go_delete_documents`); whether it stopped at its cap. */
   deleteDocuments(): Promise<boolean> {
     return this.exclusive("document", () => this.documentPass());
@@ -358,7 +398,10 @@ export class Retention {
    * new version's ts when the key changed or the document was deleted. A version without a predecessor wrote
    * nothing that is now superseded.
    */
-  private async expiredIndexEntries(rows: DocLogRow[]): Promise<IndexPrune[]> {
+  private async expiredIndexEntries(
+    rows: DocLogRow[],
+    indexesOf: (tablet: TabletId) => IndexDef[] = this.indexesOf,
+  ): Promise<IndexPrune[]> {
     const pairs = rows.filter((r) => r.prevTs !== null);
     const versions = await Promise.all(
       pairs.map(async (r) => {
@@ -375,7 +418,7 @@ export class Retention {
       if (!prev || prev.ts !== r.prevTs) continue;
       const before = decodeDoc(prev.json);
       const after = cur && cur.ts === r.ts ? decodeDoc(cur.json) : null;
-      for (const ix of this.indexesOf(r.table)) {
+      for (const ix of indexesOf(r.table)) {
         const key = indexKey(ix, before);
         out.push({ index: ix.id, key, ts: r.prevTs! });
         if (after && compareKeys(indexKey(ix, after), key) === 0) continue;
