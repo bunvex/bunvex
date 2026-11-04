@@ -225,7 +225,7 @@ describe("one epoch's metadata, and the window", () => {
         for (const epoch of asked) {
           if (!sent.has(epoch)) {
             sent.add(epoch);
-            worker.hear({ epoch, catalog, search });
+            worker.hear({ epoch, catalog, search, schema: null });
           }
           expect(worker.get(epoch).epoch).toBe(epoch);
         }
@@ -238,7 +238,8 @@ describe("one epoch's metadata, and the window", () => {
     const worker = new MetadataCopies();
     const catalog = new Catalog();
     const search = decodeSearchState(encodeSearchState(new SearchIndexes()));
-    for (let epoch = 1; epoch <= METADATA_EPOCHS_KEPT + 1; epoch++) worker.hear({ epoch, catalog, search });
+    for (let epoch = 1; epoch <= METADATA_EPOCHS_KEPT + 1; epoch++)
+      worker.hear({ epoch, catalog, search, schema: null });
     expect(() => worker.get(1)).toThrow("metadata epoch 1 was not sent, or no longer kept");
     expect(worker.get(METADATA_EPOCHS_KEPT + 1).epoch).toBe(METADATA_EPOCHS_KEPT + 1);
   });

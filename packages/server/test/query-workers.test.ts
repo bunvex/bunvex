@@ -13,7 +13,9 @@ import { SqlitePersistence } from "@bunvex/core/persistence/sqlite";
 import { MemoryBlobStore } from "@bunvex/file-storage";
 import { MysqlPersistence } from "@bunvex/persistence/mysql";
 import { PostgresPersistence } from "@bunvex/persistence/postgres";
+import { v1 } from "@bunvex/protocol";
 import { SQL } from "bun";
+import { functionLimitsFromEnv, TooManyConcurrentRequestsError } from "../src/action-permits.ts";
 import { adminKeyCipherKey, issueAdminKey } from "../src/admin-keys.ts";
 import { encodeCallError } from "../src/call-errors.ts";
 import type { ModuleSource } from "../src/code-version.ts";
@@ -43,6 +45,8 @@ export default defineSchema({
     .index("by_k", ["k"])
     .index("by_k_n", ["k", "n"])
     .searchIndex("search_body", { searchField: "body", filterFields: ["k"] }),
+  counters: defineTable({ k: v.string(), n: v.number() }).index("by_k", ["k"]),
+  accounts: defineTable({ i: v.number(), b: v.number() }).index("by_i", ["i"]),
 });`,
 );
 
@@ -70,6 +74,14 @@ export const broken = query({ args: { x: v.number() }, handler: (_ctx, { x }) =>
 export const spin = query({ args: {}, handler: () => { for (;;) {} } });
 export const slow = query({ args: { n: v.number() }, handler: async (ctx, { n }) => { let c = 0; for (let i = 0; i < n; i++) c += (await ctx.db.query("items").take(1)).length; return c; } });
 export const countThenAll = query({ args: { x: v.number() }, handler: async (ctx) => [await ctx.db.query("items").count(), (await ctx.db.query("items").collect()).length] });
+export const bump = mutation({ args: { k: v.string() }, handler: async (ctx, { k }) => { const c = await ctx.db.query("counters").withIndex("by_k", (q) => q.eq("k", k)).unique(); if (c) { await ctx.db.patch(c._id, { n: c.n + 1 }); return c.n + 1; } await ctx.db.insert("counters", { k, n: 1 }); return 1; } });
+export const count = query({ args: { k: v.string() }, handler: async (ctx, { k }) => (await ctx.db.query("counters").withIndex("by_k", (q) => q.eq("k", k)).unique())?.n ?? 0 });
+export const stamp = mutation({ args: {}, returns: v.object({ at: v.commitTs(), id: v.id("counters") }), handler: async (ctx) => ({ at: ctx.db.vars.commitTs, id: await ctx.db.insert("counters", { k: "stamp", n: 1 }) }) });
+export const invalid = mutation({ args: {}, handler: (ctx) => ctx.db.insert("counters", { k: "bad", n: "one" }) });
+export const slowAdd = mutation({ args: { n: v.number() }, handler: async (ctx, { n }) => { for (let i = 0; i < n; i++) await ctx.db.query("items").take(1); return ctx.db.insert("counters", { k: "slow", n: 1 }); } });
+export const open = mutation({ args: { i: v.number(), b: v.number() }, handler: (ctx, a) => ctx.db.insert("accounts", a) });
+export const transfer = mutation({ args: { from: v.number(), to: v.number(), amount: v.number() }, handler: async (ctx, { from, to, amount }) => { const acct = (i) => ctx.db.query("accounts").withIndex("by_i", (q) => q.eq("i", i)).unique(); const a = await acct(from); const b = await acct(to); if (a.b < amount) return false; await ctx.db.patch(a._id, { b: a.b - amount }); await ctx.db.patch(b._id, { b: b.b + amount }); return true; } });
+export const balances = query({ args: { x: v.number() }, handler: async (ctx) => (await ctx.db.query("accounts").withIndex("by_i").collect()).map((a) => a.b) });
 export const version = query({ args: { x: v.number() }, handler: (_ctx, { x }) => ["${version}", x] });`,
   );
 
@@ -98,13 +110,13 @@ async function emptyStore(kind: Store): Promise<Persistence> {
   return kind === "postgres" ? PostgresPersistence.open(url, 16, tls) : MysqlPersistence.open(url, 16, tls);
 }
 
-async function deployment(o: { workers?: number; store?: Store } = {}) {
+async function deployment(o: { workers?: number; store?: Store; limits?: Record<string, string> } = {}) {
   const engine = await new Engine(defineSchema({}), await emptyStore(o.store ?? "sqlite"), {
     instanceName: NAME,
     instanceSecret: SECRET,
     storedSchema: true,
   }).init();
-  const functions = new Functions(engine);
+  const functions = new Functions(engine, o.limits ? { limits: functionLimitsFromEnv(o.limits) } : {});
   const s = createServer({
     engine,
     functions,
@@ -314,6 +326,146 @@ describe("the page cache (STUDY-194 Q9)", () => {
   });
 });
 
+/** A mutation that ran out of OCC retries: the request's 503 code, as Convex's. */
+const OCC_FAILURE = "OptimisticConcurrencyControlFailure";
+
+describe("mutations (STUDY-194 PR 3)", () => {
+  test("a client's mutations run on the workers and commit from their outcome, one at a time per key", async () => {
+    const d = await deployment({ workers: 2 });
+    const answered = d.workers.counts.answered;
+    const keys = ["a", "b", "c"];
+    const out = await Promise.all(Array.from({ length: 60 }, (_, i) => d.mutation("q:bump", { k: keys[i % 3] })));
+    // Each succeeded, or ran out of OCC retries (Convex's 503) and committed nothing.
+    for (const r of out) expect(["success", OCC_FAILURE]).toContain(r.status ?? r.code);
+    // Every value a key handed out, once, and as many as committed: the commits were serialized as in-thread ones are.
+    for (const k of keys) {
+      const values = out.filter((r, i) => keys[i % 3] === k && r.status === "success").map((r) => r.value as number);
+      expect(values.sort((x, y) => x - y)).toEqual(Array.from({ length: values.length }, (_, i) => i + 1));
+      expect((await d.query("q:count", { k })).value).toBe(values.length);
+    }
+    expect(out.filter((r) => r.status === "success").length).toBeGreaterThan(30);
+    expect(d.workers.counts.answered - answered).toBeGreaterThanOrEqual(60);
+  }, 60_000);
+
+  test("concurrent transfers keep the bank's total at every snapshot, and no balance goes negative", async () => {
+    const d = await deployment({ workers: 2 });
+    for (let i = 0; i < 5; i++) expect((await d.mutation("q:open", { i, b: 100 })).status).toBe("success");
+    const answered = d.workers.counts.answered;
+    let seed = 7;
+    const rand = (n: number) => {
+      seed = (seed * 1103515245 + 12345) % 2 ** 31;
+      return seed % n;
+    };
+    const transfers = Array.from({ length: 120 }, () => {
+      const from = rand(5);
+      return d.mutation("q:transfer", { from, to: (from + 1 + rand(4)) % 5, amount: 1 + rand(40) });
+    });
+    const reads = Array.from({ length: 40 }, (_, x) => d.query("q:balances", { x }));
+    const [moved, seen] = await Promise.all([Promise.all(transfers), Promise.all(reads)]);
+    // Each succeeded, or ran out of OCC retries (Convex's 503) and moved nothing.
+    for (const r of moved) expect(["success", OCC_FAILURE]).toContain(r.status ?? r.code);
+    for (const r of seen) {
+      expect((r.value as number[]).reduce((a, b) => a + b, 0)).toBe(500);
+      for (const b of r.value as number[]) expect(b).toBeGreaterThanOrEqual(0);
+    }
+    const final = (await d.query("q:balances", { x: -1 })).value as number[];
+    expect(final.reduce((a, b) => a + b, 0)).toBe(500);
+    expect(final.every((b) => b >= 0)).toBe(true);
+    expect(moved.some((r) => r.status === "success" && r.value === true)).toBe(true);
+    expect(d.workers.counts.answered - answered).toBeGreaterThanOrEqual(160);
+  }, 60_000);
+
+  test("a worker's write to a table with a text index is searchable once it commits", async () => {
+    const d = await deployment({ workers: 1 });
+    const answered = d.workers.counts.answered;
+    expect((await d.mutation("q:add", { k: 1, n: 1, body: "hello worker" })).status).toBe("success");
+    expect(d.workers.counts.answered).toBe(answered + 1);
+    const found = await d.query("q:found", { text: "worker" });
+    expect(found.value.map((x: { body: string }) => x.body)).toEqual(["hello worker"]);
+  }, 60_000);
+
+  test("the schema refuses a worker's invalid write with the in-thread error", async () => {
+    const d = await deployment({ workers: 1 });
+    const answered = d.workers.counts.answered;
+    const r = await d.mutation("q:invalid");
+    expect(r.status).toBe("error");
+    expect(r.errorMessage).toContain('Failed to insert or update a document in table "counters"');
+    expect(d.workers.counts.answered).toBe(answered + 1);
+    expect((await d.query("q:count", { k: "bad" })).value).toBe(0);
+  }, 60_000);
+
+  test("a commit timestamp runs the mutation again in-thread, which commits it once", async () => {
+    const d = await deployment({ workers: 1 });
+    const answered = d.workers.counts.answered;
+    const r = await d.mutation("q:stamp");
+    expect(r.status).toBe("success");
+    expect(r.value.at).toBeDefined();
+    expect(d.workers.counts.answered).toBe(answered + 1);
+    expect((await d.query("q:count", { k: "stamp" })).value).toBe(1);
+    expect((await d.query("q:counted")).value).toBe(0);
+  }, 60_000);
+
+  test("a WebSocket mutation runs on a worker, and its request resent after a reconnect answers its record", async () => {
+    const d = await deployment({ workers: 1 });
+    const sessionId = crypto.randomUUID();
+    const connect = async (connectionCount: number) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${d.s.server.port}/api/1.0.0/sync`);
+      const got: v1.ServerMessage[] = [];
+      let wake = () => {};
+      ws.onmessage = (m) => {
+        got.push(v1.parseServerMessage(String(m.data)));
+        wake();
+      };
+      await new Promise((r) => (ws.onopen = r));
+      ws.send(
+        v1.encodeClientMessage({ type: "Connect", sessionId, connectionCount, lastCloseReason: null, clientTs: 0 }),
+      );
+      const response = async () => {
+        for (;;) {
+          const m = got.find((x) => x.type === "MutationResponse");
+          if (m) return m as Extract<v1.ServerMessage, { type: "MutationResponse" }>;
+          await new Promise<void>((r) => (wake = r));
+        }
+      };
+      return { ws, response };
+    };
+    const answered = d.workers.counts.answered;
+    const first = await connect(0);
+    first.ws.send(v1.encodeClientMessage({ type: "Mutation", requestId: 0, udfPath: "q:bump", args: [{ k: "ws" }] }));
+    const r1 = await first.response();
+    expect(r1).toMatchObject({ success: true, result: 1 });
+    expect(d.workers.counts.answered).toBe(answered + 1);
+    first.ws.close();
+    const second = await connect(1);
+    second.ws.send(v1.encodeClientMessage({ type: "Mutation", requestId: 0, udfPath: "q:bump", args: [{ k: "ws" }] }));
+    expect(await second.response()).toMatchObject({ success: true, result: 1 });
+    second.ws.close();
+    expect((await d.query("q:count", { k: "ws" })).value).toBe(1);
+  }, 60_000);
+
+  test("a session's request without a permit: a recorded one answers its record, a new one is refused", async () => {
+    const d = await deployment({
+      workers: 1,
+      limits: { APPLICATION_MAX_CONCURRENT_MUTATIONS: "1", APPLICATION_FUNCTION_RUNNER_SEMAPHORE_TIMEOUT: "100" },
+    });
+    const run = (requestId: number) =>
+      d.functions.runSessionMutation("q:bump", { k: "p" }, { sessionId: "s", requestId });
+    const answered = d.workers.counts.answered;
+    const first = await run(1);
+    expect("value" in first && first.value).toBe(1);
+    expect(d.workers.counts.answered).toBe(answered + 1);
+    const limits = (d.functions as unknown as { limits: { mutation: { acquire(): Promise<() => void> } } }).limits;
+    const release = await limits.mutation.acquire();
+    const again = run(1);
+    const fresh = run(2).catch((e: unknown) => e);
+    const replayed = await again;
+    expect("replayed" in replayed && JSON.parse(replayed.replayed.result)).toBe(1);
+    expect(await fresh).toBeInstanceOf(TooManyConcurrentRequestsError);
+    release();
+    expect((await d.query("q:count", { k: "p" })).value).toBe(1);
+  }, 60_000);
+});
+
 describe("failures", () => {
   test("a worker that dies fails its calls as system errors; the next call succeeds on a new one", async () => {
     const d = await deployment({ workers: 1 });
@@ -323,8 +475,8 @@ describe("failures", () => {
     const threads = (d.workers as unknown as { threads: { worker: Worker }[] }).threads;
     threads[0]!.worker.terminate();
     const r = await slow;
-    expect(r.status).toBe("error");
-    expect(r.errorMessage).toContain("Server Error");
+    // A system error (`isSystemError`): Convex's internal error, as for a terminated isolate.
+    expect(r).toEqual({ code: "InternalServerError", message: "Your request couldn't be completed. Try again later." });
     expect(d.workers.counts.died).toBe(1);
     // The next call runs in-thread (none ready) and starts another worker; then calls run on it.
     expect((await d.query("q:counted")).value).toBe(20);
@@ -332,6 +484,20 @@ describe("failures", () => {
     const answered = d.workers.counts.answered;
     expect((await d.query("q:version", { x: 7 })).value).toEqual(["v1", 7]);
     expect(d.workers.counts.answered).toBe(answered + 1);
+  }, 60_000);
+
+  test("a worker that dies under a mutation commits nothing, and the mutation fails as a system error", async () => {
+    const d = await deployment({ workers: 1 });
+    for (let i = 0; i < 20; i++) await d.mutation("q:add", { k: i, n: 0, body: "z" });
+    const slow = d.mutation("q:slowAdd", { n: 100000 });
+    await Bun.sleep(50);
+    const threads = (d.workers as unknown as { threads: { worker: Worker }[] }).threads;
+    threads[0]!.worker.terminate();
+    expect(await slow).toEqual({
+      code: "InternalServerError",
+      message: "Your request couldn't be completed. Try again later.",
+    });
+    expect((await d.query("q:count", { k: "slow" })).value).toBe(0);
   }, 60_000);
 
   test("a query that never yields times out with the user time limit's message; others answer meanwhile", async () => {
@@ -369,6 +535,8 @@ describe("the differential check's comparison", () => {
       documentsRead: 0,
       bytesRead: 0,
       writes: null,
+      creation: 0,
+      inThreadOnly: false,
     };
     return encodeCallOutcome(o);
   };
