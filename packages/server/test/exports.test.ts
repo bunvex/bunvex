@@ -5,7 +5,14 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEPLOYMENT_AUDIT_LOG_TABLE, defineSchema, defineTable, Engine } from "@bunvex/core";
+import {
+  componentRow,
+  DEPLOYMENT_AUDIT_LOG_TABLE,
+  defineSchema,
+  defineTable,
+  Engine,
+  FILE_STORAGE_TABLE,
+} from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { MemoryBlobStore } from "@bunvex/file-storage";
 import { fromExportJson, v } from "@bunvex/values";
@@ -39,11 +46,12 @@ async function setup() {
     uploadUrl: mutation(async ({ storage }) => storage.generateUploadUrl()),
   });
   const exportStore = new MemoryBlobStore();
+  const fileStorage = new MemoryBlobStore();
   const s = createServer({
     engine,
     functions,
     port: 0,
-    fileStorage: new MemoryBlobStore(),
+    fileStorage,
     exportStorage: exportStore,
   });
   stops.push(() => s.shutdown());
@@ -75,7 +83,7 @@ async function setup() {
     Buffer.from((l.start_ts as { $integer: string }).$integer, "base64").readBigInt64LE();
   const download = async (id: string, key: string | null = KEY, query = "") =>
     fetch(`${api}/api/export/zip/${id}${query}`, { headers: key ? { authorization: `Bunvex ${key}` } : {} });
-  return { engine, functions, api, post, latest, waitDone, tsOf, download, exportStore };
+  return { engine, functions, api, post, latest, waitDone, tsOf, download, exportStore, fileStorage };
 }
 
 /**
@@ -102,7 +110,157 @@ async function unzip(bytes: ArrayBuffer) {
   return { names, read };
 }
 
+/**
+ * Components as a push leaves them: `counter` and `second` under the root, `inner` under `counter`, each namespace
+ * with its own `messages` (and `counter` its `counters`), one document each, written in its namespace; the root's
+ * `messages` has one too.
+ */
+async function addComponents(engine: Engine) {
+  const ids = {
+    counter: await engine.initializeComponentNamespace(),
+    second: await engine.initializeComponentNamespace(),
+    inner: await engine.initializeComponentNamespace(),
+  };
+  await engine.mutation((db) =>
+    db.asSystem(async () => {
+      const definitionId = await db.insert("_component_definitions", { path: "c" } as never);
+      const root = await db.insert(
+        "_components",
+        componentRow({ definitionId, parent: null, name: null, state: "active", httpPrefix: null }) as never,
+      );
+      const add = (id: string, parent: string, name: string) =>
+        db.importInsert(engine.catalog.table("_components")!, {
+          _id: id,
+          ...componentRow({ definitionId, parent, name, args: [], env: [], state: "active", httpPrefix: null }),
+        });
+      await add(ids.counter, root, "counter");
+      await add(ids.second, root, "second");
+      await add(ids.inner, ids.counter, "inner");
+    }),
+  );
+  await engine.mutation(async (db) => {
+    await db.insert("messages", { text: "root" });
+    for (const [name, id] of Object.entries(ids))
+      await db.inComponent(id, async () => {
+        await db.insert("messages", { body: `in ${name}` });
+        if (name === "counter") await db.insert("counters", { name, value: 1 });
+      });
+  });
+  return ids;
+}
+
 describe("snapshot export", () => {
+  test("every component's tables, under its path's prefix, after the root's (Convex's `_components/<name>/`)", async () => {
+    const t = await setup();
+    await addComponents(t.engine);
+    expect((await t.post("/api/export/request/zip")).status).toBe(200);
+    const done = await t.waitDone();
+    expect(done.state).toBe("completed");
+    const zip = await unzip(await (await t.download(String(t.tsOf(done)))).arrayBuffer());
+    // Each namespace's `_tables` first, the root's before the others; then every table, smallest first.
+    const tablesFiles = [
+      "_components/counter/_components/inner/_tables/documents.jsonl",
+      "_components/counter/_tables/documents.jsonl",
+      "_components/second/_tables/documents.jsonl",
+    ];
+    expect(zip.names.slice(0, 2)).toEqual(["README.md", "_tables/documents.jsonl"]);
+    expect(zip.names.slice(2, 5).sort()).toEqual(tablesFiles);
+    const table = (prefix: string, name: string) => [
+      `${prefix}${name}/documents.jsonl`,
+      `${prefix}${name}/generated_schema.jsonl`,
+    ];
+    expect([...zip.names].sort()).toEqual(
+      [
+        "README.md",
+        "_tables/documents.jsonl",
+        ...tablesFiles,
+        ...table("", "messages"),
+        ...table("", "users"),
+        ...table("_components/counter/", "messages"),
+        ...table("_components/counter/", "counters"),
+        ...table("_components/second/", "messages"),
+        ...table("_components/counter/_components/inner/", "messages"),
+      ].sort(),
+    );
+    // A component's `_tables` lists its own tables, at its own numbers.
+    const listed = (name: string) =>
+      zip
+        .read(name)
+        .trim()
+        .split("\n")
+        .map((l) => JSON.parse(l) as { name: string; id: number });
+    const counterTables = listed("_components/counter/_tables/documents.jsonl");
+    expect(counterTables.map((x) => x.name)).toEqual(["messages", "counters"]);
+    const counter = t.engine.catalog.components.get(
+      [...t.engine.catalog.components.keys()].find((id) =>
+        t.engine.catalog.components.get(id)!.tables.has("counters"),
+      )!,
+    )!;
+    expect(counterTables.map((x) => x.id)).toEqual([
+      counter.tables.get("messages")!.number,
+      counter.tables.get("counters")!.number,
+    ]);
+    expect(listed("_tables/documents.jsonl").map((x) => x.name)).toEqual(["messages", "users"]);
+    // Each namespace's documents, not another's.
+    const docs = (name: string) =>
+      zip
+        .read(name)
+        .trim()
+        .split("\n")
+        .map((l) => fromExportJson(l) as Record<string, unknown>);
+    expect(docs("messages/documents.jsonl").map((m) => m.text)).toEqual(["root"]);
+    expect(docs("_components/counter/messages/documents.jsonl").map((m) => m.body)).toEqual(["in counter"]);
+    expect(docs("_components/second/messages/documents.jsonl").map((m) => m.body)).toEqual(["in second"]);
+    expect(docs("_components/counter/_components/inner/messages/documents.jsonl").map((m) => m.body)).toEqual([
+      "in inner",
+    ]);
+    expect(docs("_components/counter/counters/documents.jsonl").map((m) => m.name)).toEqual(["counter"]);
+  });
+
+  test("a component's files under its prefix's `_storage`, after every table", async () => {
+    const t = await setup();
+    const ids = await addComponents(t.engine);
+    const body = new TextEncoder().encode("component file");
+    const { key } = await t.fileStorage.put(body);
+    const fileId = (await t.engine.mutation((db) =>
+      db.inComponent(ids.counter, () =>
+        db.asSystem(() =>
+          db.insert(FILE_STORAGE_TABLE, {
+            storageId: "4b5f6c1e-2a3d-4e5f-8a9b-0c1d2e3f4a5b",
+            storageKey: key,
+            sha256: new Uint8Array(32).buffer,
+            size: BigInt(body.length),
+            contentType: "text/plain",
+          }),
+        ),
+      ),
+    )) as string;
+    await t.post("/api/export/request/zip?includeStorage=true");
+    const done = await t.waitDone();
+    expect(done.state).toBe("completed");
+    const zip = await unzip(await (await t.download(String(t.tsOf(done)))).arrayBuffer());
+    const storage = zip.names.filter((n) => n.includes("_storage/"));
+    expect(storage[0]).toBe("_storage/documents.jsonl");
+    expect([...storage].sort()).toEqual(
+      [
+        "_storage/documents.jsonl",
+        "_components/counter/_storage/documents.jsonl",
+        `_components/counter/_storage/${fileId}.txt`,
+        "_components/second/_storage/documents.jsonl",
+        "_components/counter/_components/inner/_storage/documents.jsonl",
+      ].sort(),
+    );
+    // A namespace's metadata just before its files.
+    const meta = zip.names.indexOf("_components/counter/_storage/documents.jsonl");
+    expect(zip.names[meta + 1]).toBe(`_components/counter/_storage/${fileId}.txt`);
+    expect(zip.names.indexOf("_storage/documents.jsonl")).toBeGreaterThan(
+      Math.max(...zip.names.filter((n) => n.endsWith("generated_schema.jsonl")).map((n) => zip.names.indexOf(n))),
+    );
+    expect(zip.read(`_components/counter/_storage/${fileId}.txt`)).toBe("component file");
+    expect(zip.read("_components/counter/_storage/documents.jsonl")).toContain(`"_id":"${fileId}"`);
+    expect(zip.read("_storage/documents.jsonl")).toBe("");
+  });
+
   test("Convex's ZIP: README, _tables, each table smallest first, the lossless encoding; downloads", async () => {
     const t = await setup();
     const big = [];

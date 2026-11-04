@@ -2248,7 +2248,7 @@ export function createServer(opts: ServerOptions) {
       throw new ImportRequestError(
         400,
         "ComponentsNotSupported",
-        "bunvex does not have components yet: import into the app's own tables.",
+        "bunvex does not import into components yet: import into the app's own tables.",
       );
     return { format, mode: MODE_ARGS[a.mode ?? "requireEmpty"]! };
   };
