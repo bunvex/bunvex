@@ -238,6 +238,7 @@ there, then run `bun run docs` (`bun run check` fails while this table is out of
 | [STUDY-204](STUDY-204-component-export-import.md) | Components in snapshot export and import (STUDY-152 step 10, DV-215): the ZIP's `_components/<name>/` prefixes, import into a component path, streaming export's `_component` | built: PR 1 (export), PR 2a (hidden tables by namespace), PR 2b (import), PR 3 (streaming export, data sync); Q1 open |
 | [STUDY-205](STUDY-205-table-iterator.md) | Table iterator (Convex's `TableIterator`): a snapshot read after the 4-minute index window passed it, from recent `by_id` pages plus the document log; the ZIP export (audit B8) and `list_snapshot` (DV-306) read through it | built |
 | [STUDY-206](STUDY-206-sqlite-default-store.md) | The store `persistenceConfigFromEnv` picks with nothing set becomes SQLite, as Convex's, instead of memory+log (audit decision 1); a directory holding a memory log and no SQLite file is refused instead of opened empty | implemented |
+| [STUDY-207](STUDY-207-query-set-cap.md) | `BUNVEX_MAX_QUERIES_PER_CONNECTION` (default 4096, 0 for none) refuses a `ModifyQuerySet` that would take a connection past it, which Convex has no counterpart for (AD-50, audit decision 3) | implemented |
 
 The inventory of everything Convex has, and bunvex's status on each item, is in [docs/parity](../parity/README.md).
 
