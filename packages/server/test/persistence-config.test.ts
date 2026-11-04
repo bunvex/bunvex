@@ -25,9 +25,12 @@ const cfg = (env: Record<string, string | undefined>) => {
 };
 
 describe("database selection", () => {
-  test("nothing set: memory, as before", () => {
+  test("nothing set: SQLite, as Convex (STUDY-206), marked implied", () => {
     const c = cfg({});
-    expect([c.kind, c.url]).toEqual(["memory", undefined]);
+    expect([c.kind, c.url, c.implied]).toEqual(["sqlite", undefined, true]);
+    expect(cfg({ PERSISTENCE: "sqlite" }).implied).toBeUndefined();
+    expect(cfg({ PERSISTENCE: "memory" })).toMatchObject({ kind: "memory" });
+    expect(cfg({ POSTGRES_URL: PG }).implied).toBeUndefined();
   });
 
   test("Convex's names select the driver: POSTGRES_URL, else MYSQL_URL, else DATABASE_URL (Postgres)", () => {
@@ -65,7 +68,7 @@ describe("database selection", () => {
   });
 
   test("PERSISTENCE_URL alone does not select a driver (unchanged)", () => {
-    expect(cfg({ PERSISTENCE_URL: PG })).toMatchObject({ kind: "memory" });
+    expect(cfg({ PERSISTENCE_URL: PG })).toMatchObject({ kind: "sqlite", implied: true });
     expect(cfg({ PERSISTENCE_URL: PG, POSTGRES_URL: MY.replace("mysql", "postgres") })).toMatchObject({
       kind: "postgres",
       urlFrom: "POSTGRES_URL",
@@ -289,6 +292,37 @@ describe("opening the local drivers", () => {
     }
   });
 
+  // STUDY-206: a server that ran with the old default (memory) does not come back on an empty SQLite store.
+  test("the implied SQLite store refuses a directory holding a memory store, and creates nothing", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "bunvex-default-store-"));
+    try {
+      const mem = await openPersistence({ ...cfg({ PERSISTENCE: "memory" }), dataDir: dir });
+      await mem.close();
+      expect(existsSync(join(dir, "bunvex.log"))).toBe(true);
+      await expect(openPersistence({ ...cfg({}), dataDir: dir })).rejects.toThrow(
+        `found a memory store at ${dir}/bunvex.log and no SQLite file: SQLite is now the default store. ` +
+          "Set PERSISTENCE=memory to keep using this one, or export it (bunvex export) and import it into SQLite",
+      );
+      expect(existsSync(join(dir, "bunvex.sqlite"))).toBe(false);
+      // Chosen explicitly, SQLite opens beside it; then the implied default finds its file and opens it too.
+      await (await openPersistence({ ...cfg({ PERSISTENCE: "sqlite" }), dataDir: dir })).close();
+      await (await openPersistence({ ...cfg({}), dataDir: dir })).close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the implied default opens a SQLite file in a fresh directory", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "bunvex-default-store-"));
+    try {
+      await (await openPersistence({ ...cfg({}), dataDir: dir })).close();
+      expect(existsSync(join(dir, "bunvex.sqlite"))).toBe(true);
+      expect(existsSync(join(dir, "bunvex.log"))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("a store with no reader of its kind is refused", async () => {
     await expect(openStoreReader({ driver: "mongodb" } as never, { cacheBytes: 0 })).rejects.toThrow(
       "no reader for the mongodb store",
@@ -298,7 +332,7 @@ describe("opening the local drivers", () => {
   test("an unknown driver is refused, listing the known ones (mongodb among them: its driver is gone)", async () => {
     for (const kind of ["oracle", "mongodb"])
       await expect(openPersistence({ kind })).rejects.toThrow(
-        `unknown PERSISTENCE=${kind} (memory, sqlite, postgres, mysql)`,
+        `unknown PERSISTENCE=${kind} (sqlite, memory, postgres, mysql)`,
       );
   });
 });

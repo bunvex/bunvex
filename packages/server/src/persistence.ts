@@ -1,5 +1,6 @@
 // Choosing the persistence driver by configuration (ARCH-01 D3/D-D):
-//   PERSISTENCE=memory|sqlite            ship with @bunvex/core
+//   PERSISTENCE=sqlite|memory            ship with @bunvex/core; SQLite when nothing selects a driver, as Convex
+//                                        (STUDY-206)
 //   PERSISTENCE=postgres|mysql           from @bunvex/persistence (plus the driver's native package)
 //   PERSISTENCE_URL=…                    for the external ones
 //   DATA=./.data  DURABLE=1
@@ -21,7 +22,7 @@
 // Postgres and MySQL connections are encrypted and the certificate verified, unless DO_NOT_REQUIRE_SSL is
 // set to any non-empty value (`0` and `false` too, as the shell's `${VAR:+…}` reads it). PG_CA_FILE and
 // MYSQL_CA_FILE add a trusted CA.
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import {
   bundledModule,
   DEFAULT_INSTANCE_NAME,
@@ -33,6 +34,8 @@ import {
 
 export type PersistenceConfig = {
   kind: string;
+  /** True when nothing chose the driver and `kind` is the default. */
+  implied?: boolean;
   url?: string;
   /** The env var the URL came from, for messages ("PERSISTENCE_URL", "POSTGRES_URL", …). */
   urlFrom?: string;
@@ -98,13 +101,16 @@ export function persistenceConfigFromEnv(
   }
   if (urlFrom === "DATABASE_URL")
     warn("DATABASE_URL is deprecated: use PERSISTENCE=postgres with PERSISTENCE_URL, or POSTGRES_URL");
-  kind ??= "memory";
+  // STUDY-206: SQLite, as every Convex backend stores when no database URL is given.
+  const implied = kind === undefined;
+  kind ??= "sqlite";
   const timeoutKnob = TIMEOUT_ENV[kind];
   const timeout = timeoutKnob && env[timeoutKnob[0]] !== undefined ? secondsKnob(...timeoutKnob, env) : undefined;
   const caFile =
     kind === "postgres" ? set(env, "PG_CA_FILE") : kind === "mysql" ? set(env, "MYSQL_CA_FILE") : undefined;
   return {
     kind,
+    ...(implied ? { implied } : {}),
     url,
     urlFrom,
     dataDir: env.DATA ?? "./.data",
@@ -169,6 +175,12 @@ export async function openPersistence(c: PersistenceConfig): Promise<Persistence
       return MemoryPersistence.open(`${dir}/bunvex.log`, { durable });
     }
     case "sqlite": {
+      // STUDY-206: memory was the default before; its store is not replaced by an empty one.
+      if (c.implied && existsSync(`${dir}/bunvex.log`) && !existsSync(`${dir}/bunvex.sqlite`))
+        throw new Error(
+          `found a memory store at ${dir}/bunvex.log and no SQLite file: SQLite is now the default store. ` +
+            "Set PERSISTENCE=memory to keep using this one, or export it (bunvex export) and import it into SQLite",
+        );
       mkdirSync(dir, { recursive: true });
       const { SqlitePersistence } = await import("@bunvex/core/persistence/sqlite");
       return new SqlitePersistence(`${dir}/bunvex.sqlite`, { durable });
@@ -182,7 +194,7 @@ export async function openPersistence(c: PersistenceConfig): Promise<Persistence
       return MysqlPersistence.open(needDatabase(), c.pool, { ...tls, timeoutMs: c.timeoutMs, idleMs: c.idleMs });
     }
     default:
-      throw new Error(`unknown PERSISTENCE=${c.kind} (memory, sqlite, postgres, mysql)`);
+      throw new Error(`unknown PERSISTENCE=${c.kind} (sqlite, memory, postgres, mysql)`);
   }
 }
 
