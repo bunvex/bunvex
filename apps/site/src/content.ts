@@ -272,7 +272,7 @@ export const MIGRATE = {
 export const PARITY = {
   areas: [
     { name: "Function and database API", done: 253, partial: 3, missing: 0 },
-    { name: "Clients, sync protocol, React", done: 163, partial: 2, missing: 1 },
+    { name: "Clients, sync protocol, React", done: 164, partial: 1, missing: 1 },
     { name: "Platform: auth, storage, scheduler, CLI…", done: 249, partial: 23, missing: 2 },
   ],
   link: blob("docs/parity/README.md"),
