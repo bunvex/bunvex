@@ -485,7 +485,7 @@ export {
   UnionBuilder,
 } from "./shapes.ts";
 export { APP_VISIBLE_SYSTEM_TABLES, SystemReader } from "./system-reader.ts";
-export { TableIterator, type TableIteratorSource } from "./table-iterator.ts";
+export { type SnapshotRevision, snapshotTables, TableIterator, type TableIteratorSource } from "./table-iterator.ts";
 export { TableReader, TableWriter } from "./table-scope.ts";
 export { TableSummaries, TableSummariesUnavailableError, type TableSummary } from "./table-summaries.ts";
 export { inExecutable, threadEntry } from "./thread-entry.ts";
