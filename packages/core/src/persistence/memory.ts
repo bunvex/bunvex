@@ -104,6 +104,21 @@ function visible<T>(vs: Version<T>[] | undefined, seq: number): Version<T> | und
   return undefined;
 }
 
+/** How many complete lines from `from` on parse as a record: a torn tail has none after it. */
+function completeRecordsAfter(text: string, from: number): number {
+  let n = 0;
+  for (let pos = from; pos < text.length; ) {
+    const nl = text.indexOf("\n", pos);
+    if (nl === -1) break; // a torn last line
+    try {
+      const rec: unknown = JSON.parse(text.slice(pos, nl));
+      if (rec !== null && typeof rec === "object") n++;
+    } catch {}
+    pos = nl + 1;
+  }
+  return n;
+}
+
 export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, RetentionStore {
   readonly driver = "memory";
   /** Reads are map and B-tree lookups: no index cache (STUDY-136, DV-434). */
@@ -123,6 +138,54 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
   private durable: boolean;
   /** Opened with `allowReadOnly`: the lock is taken even while the store is marked read-only. */
   private allowReadOnly: boolean;
+  /**
+   * A write or sync of the log that failed: what it left at the end of the file is unknown (part of a record,
+   * perhaps), and a record appended after it would sit behind a torn one, where replay would stop. Nothing more is
+   * appended; a reopen cuts the torn tail.
+   */
+  private broken: unknown = null;
+
+  private refuseBroken() {
+    if (this.broken !== null)
+      throw new Error(`${this.store} failed a write: nothing more is written to it until it is opened again`, {
+        cause: this.broken,
+      });
+  }
+
+  /** Append `data` whole (a write may take fewer bytes than given), then sync it if durable; on the JS thread. */
+  private appendSync(fd: number, data: string | Buffer) {
+    this.refuseBroken();
+    const buf = typeof data === "string" ? Buffer.from(data) : data;
+    try {
+      for (let off = 0; off < buf.length; ) {
+        const n = writeSync(fd, buf, off, buf.length - off);
+        if (n <= 0) throw new Error(`a write to ${this.store} took no bytes`);
+        off += n;
+      }
+      // Stryker disable next-line ConditionalExpression,CallExpression: an fdatasync only matters across a power loss, which no test makes.
+      if (this.durable) fdatasyncSync(fd);
+    } catch (e) {
+      this.broken = e;
+      throw e;
+    }
+  }
+
+  /** `appendSync` off the JS thread (libuv/Bun thread pool). */
+  private async append(fh: FileHandle, buf: Buffer) {
+    this.refuseBroken();
+    try {
+      for (let off = 0; off < buf.length; ) {
+        const { bytesWritten } = await fh.write(buf, off, buf.length - off);
+        if (bytesWritten <= 0) throw new Error(`a write to ${this.store} took no bytes`);
+        off += bytesWritten;
+      }
+      // Stryker disable next-line ConditionalExpression,CallExpression: an fdatasync only matters across a power loss, which no test makes.
+      if (this.durable) await fh.datasync();
+    } catch (e) {
+      this.broken = e;
+      throw e;
+    }
+  }
 
   private constructor(opts: { durable: boolean } & OpenOptions) {
     this.durable = opts.durable;
@@ -219,9 +282,7 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
       // PERSIST-01 C10 under the lock: a new log (or one whose torn first write replay cut off) starts with its
       // header.
       if (!stamped) {
-        await this.fh.write(`${JSON.stringify({ layout: LAYOUT_VERSION })}\n`);
-        // Stryker disable next-line ConditionalExpression,CallExpression: an fdatasync only matters across a power loss, which no test makes.
-        if (this.durable) await this.fh.datasync();
+        await this.append(this.fh, Buffer.from(`${JSON.stringify({ layout: LAYOUT_VERSION })}\n`));
       }
     } catch (e) {
       await this.fh?.close();
@@ -259,7 +320,8 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
 
   /** Rebuild the in-memory state from the log (PERSIST-01 C5). A record is one line; a crash can leave
    *  the LAST line torn — it is cut off (truncating the file) so the next append starts on a boundary.
-   *  Records are commits in ts order, so what survives is always a prefix (C4). */
+   *  Records are commits in ts order, so what survives is always a prefix (C4). A line that does not parse with
+   *  a complete record after it is not a torn tail but damage: the open is refused and the file left as it is. */
   private async replay(logPath: string): Promise<boolean> {
     const f = Bun.file(logPath);
     if (!(await f.exists())) return false;
@@ -287,7 +349,16 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
         // A global's integers above 2^53 (`max_repeatable_ts`) keep their digits.
         rec = (line.startsWith('{"global"') ? decodeGlobal(line) : JSON.parse(line)) as typeof rec;
       } catch {
-        break; // torn inside the line
+        // Torn inside the line: only the tail may be (a crash during the last write, never acknowledged). A
+        // complete record after it means the log was damaged where it had been written: refused, not cut, or
+        // the commits after it would be lost for good.
+        const after = completeRecordsAfter(text, nl + 1);
+        if (after > 0)
+          throw new Error(
+            `${this.store} is damaged: the record at byte ${good} does not parse, and ${after} complete record(s) follow it. ` +
+              "It was not opened, and nothing was cut; restore it from a backup or an export.",
+          );
+        break;
       }
       if (rec.layout !== undefined) {
         // The header (the first line; checked again for one anywhere else).
@@ -420,16 +491,9 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     if (SYNC_LOG) {
       // Diagnostic path (BUNVEX_SYNC_LOG=1): write + fdatasync on the JS thread.
       // Stryker disable next-line CallExpression: the diagnostic path, never taken in tests.
-      writeSync(this.fh.fd, buf);
-      // Stryker disable next-line ConditionalExpression,CallExpression: an fdatasync only matters across a power loss, which no test makes.
-      if (this.durable) fdatasyncSync(this.fh.fd);
+      this.appendSync(this.fh.fd, buf);
     } else {
-      const fh = this.fh;
-      const w = (async () => {
-        await fh.write(buf);
-        // Stryker disable next-line ConditionalExpression,CallExpression: an fdatasync only matters across a power loss, which no test makes.
-        if (this.durable) await fh.datasync();
-      })();
+      const w = this.append(this.fh, buf);
       this.writing = w;
       try {
         await w;
@@ -549,9 +613,7 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     while (this.writing) await this.writing.catch(() => {});
     if (this.fh !== null) {
       const rec = entries.map((e) => [e.index, Buffer.from(e.key).toString("base64"), e.table, e.id, String(e.ts)]);
-      writeSync(this.fh.fd, `${JSON.stringify({ entries: rec })}\n`);
-      // Stryker disable next-line ConditionalExpression,CallExpression: an fdatasync only matters across a power loss, which no test makes.
-      if (this.durable) fdatasyncSync(this.fh.fd);
+      this.appendSync(this.fh.fd, `${JSON.stringify({ entries: rec })}\n`);
     }
   }
 
@@ -582,9 +644,7 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     // Stryker disable next-line ConditionalExpression: a line appended during a group's write in the thread pool; no test can interleave them.
     while (this.writing) await this.writing.catch(() => {});
     if (this.fh !== null) {
-      writeSync(this.fh.fd, `${encodeGlobal({ global: key, value })}\n`);
-      // Stryker disable next-line ConditionalExpression,CallExpression: an fdatasync only matters across a power loss, which no test makes.
-      if (this.durable) fdatasyncSync(this.fh.fd);
+      this.appendSync(this.fh.fd, `${encodeGlobal({ global: key, value })}\n`);
     }
   }
 

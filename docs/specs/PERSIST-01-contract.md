@@ -95,7 +95,11 @@ For a snapshot `T`:
 
 `maxTs()` returns `M` from C4. On open, the engine resumes its committer at `M`: the next commit gets a
 ts above `M` (the clock, or `M + 1` if the clock is behind), and `M` is the first snapshot served. A driver keeping state in memory (the memory+log store)
-rebuilds it from its log, ignoring a torn trailing record.
+rebuilds it from its log, ignoring a torn trailing record. Only the tail can be torn: a driver appends each record
+whole (a write that takes part of its bytes is finished), and after a failed write or sync it appends nothing more
+(what the failure left at the end is unknown), so no acknowledged record can follow a torn one. A record that does
+not parse with a complete record after it is damage, not a crash: the open is refused and the log left as it is,
+never cut there (which would lose every commit after it).
 
 A store whose only rows are the bootstrap's (ts 0) but which has none of the four bootstrap globals is a bootstrap
 interrupted between its rows and its globals (with the newest start winning the lease, a second start can take a
@@ -425,7 +429,7 @@ Required of every driver. Conformance K36 (and K24, through the engine's backfil
 | K4 | cache invalidation | an insert outside a cached range keeps the entry, one inside it is seen |
 | K5 | atomic visibility | readers racing 2-document mutations never see one of the two |
 | K6 | crash atomicity (process crash) | a child process commits continuously and is SIGKILLed at random moments, N times; after each kill the store reopens with `maxTs ≥` the last acknowledged commit, every commit `≤ maxTs` is complete (doc + all its index entries), none above it is visible, and writing resumes above `maxTs` |
-| K7 | torn tail (log-based drivers) | half a record appended to the log: it is cut off on open, and a commit written after recovery survives the next reopen |
+| K7 | torn tail (log-based drivers) | half a record appended to the log: it is cut off on open, and a commit written after recovery survives the next reopen; a damaged record with complete records after it is refused, nothing cut (memory: `packages/core/test/memory-store.test.ts`, with writes that take part of their bytes and a write failing part way) |
 | K8 | exact limits | a range whose ends are full of deleted keys and whose live keys have hundreds of versions: for limits 0–100, asc and desc, whole and partial ranges, at several snapshots, `scan` returns exactly the reference model's first `limit` live entries |
 | K9 | long keys | incompressible keys up to 6 KB, many sharing their first 2500+ bytes, plus keys around the 2500-byte boundary, with versions and deletes: scans over whole and partial ranges (bounds that are themselves long keys), both directions, several limits and snapshots, equal the reference model |
 | K10 | lease is exclusive | a second `acquireLease` while the first is live returns `heldBy`; through the engine, a second engine on the same store fails `init()` with `LeaseHeldError`. **Newest-wins lease:** a second `acquireLease` takes it at once; the first holder's next flush throws `LeaseLostError` and lands nothing; a second engine opens and the first one stops at its next mutation |
