@@ -18,7 +18,8 @@ one fails CI.
 
 bunvex is a rewrite of Convex: an app should behave the same on both. **Before implementing a feature
 Convex has, study how Convex does it in its source and write it up** in [`docs/study/`](docs/study/)
-(the rule and the template are in its README). Divergences from Convex are decided by the owner.
+(the rule and the template are in its README). Divergences from Convex are decided by the owner. A refactor
+that changes no observable behaviour needs no study, only a short design note in the PR.
 The full inventory of Convex's features and bunvex's status is [`docs/parity/`](docs/parity/README.md);
 update its rows in the PR that changes them.
 

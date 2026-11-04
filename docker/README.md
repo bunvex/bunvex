@@ -79,7 +79,7 @@ Set these in the shell or in a `.env` file next to `docker-compose.yml`:
 | `S3_STORAGE_SEARCH_BUCKET`, `S3_STORAGE_SNAPSHOT_IMPORTS_BUCKET` | The search and vector index segments and uploaded snapshot imports in S3. Setting any of the five buckets turns S3 on; a use case without its bucket stays in the volume (`storage/search`, `storage/snapshot_imports`). |
 | `AWS_S3_DISABLE_SSE`, `AWS_S3_DISABLE_CHECKSUMS` | `true` for an S3-compatible store that refuses them: uploads ask for server-side encryption (`AES256`) and CRC32 part checksums by default. Only the exact value `true` turns one on. |
 | `INSTANCE_NAME`, `INSTANCE_SECRET` | The instance's name and secret (32 bytes, hex). By default, generated on the first start and kept in the volume. The backend reads the secret from its environment, never from its command line, which every user of the host can read. |
-| `REDACT_LOGS_TO_CLIENT` | Keep functions' log lines and errors' details from clients. |
+| `REDACT_LOGS_TO_CLIENT` | Keep functions' log lines and errors' details from clients: a failing function answers only `[Request ID: …] Server Error` (a `BunvexError`'s data is still sent). Off by default, as Convex's self-hosted backend, which suits development; **set it in production**, so that clients never see stack traces, messages or log lines meant for you. |
 | `DOCUMENT_RETENTION_DELAY` | How long old document versions are kept, in seconds (default here: 2 days). |
 | `DASHBOARD_PORT`, `BUNVEX_DEPLOYMENT_URL` | The dashboard's host port (default 6791) and the backend URL its sign-in page is filled in with (in place of Convex's `NEXT_PUBLIC_DEPLOYMENT_URL`). `BUNVEX_ADMIN_KEY` on the `dashboard` service would fill in the key too (in place of Convex's `NEXT_PUBLIC_ADMIN_KEY`): only on a machine nobody else reaches. |
 | `DISABLE_METRICS_ENDPOINT` | `true` (the default here) answers `/metrics` with 404; `false` serves the Prometheus metrics there, on both ports, with no auth. |
@@ -97,7 +97,10 @@ proxy such as [Smokescreen](https://github.com/stripe/smokescreen), which refuse
 407; each request carries the instance name as `Proxy-Authorization`. Add it to the service's `command:`
 (the entry script passes its arguments on). Without it, bunvex screens those requests itself
 (`--deny-addresses`: `metadata` by default refuses link-local and cloud metadata addresses, `private` also
-loopback and private networks, `none` nothing).
+loopback and private networks, `none` nothing). `metadata` stays the default because a self-hosted deployment
+often calls services on its own network (another container of the compose file, an internal API). **In
+production, use `--deny-addresses private`** unless your actions must reach such a service: then an action whose
+URL comes from a user cannot reach your database, your admin ports or the host.
 
 **Where functions run (the function sandbox).** `BUNVEX_FUNCTION_SANDBOX` chooses the executor, and
 `--function-sandbox` on the command line wins over it:
