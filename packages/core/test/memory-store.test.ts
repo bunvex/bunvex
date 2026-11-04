@@ -108,6 +108,79 @@ describe("a torn tail", () => {
   });
 });
 
+describe("damage and failed writes", () => {
+  /** The store's log handle, whose `write` a test replaces. */
+  const handle = (m: MemoryPersistence) =>
+    (m as unknown as { fh: { write: (b: Buffer, off: number, len: number) => Promise<{ bytesWritten: number }> } }).fh;
+
+  test("a line that does not parse with complete records after it is refused, and the log left whole", async () => {
+    const path = logPath();
+    const m = await openLog(path);
+    for (const ts of [1n, 2n, 3n]) {
+      m.apply(ts, [doc(`d${ts}`, '"x"')], []);
+      await m.flush();
+    }
+    await m.close();
+    // The second commit's record damaged where it lies (a bad sector, a bit flip that breaks the JSON).
+    const text = readFileSync(path, "utf8");
+    const lines = text.split("\n");
+    lines[2] = lines[2].replace('"docs"', '"do\u0000s');
+    writeFileSync(path, lines.join("\n"));
+    const size = statSync(path).size;
+    const e = await openLog(path).catch((x) => x);
+    expect(e).toBeInstanceOf(Error);
+    expect(e.message).toContain(`the memory store's log ${path} is damaged`);
+    expect(e.message).toContain("1 complete record(s) follow it");
+    expect(statSync(path).size).toBe(size); // nothing cut
+  });
+
+  test("a write that takes part of its bytes is finished: every commit flushed is there after a reopen", async () => {
+    const path = logPath();
+    const m = await openLog(path);
+    const fh = handle(m);
+    const write = fh.write.bind(fh);
+    // Each write takes at most half of what it is given (a signal, a full pipe, a network file system).
+    fh.write = (b, off, len) => write(b, off, Math.max(1, len >> 1));
+    for (const ts of [1n, 2n]) {
+      m.apply(ts, [doc(`d${ts}`, '"x"')], [entry(key(Number(ts)), `d${ts}`)]);
+      await m.flush();
+    }
+    await m.setGlobal("g", 7);
+    await m.close();
+    const again = await openLog(path);
+    expect(again.maxTs()).toBe(2n);
+    expect(again.get("t", "d1", 5n)).toEqual({ json: '"x"', ts: 1n });
+    expect(again.get("t", "d2", 5n)).toEqual({ json: '"x"', ts: 2n });
+    expect(again.getGlobal("g")).toBe(7);
+  });
+
+  test("after a write fails part way, nothing more is appended: a reopen cuts the torn tail, the rest stays", async () => {
+    const path = logPath();
+    const m = await openLog(path);
+    m.apply(1n, [doc("a", '"x"')], []);
+    await m.flush();
+    const fh = handle(m);
+    const write = fh.write.bind(fh);
+    // Part of the next group's bytes reach the file, then the disk is full.
+    fh.write = async (b, off, len) => {
+      await write(b, off, len >> 1);
+      throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
+    };
+    m.apply(2n, [doc("b", '"y"')], []);
+    await expect(m.flush()).rejects.toThrow("ENOSPC");
+    // A global, an index entry and a later group are refused, not written after the torn record.
+    await expect(m.setGlobal("g", 1)).rejects.toThrow(`the memory store's log ${path} failed a write`);
+    await expect(m.writeIndexEntries([{ ...entry(key(1), "a"), ts: 1n }])).rejects.toThrow("failed a write");
+    m.apply(3n, [doc("c", '"z"')], []);
+    await expect(m.flush()).rejects.toThrow("failed a write");
+    await m.close();
+    const again = await openLog(path);
+    expect(again.maxTs()).toBe(1n);
+    expect(again.get("t", "a", 5n)).toEqual({ json: '"x"', ts: 1n });
+    expect(again.getGlobal("g")).toBe(null);
+  });
+});
+
 describe("the read-only flag", () => {
   test("set, the log does not open for writing unless allowed; cleared, it opens", async () => {
     const path = logPath();
