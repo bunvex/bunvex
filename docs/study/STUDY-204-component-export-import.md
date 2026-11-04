@@ -1,5 +1,5 @@
 # STUDY-204 — Components in snapshot export and import
-<!-- index: Components in snapshot export and import (STUDY-152 step 10, DV-215): the ZIP's `_components/<name>/` prefixes, import into a component path, streaming export's `_component` | study; PR 1 (export) and PR 2a (hidden tables by namespace) built -->
+<!-- index: Components in snapshot export and import (STUDY-152 step 10, DV-215): the ZIP's `_components/<name>/` prefixes, import into a component path, streaming export's `_component` | study; PR 1 (export), PR 2a (hidden tables by namespace) and PR 2b (import) built; Q1 open -->
 
 STUDY-152 step 10. DV-215 accepted "export has only the root; a ZIP with `_components/…` is refused on import"
 until bunvex had components (owner, 2026-10-02). Components now exist (STUDY-152 steps 1–7), and bunvex's own
@@ -117,13 +117,73 @@ Sabotage, each making the new test fail:
 
 ### PR 2b: import
 
-`_components/` prefixes become a component path, appended to `componentPath` (`/api/import`, the CLI's
-`--component`). Each table is imported into that namespace. Missing components are created unmounted, as Convex's
-`prepare_component`. `--replace-all` deletes the tables the import does not have in **every** namespace that has a component path (C5
-confirmed in the source: `finalize_import`'s `to_delete`, `mod.rs:1075-1100`). The confirmation lists the
-changes per component under a `Component <path>` line (`confirmation.rs:108-234`). The parse in `import-parse.ts` carries each table's
-path; `imports.ts` creates and activates the hidden tables in that namespace. Its own study section is added with
-the PR.
+`ImportService` (`packages/server/src/imports.ts`) and its parse (`import-parse.ts`) work per namespace:
+
+- **Parse.** Each ZIP entry's `_components/<name>/` prefixes are peeled from the right (Convex's
+  `COMPONENT_NAME_PATTERN`, `parse_component_path`). A name that is no identifier fails with
+  `InvalidComponentName`: "component name '<name>' invalid: …". What is left before them, such as a folder the ZIP
+  was made in, is ignored. `uniform` and the legacy schema are keyed by path and name.
+- **`componentPath`.**
+  - `/api/import` and `finish_upload` take Convex's `componentPath` (`ComponentPath::deserialize`: a name that is no
+    identifier is 400 `InvalidComponentPath`).
+  - It is stored on the `_snapshot_imports` row (`component_path`, null for the root's), and every entry's path is
+    appended to it.
+  - `bunvex import --component <path>` sends it, as `npx convex import --component` does.
+- **Components.**
+  - The import's own component is prepared when the upload is parsed (Convex's `parse_import`). Every other
+    namespace the import names is prepared before its tables.
+  - A missing component, and its parents first, is created **unmounted**, as Convex's
+    `prepare_component_for_import` / `create_unmounted_component` do:
+    - its own namespace (`initializeComponentNamespace`);
+    - a `childComponent` definition whose path is the component path;
+    - its `_components` row under its parent's.
+  - The root's rows are written first if no push ever wrote them (`ensureRootComponent`).
+- **Confirmation.** Changes are keyed by (component path, table), ordered by path (the root's first, then the names
+  in turn) and then by name. A component's rows come under a `Component <path>` line, as `confirmation.rs` chunks
+  them. Each checkpoint carries `component_path`.
+- **Run.** Each namespace gets its own table numbers (`assign_table_numbers`), hidden tables (PR 2a), number checks
+  (`validate_prepared_table_numbers`), conflict messages with ` in '<path>'`, and schema constraints. All hidden
+  tables are activated in one commit. Progress messages follow Convex's: `Importing "t" in 'c'` and
+  `Imported "t" in 'c' (n documents)`, with the in-between batch messages bare. A namespace's `_storage` files are
+  stored into its own `_file_storage`.
+- **`--replace-all`.** It deletes the tables the import does not have in **every** namespace that has a component
+  path. This is C5, confirmed in the source: `finalize_import`'s `to_delete` (`mod.rs:1075-1100`), and the
+  confirmation lists them (`confirmation.rs:108-127`). Each namespace's active-schema tables become empty ones
+  (`initial_schemas`, `mod.rs:1276-1288`).
+- **Audit event.** `snapshot_import`'s `table_names` and `table_names_deleted` are grouped by component as Convex's
+  `audit_log_table_names`: the first 20 in (path, name) order, `{component, table_names}` per path. An empty set is
+  `[]`, where bunvex wrote `[{component: null, table_names: []}]`.
+- **Hidden-table resume.** The `hidden_tables` entries record their component.
+
+What stays different: a component's documents are checked against its own active schema, with its `v.id`s named by
+its catalog as it is. The root's are named by the tables as they will be once the import is activated (Convex's
+`ImportSchemaConstraints` takes the as-will-be mapping for every namespace). This only matters for a component whose
+schema points at a table the same import renumbers. It is left as an open question (Q1).
+
+Tests:
+
+- `packages/server/test/imports.test.ts`, "components (STUDY-204)":
+  - An export of a deployment with `counter`, `second` and the nested `inner` (each with documents, plus a file in
+    `counter`) is imported into an empty deployment. Checked: the confirmation per component, with every
+    namespace's `_storage`, and the checkpoints with `component_path`. Each component is created unmounted under its
+    parent. Documents, ids and table numbers are the same, namespace by namespace, and the root's has none. The
+    file's id and UUID are kept, and its bytes are stored again.
+  - `componentPath`: a JSON Lines table appended into `second`, and a table imported into a component that does
+    not exist yet (`second/made`), which is created.
+  - `replaceAll` with a ZIP that has only `counter/messages`: the root's other table and `second`'s tables are
+    deleted, `counter`'s `counters` too, and `counter`'s `messages` is replaced.
+  - A component name that is no identifier is refused.
+- `packages/cli/test/import.test.ts`: `--component workflow/workpool` creates both, unmounted, and imports into
+  `workpool`'s namespace. A name that is no identifier is the deployment's 400.
+- `audit-log.test.ts`: the deleted tables of an import that deletes none are `[]`.
+
+Sabotage, each making a test fail:
+
+| Sabotage | Tests that fail |
+|---|---|
+| Component paths not parsed | the round trip and `replaceAll` |
+| `replaceAll` kept to the import's namespaces | `replaceAll` |
+| `--component` not sent | the CLI test |
 
 ### PR 3: streaming export
 
@@ -132,7 +192,15 @@ too. A non-root selection stops returning nothing.
 
 ## 4. Divergences
 
-None new. DV-215 narrows with PR 1, to import (and streaming export) only, and is resolved by PR 3.
+None new. DV-215 narrows with PR 1 to import and streaming export, with PR 2b to streaming export only, and is
+resolved by PR 3.
+
+## 6. Open questions
+
+- **Q1.** A component's documents in an import are checked against its schema with its `v.id`s named by its catalog
+  as it is, not as the import will leave it (§3, PR 2b). Matching Convex's per-namespace `ImportSchemaConstraints`
+  needs the as-will-be names for each namespace in the write path's schema check. It only matters when a component's
+  schema points at a table the same import renumbers.
 
 ## 5. Tests (PR 1)
 

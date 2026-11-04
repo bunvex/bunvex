@@ -12,11 +12,21 @@
 //   as Convex. A failed or canceled import's hidden tables are dropped;
 // - the row ends `completed` (the activation's timestamp, the documents written) or `failed`, with the
 //   message prefixed "Hit an error while importing:" as Convex's.
+//
+// Components (STUDY-204): every table and file is in a namespace, the import's `componentPath` with the ZIP entry's
+// `_components/<name>/` prefixes appended; a missing component is created unmounted, its parents first; numbers,
+// hidden tables and checks are each namespace's, all activated in the one commit; `--replace-all` empties every
+// namespace that has a component path.
 import { createHmac, timingSafeEqual } from "node:crypto";
 import {
+  allComponentPaths,
+  componentDefinitionRow,
+  componentRow,
   declaredTables,
   type Engine,
+  type EngineSchema,
   FILE_STORAGE_TABLE,
+  formatComponentPath,
   ImportBackfillingError,
   ImportIdError,
   insertAuditLogEvents,
@@ -25,6 +35,8 @@ import {
   occBackoffMs,
   primaryVirtualTable,
   referencedTables,
+  resolveComponentPath,
+  rootComponent,
   SNAPSHOT_IMPORTS_TABLE,
   STORAGE_TABLE,
   SYSTEM_ACTOR,
@@ -37,6 +49,7 @@ import {
 import type { BlobStore } from "@bunvex/file-storage";
 import { decodeId, type GenericValidator, type Value } from "@bunvex/values";
 import { auditEvents } from "./audit-log.ts";
+import { ensureRootComponent } from "./code-store.ts";
 import { INTERNAL_SERVER_ERROR_MESSAGE, isSystemError } from "./errors.ts";
 import {
   confirmationMessage,
@@ -85,7 +98,8 @@ export type ImportState =
   | { state: "failed"; error_message: string };
 
 export type Checkpoint = {
-  component_path: null;
+  /** The table's component path (`a/b`), null for the root's, as Convex's `ComponentPath::serialize`. */
+  component_path: string | null;
   display_table_name: string;
   tablet_id: string | null;
   total_num_rows_to_write: bigint;
@@ -101,12 +115,16 @@ export type ImportRow = {
   state: ImportState;
   format: ImportFormat;
   mode: ImportMode;
-  component_path: null;
+  /** The component the import goes into (`--component`), null for the root's. */
+  component_path: string | null;
   fq_object_key: string;
   /** The upload's size, for reading a ZIP by ranges (bunvex's own field). */
   object_size: bigint;
-  /** The hidden tables this import created, by name (bunvex's own field): resumed, or dropped if it fails. */
-  hidden_tables?: { name: string; tablet: string }[];
+  /**
+   * The hidden tables this import created, by component path (absent or null: the root's) and name (bunvex's own
+   * field): resumed, or dropped if it fails.
+   */
+  hidden_tables?: { name: string; tablet: string; component?: string | null }[];
   /** The admin key's member that started it (Convex's `Option<MemberId>`, an int64), or none. */
   member_id: bigint | null;
   checkpoints: Checkpoint[] | null;
@@ -356,6 +374,8 @@ export class ImportService {
     mode: ImportMode,
     upload: { key: string; size: number },
     memberId: bigint | null = null,
+    /** The component to import into (`a/b`), null or empty for the app's own. */
+    componentPath: string | null = null,
   ): Promise<string> {
     let id = "";
     await this.write(async (db) => {
@@ -363,7 +383,7 @@ export class ImportService {
         state: { state: "uploaded" },
         format,
         mode,
-        component_path: null,
+        component_path: componentPath || null,
         fq_object_key: upload.key,
         object_size: BigInt(upload.size),
         member_id: memberId,
@@ -435,8 +455,9 @@ export class ImportService {
     mode: ImportMode,
     upload: { key: string; size: number },
     memberId: bigint | null = null,
+    componentPath: string | null = null,
   ): Promise<number> {
-    const id = await this.start(format, mode, upload, memberId);
+    const id = await this.start(format, mode, upload, memberId, componentPath);
     let row = await this.waitStable(id);
     if (row.state.state === "failed") throw new ImportRequestError(400, "ImportFailed", row.state.error_message);
     await this.perform(id);
@@ -546,7 +567,9 @@ export class ImportService {
       throw new ImportError("ImportFailed", "Import took too long. Try again.");
   }
 
+  /** The upload parsed; the component it goes into is prepared first, as Convex's `parse_import`. */
   private async parse(row: ImportRow): Promise<ParsedImport> {
+    await this.prepareComponent(basePath(row));
     const key = row.fq_object_key;
     const store = this.store;
     const get = async (range?: { start: number; end: number }) => {
@@ -567,6 +590,70 @@ export class ImportService {
       stream: (start, end) => get({ start, end }),
     });
     return parseZip(zip);
+  }
+
+  // ---------------------------------------------------------------- namespaces (STUDY-204)
+
+  /** The `_components` id of the component at `path`, or null for the root's; undefined when there is none. */
+  private async componentIdAt(path: string[]): Promise<string | null | undefined> {
+    if (!path.length) return null;
+    const c = await this.engine.query((db) => resolveComponentPath(db, path));
+    return c ? c._id : undefined;
+  }
+
+  /**
+   * The component at `path`, created unmounted when missing, its parents first (Convex's
+   * `prepare_component_for_import`): a namespace of its own, a definition named by its path, and its `_components`
+   * row under its parent's. The root's rows are written if a push never did. Its id; null for the root.
+   */
+  private async prepareComponent(path: string[]): Promise<string | null> {
+    if (!path.length) return null;
+    const existing = await this.componentIdAt(path);
+    if (existing !== undefined) return existing;
+    const parentPath = path.slice(0, -1);
+    const parent = await this.prepareComponent(parentPath);
+    const name = path[path.length - 1]!;
+    const id = await this.engine.initializeComponentNamespace();
+    await this.sys(async (db) => {
+      await ensureRootComponent(db);
+      const parentRow = parent === null ? await rootComponent(db) : await resolveComponentPath(db, parentPath);
+      if (!parentRow) throw new Error(`${formatComponentPath(parentPath)} not found while creating a component`);
+      const definitionId = await db.insert(
+        "_component_definitions",
+        componentDefinitionRow({
+          path: formatComponentPath(path),
+          definitionType: { type: "childComponent", name, args: [] },
+          childComponents: [],
+          httpMounts: {},
+          httpPrefix: null,
+          exports: { type: "branch", branch: [] },
+          envVars: [],
+        }) as never,
+      );
+      await db.importInsert(this.engine.catalog.table("_components")!, {
+        _id: id,
+        ...componentRow({
+          definitionId,
+          parent: parentRow._id,
+          name,
+          args: [],
+          env: [],
+          state: "unmounted",
+          httpPrefix: null,
+        }),
+      } as Record<string, Value>);
+    }, true);
+    return id;
+  }
+
+  /** The tables of namespace `id` (null: the root's); none for a component with no tables yet. */
+  private spaceCatalog(id: string | null): CatalogView {
+    return id === null ? this.engine.catalog : (this.engine.catalog.components.get(id) ?? NO_TABLES);
+  }
+
+  /** The schema active in namespace `id` (null: the root's). */
+  private spaceSchema(id: string | null): EngineSchema {
+    return id === null ? this.engine.schema : this.engine.componentSchema(id);
   }
 
   /** The documents of an active table. */
@@ -613,52 +700,67 @@ export class ImportService {
     }
   }
 
-  /** Parse and count: the confirmation message and checkpoints (Convex's `messages_to_confirm_replace`). */
+  /**
+   * Parse and count: the confirmation message and checkpoints (Convex's `messages_to_confirm_replace`), each table by
+   * its component path and name, the changes listed per component.
+   */
   private async confirmable(row: ImportRow) {
     try {
       this.failIfTooOld(row);
       const parsed = await this.parse(row);
-      const counts = new Map<string, number>();
-      const missingId = new Set<string>();
+      const base = basePath(row);
+      const entries = new Map<string, { path: string[]; name: string; count: number; missingId: boolean }>();
+      const entry = (path: string[], name: string) => {
+        const k = tableKey(path, name);
+        let e = entries.get(k);
+        if (!e) {
+          e = { path, name, count: 0, missingId: false };
+          entries.set(k, e);
+        }
+        return e;
+      };
       for (const t of parsed.tables) {
+        const path = [...base, ...t.componentPath];
         let n = 0;
-        if (t.name === "_tables")
-          for await (const e of this.tablesEntries(t)) counts.set(e.name, counts.get(e.name) ?? 0);
+        if (t.name === "_tables") for await (const e of this.tablesEntries(t)) entry(path, e.name);
+        const e = entry(path, t.name);
         for await (const r of t.rows()) {
           n++;
           const o = r.json as Record<string, unknown> | null;
-          if (!missingId.has(t.name) && !(o && typeof o === "object" && !Array.isArray(o) && "_id" in o))
-            missingId.add(t.name);
+          if (!e.missingId && !(o && typeof o === "object" && !Array.isArray(o) && "_id" in o)) e.missingId = true;
         }
-        counts.set(t.name, (counts.get(t.name) ?? 0) + n);
+        e.count += n;
       }
+      // `--replace-all` empties every namespace that has a component path (Convex's `component_ids_to_paths`).
       if (row.mode === "ReplaceAll")
-        for (const t of this.engine.catalog.tables.values())
-          if (!t.name.startsWith("_") && !counts.has(t.name)) counts.set(t.name, 0);
-      const changes: (TableChange & { missingId: boolean })[] = [];
-      for (const name of [...counts.keys()].sort(byteOrder)) {
-        const isStorage = name === STORAGE_TABLE;
-        if (name.startsWith("_") && !isStorage) continue;
-        const active = this.engine.catalog.tables.get(physicalName(name));
+        for (const [id, path] of await this.engine.query((db) => allComponentPaths(db)))
+          for (const t of this.spaceCatalog(id).tables.values()) if (!t.name.startsWith("_")) entry(path, t.name);
+      const changes: (TableChange & { path: string[]; missingId: boolean })[] = [];
+      for (const e of [...entries.values()].sort(byPathAndName)) {
+        const isStorage = e.name === STORAGE_TABLE;
+        if (e.name.startsWith("_") && !isStorage) continue;
+        const id = await this.componentIdAt(e.path);
+        const active = id === undefined ? undefined : this.spaceCatalog(id).tables.get(physicalName(e.name));
         const existing = active ? await this.count(active) : 0;
         let deleted = 0;
         if (row.mode === "Replace" || row.mode === "ReplaceAll") deleted = existing;
         else if (row.mode === "RequireEmpty" && existing > 0)
           throw new ImportError(
             "TableExists",
-            `Table ${name} already exists. Please choose a new table name or use replace/append modes.`,
+            `Table ${e.name} already exists. Please choose a new table name or use replace/append modes.`,
           );
         changes.push({
-          table: name,
-          added: counts.get(name)!,
+          path: e.path,
+          table: e.name,
+          added: e.count,
           deleted,
           existing,
           unit: isStorage ? " files" : "",
-          missingId: missingId.has(name),
+          missingId: e.missingId,
         });
       }
       const checkpoints: Checkpoint[] = changes.map((c) => ({
-        component_path: null,
+        component_path: c.path.length ? formatComponentPath(c.path) : null,
         display_table_name: c.table,
         tablet_id: null,
         total_num_rows_to_write: BigInt(c.added),
@@ -670,7 +772,9 @@ export class ImportService {
       await this.write(async (db) => {
         await this.setState(db, row._id, () => ({
           state: "waiting_for_confirmation",
-          message_to_confirm: confirmationMessage(changes),
+          message_to_confirm: confirmationMessage(
+            changes.map((c) => ({ ...c, component: formatComponentPath(c.path) })),
+          ),
           // Deleting documents or files needs a manual confirmation.
           require_manual_confirmation: changes.some((c) => c.deleted > 0),
         }));
@@ -690,13 +794,21 @@ export class ImportService {
 
   // ---------------------------------------------------------------- progress
 
-  private async progress(id: string, message: string, table: string, written: number, checkpoint = false) {
+  private async progress(
+    id: string,
+    message: string,
+    path: string[],
+    table: string,
+    written: number,
+    checkpoint = false,
+  ) {
+    const component = path.length ? formatComponentPath(path) : null;
     const update = async (db: Tx) => {
       const row = await this.mustGet(db, id);
       if (row.state.state !== "in_progress") throw new Canceled();
       let noop = false;
       const checkpoints = (row.checkpoints ?? []).map((c) => {
-        if (c.display_table_name !== table) return c;
+        if (c.display_table_name !== table || (c.component_path ?? null) !== component) return c;
         if ((checkpoint || c.num_rows_written > 0n) && BigInt(written) <= c.num_rows_written) {
           noop = true;
           return c;
@@ -725,28 +837,28 @@ export class ImportService {
 
   // ---------------------------------------------------------------- running an import
 
-  /** Table numbers (Convex's `assign_table_numbers`): from `_tables`, then the first `_id`, then the existing table's. */
-  private async assignNumbers(
-    mode: ImportMode,
-    tablesTables: ImportTable[],
-    tables: ImportTable[],
-  ): Promise<Map<string, number | undefined>> {
+  /**
+   * One namespace's table numbers (Convex's `assign_table_numbers`): from its `_tables`, then the first `_id`, then
+   * the existing table's.
+   */
+  private async assignNumbers(mode: ImportMode, space: Space): Promise<Map<string, number | undefined>> {
     const toNumber = new Map<string, number | undefined>();
     const numberToName = new Map<number, string>();
+    const at = inComponent(space.path);
     const assign = (name: string, n: number) => {
       const other = numberToName.get(n);
       if (other !== undefined)
         throw new ImportError("InvalidId", `conflict between \`${other}\` and \`${name}\` with number ${n}`);
       numberToName.set(n, name);
     };
-    for (const t of tablesTables)
+    for (const t of space.tablesTables)
       for await (const e of this.tablesEntries(t)) {
         if (toNumber.has(e.name))
-          throw new ImportError("DuplicateTableName", `\`_tables\` contains duplicate entries for \`${e.name}\``);
+          throw new ImportError("DuplicateTableName", `\`_tables\` contains duplicate entries for \`${e.name}\`${at}`);
         toNumber.set(e.name, e.number);
         assign(e.name, e.number);
       }
-    for (const t of tables) {
+    for (const t of space.tables) {
       if (toNumber.has(t.name)) continue;
       let first: unknown;
       for await (const r of t.rows()) {
@@ -764,7 +876,7 @@ export class ImportService {
       toNumber.set(t.name, n);
       assign(t.name, n);
     }
-    const catalog = this.engine.catalog;
+    const catalog = this.spaceCatalog(space.id);
     const assignExisting = (name: string) => {
       if (toNumber.has(name)) return;
       const active = catalog.tables.get(physicalName(name));
@@ -773,114 +885,162 @@ export class ImportService {
         toNumber.set(name, active.number);
       } else toNumber.set(name, undefined);
     };
-    for (const t of tables) assignExisting(t.name);
+    for (const t of space.tables) assignExisting(t.name);
     if (mode === "ReplaceAll") {
-      // The schema's tables the import does not have are replaced by empty ones.
-      for (const name of declaredTables(this.engine.schema).keys()) assignExisting(name);
+      // The schema's tables the import does not have are replaced by empty ones, in each namespace.
+      for (const name of declaredTables(this.spaceSchema(space.id)).keys()) assignExisting(name);
     } else
       for (const t of catalog.tables.values()) {
         const imported = numberToName.get(t.number);
-        if (!toNumber.has(importName(t.name)) && imported !== undefined) throw tableConflict(imported, t.name);
+        if (!toNumber.has(importName(t.name)) && imported !== undefined)
+          throw tableConflict(imported, t.name, space.path);
       }
     return toNumber;
+  }
+
+  /**
+   * The namespaces an import writes, each with its tables and files: every component path its tables name (under the
+   * import's `componentPath`), the import's own first; with `--replace-all`, every namespace that has a component
+   * path, whose tables the import does not have are deleted. Outermost first, as the components are created.
+   */
+  private async spaces(row: ImportRow, parsed: ParsedImport): Promise<Space[]> {
+    const base = basePath(row);
+    const byKey = new Map<string, Space>();
+    const space = (path: string[]) => {
+      const k = formatComponentPath(path);
+      let sp = byKey.get(k);
+      if (!sp) {
+        sp = {
+          path,
+          id: null,
+          tablesTables: [],
+          tables: [],
+          defs: new Map(),
+          skip: new Map(),
+          schemaTables: new Map(),
+        };
+        byKey.set(k, sp);
+      }
+      return sp;
+    };
+    space(base);
+    for (const t of parsed.tables) {
+      const sp = space([...base, ...t.componentPath]);
+      (t.name === "_tables" ? sp.tablesTables : sp.tables).push(t);
+    }
+    for (const f of parsed.storageFiles) space([...base, ...f.componentPath]);
+    if (row.mode === "ReplaceAll")
+      for (const path of (await this.engine.query((db) => allComponentPaths(db))).values()) space(path);
+    const out = [...byKey.values()].sort((a, b) => comparePaths(a.path, b.path));
+    for (const sp of out) sp.id = await this.prepareComponent(sp.path);
+    return out;
   }
 
   private async run(row: ImportRow) {
     // The hidden tables to activate; a retried or restarted run resumes into the ones it created before
     // (Convex's checkpoints), skipping the documents already in them.
     const hidden: string[] = [];
-    const previous = new Map((row.hidden_tables ?? []).map((h) => [h.name, h.tablet]));
-    const skip = new Map<string, number>();
+    const previous = new Map(
+      (row.hidden_tables ?? []).map((h) => [tableKey(h.component ? h.component.split("/") : [], h.name), h.tablet]),
+    );
     try {
       this.failIfTooOld(row);
       const parsed = await this.parse(row);
-      const schemaBefore = JSON.stringify(schemaToJson(this.engine.schema));
       const mode = row.mode;
-      const tablesTables = parsed.tables.filter((t) => t.name === "_tables");
-      const tables = parsed.tables.filter((t) => t.name !== "_tables");
-      const numbers = await this.assignNumbers(mode, tablesTables, tables);
-      const catalog = this.engine.catalog;
-      const replacedByAll =
-        mode === "ReplaceAll"
-          ? [...catalog.tables.values()].filter((t) => !t.name.startsWith("_")).map((t) => t.name)
-          : [];
-      // Prepare every table: a new hidden one, or (appending) the existing one.
-      const defs = new Map<string, TableDef>();
-      for (const name of [...numbers.keys()].sort(byteOrder)) {
-        if (name.startsWith("_") && name !== STORAGE_TABLE)
-          throw new ImportError("InvalidTableName", `Invalid table name ${name} starts with metadata prefix '_'`);
-        const number = numbers.get(name);
-        const active = this.engine.catalog.tables.get(physicalName(name));
-        let def: TableDef;
-        const resumed = previous.get(name);
-        const kept = resumed === undefined ? undefined : this.engine.catalog.hidden.get(resumed);
-        if (kept) {
-          // As Convex: an append into a new table cannot resume (nothing records how far it got).
-          if (mode === "Append") throw new Error("can't resume append import");
-          def = kept;
-          hidden.push(def.id);
-          skip.set(name, await this.count(def));
-        } else if (mode === "Append" && active) def = active;
-        else {
-          if (mode === "RequireEmpty" && active && (await this.count(active)) > 0)
+      const spaces = await this.spaces(row, parsed);
+      const schemasBefore = spaces.map((sp) => JSON.stringify(schemaToJson(this.spaceSchema(sp.id))));
+      const deleteNames: { name: string; namespace?: string }[] = [];
+      for (const sp of spaces) {
+        const numbers = await this.assignNumbers(mode, sp);
+        const replacedByAll =
+          mode === "ReplaceAll"
+            ? [...this.spaceCatalog(sp.id).tables.values()].filter((t) => !t.name.startsWith("_")).map((t) => t.name)
+            : [];
+        // Prepare every table: a new hidden one, or (appending) the existing one.
+        for (const name of [...numbers.keys()].sort(byteOrder)) {
+          if (name.startsWith("_") && name !== STORAGE_TABLE)
+            throw new ImportError("InvalidTableName", `Invalid table name ${name} starts with metadata prefix '_'`);
+          const number = numbers.get(name);
+          const active = this.spaceCatalog(sp.id).tables.get(physicalName(name));
+          let def: TableDef;
+          const resumed = previous.get(tableKey(sp.path, name));
+          const kept = resumed === undefined ? undefined : this.spaceCatalog(sp.id).hidden.get(resumed);
+          if (kept) {
+            // As Convex: an append into a new table cannot resume (nothing records how far it got).
+            if (mode === "Append") throw new Error("can't resume append import");
+            def = kept;
+            hidden.push(def.id);
+            sp.skip.set(name, await this.count(def));
+          } else if (mode === "Append" && active) def = active;
+          else {
+            if (mode === "RequireEmpty" && active && (await this.count(active)) > 0)
+              throw new ImportError(
+                "TableExists",
+                `Table ${name} already exists. Please choose a new table name or use replace/append modes.`,
+              );
+            def = await this.engine
+              .createHiddenTable(physicalName(name), {
+                ...(number !== undefined ? { number } : {}),
+                ...(active ? { copyIndexesOf: physicalName(name) } : {}),
+                replacing: replacedByAll,
+                ...(sp.id !== null ? { namespace: sp.id } : {}),
+              })
+              .catch((e) => {
+                // Convex's `InvalidImport` (a bad request): the table it replaces is still backfilling an index.
+                throw e instanceof ImportBackfillingError ? new ImportError(e.code, e.message) : e;
+              });
+            hidden.push(def.id);
+            const tablet = def.id;
+            const component = sp.path.length ? formatComponentPath(sp.path) : null;
+            await this.write(async (db) => {
+              const cur = await this.mustGet(db, row._id);
+              await db.patch(SNAPSHOT_IMPORTS_TABLE, cur._id, {
+                hidden_tables: [
+                  ...(cur.hidden_tables ?? []).filter((h) => h.name !== name || (h.component ?? null) !== component),
+                  { name, tablet, component },
+                ],
+                checkpoints: (cur.checkpoints ?? []).map((c) =>
+                  c.display_table_name === name && (c.component_path ?? null) === component
+                    ? { ...c, tablet_id: tablet }
+                    : c,
+                ),
+              });
+            });
+          }
+          if (number !== undefined && number !== def.number)
             throw new ImportError(
-              "TableExists",
-              `Table ${name} already exists. Please choose a new table name or use replace/append modes.`,
+              "TableNumberConflict",
+              `table ${name}${inComponent(sp.path)} wants table number ${number} but was already assigned ${def.number}`,
             );
-          def = await this.engine
-            .createHiddenTable(physicalName(name), {
-              ...(number !== undefined ? { number } : {}),
-              ...(active ? { copyIndexesOf: physicalName(name) } : {}),
-              replacing: replacedByAll,
-            })
-            .catch((e) => {
-              // Convex's `InvalidImport` (a bad request): the table it replaces is still backfilling an index.
-              throw e instanceof ImportBackfillingError ? new ImportError(e.code, e.message) : e;
-            });
-          hidden.push(def.id);
-          const tablet = def.id;
-          await this.write(async (db) => {
-            const cur = await this.mustGet(db, row._id);
-            await db.patch(SNAPSHOT_IMPORTS_TABLE, cur._id, {
-              hidden_tables: [...(cur.hidden_tables ?? []).filter((h) => h.name !== name), { name, tablet }],
-              checkpoints: (cur.checkpoints ?? []).map((c) =>
-                c.display_table_name === name ? { ...c, tablet_id: tablet } : c,
-              ),
-            });
-          });
+          sp.defs.set(name, def);
         }
-        if (number !== undefined && number !== def.number)
-          throw new ImportError(
-            "TableNumberConflict",
-            `table ${name} wants table number ${number} but was already assigned ${def.number}`,
-          );
-        defs.set(name, def);
+        this.validatePreparedNumbers(mode, sp);
+        // The tables as they will be once activated, for the schema's `v.id` checks.
+        const catalog = this.spaceCatalog(sp.id);
+        for (const t of catalog.tables.values())
+          if (!((mode === "ReplaceAll" && !t.name.startsWith("_")) || numbers.has(importName(t.name))))
+            sp.schemaTables.set(t.number, importName(t.name));
+        for (const [name, def] of sp.defs) sp.schemaTables.set(def.number, name);
+        if (mode === "ReplaceAll")
+          for (const n of replacedByAll)
+            if (!sp.defs.has(n)) deleteNames.push(sp.id === null ? { name: n } : { name: n, namespace: sp.id });
       }
-      this.validatePreparedNumbers(mode, defs);
-      // The tables as they will be once activated, for the schema's `v.id` checks.
-      const schemaTables = new Map<number, string>();
-      for (const t of catalog.tables.values())
-        if (!((mode === "ReplaceAll" && !t.name.startsWith("_")) || numbers.has(importName(t.name))))
-          schemaTables.set(t.number, importName(t.name));
-      for (const [name, def] of defs) schemaTables.set(def.number, name);
 
       let total = 0;
-      for (const t of tables) {
-        const def = defs.get(t.name)!;
-        const skipped = skip.get(t.name) ?? 0;
-        if (t.name === STORAGE_TABLE) await this.importStorage(row, t, def, parsed, schemaTables, skipped);
-        else total += await this.importTable(row, t, def, schemaTables, skipped);
-      }
+      for (const sp of spaces)
+        for (const t of sp.tables) {
+          const def = sp.defs.get(t.name)!;
+          const skipped = sp.skip.get(t.name) ?? 0;
+          if (t.name === STORAGE_TABLE) await this.importStorage(row, sp, t, def, parsed, skipped);
+          else total += await this.importTable(row, sp, t, def, skipped);
+        }
 
-      const imported = new Set(defs.keys());
-      const deleteNames = mode === "ReplaceAll" ? replacedByAll.filter((n) => !imported.has(n)) : [];
-      const schema = this.engine.schema;
       const { ts } = await this.engine.activateTables(hidden, deleteNames, async (db) => {
         // Only an import still running is finished (it may have been canceled).
         const cur = await db.asSystem(() => this.mustGet(db, row._id));
         if (cur.state.state === "failed") throw new Canceled();
         if (cur.state.state !== "in_progress") throw new Error("Import is not in progress");
-        if (JSON.stringify(schemaToJson(this.engine.schema)) !== schemaBefore)
+        if (spaces.some((sp, i) => JSON.stringify(schemaToJson(this.spaceSchema(sp.id))) !== schemasBefore[i]))
           throw new ImportError(
             "ImportSchemaChanged",
             "Could not complete import because schema changed. Avoid modifying schema.ts while importing tables",
@@ -890,8 +1050,11 @@ export class ImportService {
           db,
           [
             auditEvents.snapshotImport({
-              tables: [...imported].sort(byteOrder),
-              deleted: deleteNames,
+              tables: spaces.flatMap((sp) => [...sp.defs.keys()].map((name) => ({ path: sp.path, name }))),
+              deleted: deleteNames.map((d) => ({
+                path: spaces.find((sp) => (sp.id ?? undefined) === d.namespace)!.path,
+                name: d.name,
+              })),
               mode,
               format: row.format as unknown as Value,
             }),
@@ -899,22 +1062,23 @@ export class ImportService {
           SYSTEM_ACTOR,
         );
         // A schema table outside the import that points into it must not see that table's number change
-        // (Convex's `ImportSchemaConstraints`).
-        for (const [table, declared] of declaredTables(schema)) {
-          if (imported.has(table)) continue;
-          const holder = this.engine.catalog.tables.get(table);
-          if (!holder) continue;
-          for (const fk of referencedTables(declared.document.json)) {
-            const def = defs.get(fk);
-            const existing = this.engine.catalog.tables.get(fk);
-            if (!def || !existing || existing.number === def.number) continue;
-            if (await db.asSystem(() => db.queryDef(holder).first()))
-              throw new ImportError(
-                "ImportForeignKey",
-                `Import changes table '${fk}' which is referenced by '${table}' in the schema`,
-              );
+        // (Convex's `ImportSchemaConstraints`), in each namespace.
+        for (const sp of spaces)
+          for (const [table, declared] of declaredTables(this.spaceSchema(sp.id))) {
+            if (sp.defs.has(table)) continue;
+            const holder = this.spaceCatalog(sp.id).tables.get(table);
+            if (!holder) continue;
+            for (const fk of referencedTables(declared.document.json)) {
+              const def = sp.defs.get(fk);
+              const existing = this.spaceCatalog(sp.id).tables.get(fk);
+              if (!def || !existing || existing.number === def.number) continue;
+              if (await db.asSystem(() => db.queryDef(holder).first()))
+                throw new ImportError(
+                  "ImportForeignKey",
+                  `Import changes table '${fk}' which is referenced by '${table}' in the schema`,
+                );
+            }
           }
-        }
       });
       await this.write((db) =>
         this.setState(db, row._id, () => ({
@@ -928,10 +1092,10 @@ export class ImportService {
     }
   }
 
-  /** Convex's `validate_prepared_table_numbers`: the numbers can coexist once the import is activated. */
-  private validatePreparedNumbers(mode: ImportMode, defs: Map<string, TableDef>) {
+  /** Convex's `validate_prepared_table_numbers`: a namespace's numbers can coexist once the import is activated. */
+  private validatePreparedNumbers(mode: ImportMode, sp: Space) {
     const prepared = new Map<number, string[]>();
-    for (const [name, def] of defs) prepared.set(def.number, [...(prepared.get(def.number) ?? []), name]);
+    for (const [name, def] of sp.defs) prepared.set(def.number, [...(prepared.get(def.number) ?? []), name]);
     for (const [number, names] of prepared) {
       names.sort(byteOrder);
       if (names.length > 1)
@@ -939,15 +1103,19 @@ export class ImportService {
           "TableNumberConflict",
           `conflict between \`${names[0]}\` and \`${names[1]}\` with table number ${number}`,
         );
-      for (const t of this.engine.catalog.tables.values()) {
-        if (t.number !== number || defs.has(importName(t.name)) || (mode === "ReplaceAll" && !t.name.startsWith("_")))
+      for (const t of this.spaceCatalog(sp.id).tables.values()) {
+        if (
+          t.number !== number ||
+          sp.defs.has(importName(t.name)) ||
+          (mode === "ReplaceAll" && !t.name.startsWith("_"))
+        )
           continue;
-        throw tableConflict(names[0]!, t.name);
+        throw tableConflict(names[0]!, t.name, sp.path);
       }
     }
   }
 
-  private async insertBatch(def: TableDef, docs: Record<string, Value>[], schemaTables: Map<number, string>) {
+  private async insertBatch(sp: Space, def: TableDef, docs: Record<string, Value>[]) {
     if (!docs.length) return;
     const ids = docs.map((d) => d._id).filter((id) => id !== undefined);
     if (new Set(ids).size < ids.length)
@@ -956,10 +1124,12 @@ export class ImportService {
     // throughput limit, as long as it takes, with backoff from 10 ms to 30 s.
     for (let failures = 0; !this.engine.writeThroughput.allowsNow(); failures++)
       await Bun.sleep(occBackoffMs(failures, 10, 30_000));
+    // The table's namespace picks the schema its documents are checked against (a component's own). The tables as
+    // they will be name the `v.id`s of the root's; a component's are named by its catalog as it is.
     await this.engine.mutation(
       (db) =>
         db.asSystem(async () => {
-          db.schemaTables = (n) => schemaTables.get(n);
+          db.schemaTables = (n) => sp.schemaTables.get(n);
           for (const d of docs) await db.importInsert(def, d);
         }),
       "_system/snapshot_import",
@@ -967,21 +1137,16 @@ export class ImportService {
   }
 
   /** One table's rows, in batches (Convex's `import_single_table`); the documents written. */
-  private async importTable(
-    row: ImportRow,
-    t: ImportTable,
-    def: TableDef,
-    schemaTables: Map<number, string>,
-    skip: number,
-  ) {
-    await this.progress(row._id, `Importing "${t.name}"`, t.name, 0);
+  private async importTable(row: ImportRow, sp: Space, t: ImportTable, def: TableDef, skip: number) {
+    const at = inComponent(sp.path);
+    await this.progress(row._id, `Importing "${t.name}"${at}`, sp.path, t.name, 0);
     let n = 0;
     let batch: Record<string, Value>[] = [];
     let size = 0;
     // A CSV's empty cell in a field the active schema has optional is no field (Convex's `remap_empty_string_by_schema`).
     const optional =
       row.format.format === "csv"
-        ? optionalTopLevelFields(declaredTables(this.engine.schema).get(t.name)?.document)
+        ? optionalTopLevelFields(declaredTables(this.spaceSchema(sp.id)).get(t.name)?.document)
         : null;
     for await (const r of t.rows()) {
       n++;
@@ -991,30 +1156,30 @@ export class ImportService {
       batch.push(rowToDocument(r, t.uniform, n));
       size += r.text?.length ?? JSON.stringify(r.json).length;
       if (size > BATCH_MAX_BYTES || batch.length > BATCH_MAX_DOCUMENTS) {
-        await this.insertBatch(def, batch, schemaTables);
+        await this.insertBatch(sp, def, batch);
         batch = [];
         size = 0;
-        await this.progress(row._id, `Importing "${t.name}" (${commas(n - 1)} documents)`, t.name, n - 1);
+        await this.progress(row._id, `Importing "${t.name}" (${commas(n - 1)} documents)`, sp.path, t.name, n - 1);
       }
     }
-    await this.insertBatch(def, batch, schemaTables);
-    await this.progress(row._id, `Imported "${t.name}" (${commas(n)} documents)`, t.name, n, true);
+    await this.insertBatch(sp, def, batch);
+    await this.progress(row._id, `Imported "${t.name}"${at} (${commas(n)} documents)`, sp.path, t.name, n, true);
     return n;
   }
 
   /**
-   * `_storage`: the files' metadata, then each file stored again under its id, as a `_file_storage` document
-   * (Convex's `import_storage_table`).
+   * A namespace's `_storage`: the files' metadata, then each of its files stored again under its id, as a
+   * `_file_storage` document (Convex's `import_storage_table`).
    */
   private async importStorage(
     row: ImportRow,
+    sp: Space,
     t: ImportTable,
     def: TableDef,
     parsed: ParsedImport,
-    schemaTables: Map<number, string>,
     skip: number,
   ) {
-    await this.progress(row._id, `Importing "_storage"`, "_storage", 0);
+    await this.progress(row._id, `Importing "_storage"${inComponent(sp.path)}`, sp.path, "_storage", 0);
     type Meta = { _creationTime?: number; sha256?: string; contentType?: string; internalId?: string };
     const metadata = new Map<string, Meta>();
     let n = 0;
@@ -1038,9 +1203,11 @@ export class ImportService {
         ...(typeof m.internalId === "string" ? { internalId: m.internalId } : {}),
       });
     }
-    const total = parsed.storageFiles.length;
+    const relative = sp.path.slice(basePath(row).length).join("/");
+    const files = parsed.storageFiles.filter((f) => f.componentPath.join("/") === relative);
+    const total = files.length;
     let done = 0;
-    for (const file of parsed.storageFiles) {
+    for (const file of files) {
       if (!this.files) throw new ImportError("FileStorageDisabled", "File storage is not configured on this server.");
       // Stored by an earlier attempt: one file per transaction, in order.
       if (done < skip) {
@@ -1062,31 +1229,83 @@ export class ImportService {
         throw new ImportError("Sha256Mismatch", `Sha256 mismatch. Expected: ${m.sha256} Actual: ${sha256}`);
       }
       try {
-        await this.insertBatch(
-          def,
-          [
-            {
-              _id: file.id,
-              ...(m._creationTime !== undefined ? { _creationTime: m._creationTime } : {}),
-              storageId: m.internalId ?? crypto.randomUUID(),
-              storageKey: written.key,
-              sha256: written.sha256.slice().buffer as ArrayBuffer,
-              size: BigInt(written.size),
-              contentType: m.contentType ?? null,
-            },
-          ],
-          schemaTables,
-        );
+        await this.insertBatch(sp, def, [
+          {
+            _id: file.id,
+            ...(m._creationTime !== undefined ? { _creationTime: m._creationTime } : {}),
+            storageId: m.internalId ?? crypto.randomUUID(),
+            storageKey: written.key,
+            sha256: written.sha256.slice().buffer as ArrayBuffer,
+            size: BigInt(written.size),
+            contentType: m.contentType ?? null,
+          },
+        ]);
       } catch (e) {
         await this.files.delete(written.key).catch(() => {});
         throw e;
       }
       done++;
-      await this.progress(row._id, `Importing "_storage" (${commas(done)}/${commas(total)} files)`, "_storage", done);
+      await this.progress(
+        row._id,
+        `Importing "_storage" (${commas(done)}/${commas(total)} files)`,
+        sp.path,
+        "_storage",
+        done,
+      );
     }
-    await this.progress(row._id, `Imported "_storage" (${commas(done)} files)`, "_storage", done, true);
+    await this.progress(
+      row._id,
+      `Imported "_storage"${inComponent(sp.path)} (${commas(done)} files)`,
+      sp.path,
+      "_storage",
+      done,
+      true,
+    );
   }
 }
+
+/**
+ * A namespace an import writes (STUDY-204): its component path from the root (`[]`: the root's), its `_components`
+ * id once prepared (null: the root's), its `_tables` and other tables, and what the run prepares in it.
+ */
+type Space = {
+  path: string[];
+  id: string | null;
+  tablesTables: ImportTable[];
+  tables: ImportTable[];
+  /** Each table's definition to write into: a hidden table, or (appending) the active one. */
+  defs: Map<string, TableDef>;
+  /** Documents an earlier attempt wrote, by table. */
+  skip: Map<string, number>;
+  /** The namespace's tables by number as they will be once activated, for the schema's `v.id` checks. */
+  schemaTables: Map<number, string>;
+};
+
+/** A namespace's active and hidden tables. */
+type CatalogView = Pick<Engine["catalog"], "tables" | "hidden">;
+const NO_TABLES: CatalogView = { tables: new Map(), hidden: new Map() };
+
+/** The import's own component path (`--component`), from the root. */
+const basePath = (row: ImportRow): string[] => (row.component_path ? row.component_path.split("/") : []);
+
+/** A table's key in an import: its component's path and its name. */
+const tableKey = (path: string[], name: string) => `${formatComponentPath(path)}\0${name}`;
+
+/** Convex's `in_component_str`: `""` for the root, ` in '<path>'` otherwise. */
+const inComponent = (path: string[]) => (path.length ? ` in '${formatComponentPath(path)}'` : "");
+
+/** Component paths in Convex's order (`ComponentPath`'s, its names compared in turn): the root first. */
+function comparePaths(a: string[], b: string[]): number {
+  for (let i = 0; i < Math.min(a.length, b.length); i++) {
+    const c = byteOrder(a[i]!, b[i]!);
+    if (c) return c;
+  }
+  return a.length - b.length;
+}
+
+/** By component path, then by table name, as Convex's `BTreeMap<(ComponentPath, TableName), _>`. */
+const byPathAndName = (a: { path: string[]; name: string }, b: { path: string[]; name: string }) =>
+  comparePaths(a.path, b.path) || byteOrder(a.name, b.name);
 
 /** A stream of an async iterable's chunks. */
 function streamFrom(it: AsyncIterable<Uint8Array>): ReadableStream<Uint8Array> {
@@ -1104,14 +1323,15 @@ function streamFrom(it: AsyncIterable<Uint8Array>): ReadableStream<Uint8Array> {
 }
 
 /** Convex's `table_conflict_error`. */
-function tableConflict(table: string, existing: string): ImportError {
+function tableConflict(table: string, existing: string, path: string[] = []): ImportError {
+  const at = inComponent(path);
   // A system table that backs a virtual one (Convex's `associated_virtual_table_name`).
   const msg =
     SYSTEM_TO_VIRTUAL_TABLE[existing] !== undefined
-      ? `New table \`${table}\` has IDs that conflict with existing system table`
+      ? `New table \`${table}\`${at} has IDs that conflict with existing system table`
       : existing.startsWith("_")
-        ? `New table \`${table}\` has IDs that conflict with existing internal table. Consider importing this table without \`_id\` fields or import into a new deployment.`
-        : `New table \`${table}\` has IDs that conflict with existing table \`${existing}\`. To delete all existing tables, import with \`bunvex import --replace-all\`.`;
+        ? `New table \`${table}\`${at} has IDs that conflict with existing internal table. Consider importing this table without \`_id\` fields or import into a new deployment.`
+        : `New table \`${table}\`${at} has IDs that conflict with existing table \`${existing}\`. To delete all existing tables, import with \`bunvex import --replace-all\`.`;
   return new ImportError("TableConflict", msg);
 }
 
