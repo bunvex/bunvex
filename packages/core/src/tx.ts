@@ -1031,8 +1031,24 @@ export class Tx {
     );
   }
 
-  /** Create table `name` in this transaction: the next free Convex number, a fresh tablet, system indexes. */
-  private async createTable(name: string): Promise<TableDef> {
+  /** The table creations of this transaction, chained: the last one's settling. */
+  private creating: Promise<unknown> = Promise.resolve();
+
+  /**
+   * Create table `name` in this transaction, or take the one an earlier insert created. Creations run one at a time,
+   * as Convex runs a transaction's syscalls: inserts awaited together (`Promise.all`) into a new table share it, and
+   * two new tables read the catalog one after the other, so they get different numbers.
+   */
+  private createTable(name: string): Promise<TableDef> {
+    const created = this.creating.then(
+      () => this.createdTables.get(this.createdKey(name))?.def ?? this.createTableNow(name),
+    );
+    this.creating = created.catch(() => {});
+    return created;
+  }
+
+  /** Create table `name` now: the next free Convex number, a fresh tablet, system indexes. */
+  private async createTableNow(name: string): Promise<TableDef> {
     if (name.startsWith("_")) throw new Error(`Invalid table name "${name}": names starting with "_" are reserved.`);
     // Convex's creation reads the tables once, as the function's read (one, however many tables it creates); the
     // catalog reads below are the engine's own (not counted).
