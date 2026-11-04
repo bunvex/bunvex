@@ -244,7 +244,9 @@ describe("the engine's workers by namespace", () => {
     }
   });
 
-  test("stale hidden tables are dropped from the root only: a component's hidden table stays", async () => {
+  // As Convex's `cleanup_hidden_tables`, which walks the global `_tables` (crates/application/src/system_table_cleanup):
+  // every namespace's (STUDY-204; step 1 kept to the root's until a component's catalog could drop one).
+  test("stale hidden tables are dropped in every namespace: a component's too", async () => {
     const e = await open(await componentStore());
     try {
       await e.mutation((db) =>
@@ -253,7 +255,8 @@ describe("the engine's workers by namespace", () => {
           await db.patch("_tables", row._id as string, { state: "hidden" });
         }),
       );
-      expect(await e.dropStaleHiddenTables(0, Date.now() + 1000)).toBe(0);
+      expect(await e.dropStaleHiddenTables(0, Date.now() + 1000)).toBe(1);
+      expect([...e.catalog.components.values()].some((c) => c.hidden.size > 0)).toBe(false);
     } finally {
       await e.close();
     }

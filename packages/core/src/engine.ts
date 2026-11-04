@@ -3739,13 +3739,17 @@ export class Engine {
    * copies start `Backfilling`; the table is backfilled (it is empty: next to nothing to copy) and its indexes
    * enabled before it is returned (`backfill_and_enable_indexes_on_table`), so the import writes into a table
    * whose indexes are enabled. `number` may be the active table's of the same name, or of a table in
-   * `replacing` (one the activation deletes). Its definition, once committed.
+   * `replacing` (one the activation deletes). `namespace`: the component whose namespace the table is in (its
+   * `_components` id; the root's when absent): numbers, names and `copyIndexesOf` are that namespace's (STUDY-204).
+   * Its definition, once committed.
    */
   async createHiddenTable(
     name: string,
-    opts: { number?: number; copyIndexesOf?: string; replacing?: string[] } = {},
+    opts: { number?: number; copyIndexesOf?: string; replacing?: string[]; namespace?: string } = {},
   ): Promise<TableDef> {
-    const source = opts.copyIndexesOf ? this.catalog.tables.get(opts.copyIndexesOf) : undefined;
+    const ns = opts.namespace;
+    const spaceOf = (c: Catalog) => (ns === undefined ? c : c.components.get(ns));
+    const source = opts.copyIndexesOf ? spaceOf(this.catalog)?.tables.get(opts.copyIndexesOf) : undefined;
     const indexes: Record<string, string[]> = {};
     // The ENABLED indexes only, as Convex's `copy_indexes_to_table` (staged and backfilled ones are not copied).
     for (const ix of source?.indexes.values() ?? []) if (!(ix.name in SYSTEM_INDEXES)) indexes[ix.name] = ix.fields; // as they are: the placeholder adds nothing
@@ -3762,11 +3766,13 @@ export class Engine {
           stored,
           !name.startsWith("_"),
           nextIndexId,
+          ns,
         );
         const meta = plan.insertTables[0]!;
         if (opts.number !== undefined) {
           const holder = tables.find(
             (t) =>
+              t.namespace === ns &&
               t.number === opts.number &&
               (t.state ?? "active") !== "deleting" &&
               !((t.name === name || opts.replacing?.includes(t.name)) && (t.state ?? "active") === "active"),
@@ -3787,9 +3793,10 @@ export class Engine {
             state: i.state === "enabled" ? ("enabled" as const) : state,
           }));
         db.onCommitVisible = () => {
-          const c = this.catalog.withTableStates({});
-          c.add(name, row.tablet, row.number, catalogIndexes("backfilling"), "hidden", row._id);
-          this.catalog = c;
+          const { catalog, space } = this.catalog.withNamespaceCopy(ns);
+          const def = space.add(name, row.tablet, row.number, catalogIndexes("backfilling"), "hidden", row._id);
+          if (ns !== undefined) def.namespace = ns;
+          this.catalog = catalog;
         };
         return { meta: row, metaId: row._id, catalogIndexes };
       },
@@ -3810,10 +3817,11 @@ export class Engine {
     }
     let def: TableDef | undefined;
     const install = () => {
-      const c = this.catalog.withTableStates({});
-      c.hidden.delete(meta.tablet);
-      def = c.add(name, meta.tablet, meta.number, catalogIndexes("enabled"), "hidden", metaId);
-      this.catalog = c;
+      const { catalog, space } = this.catalog.withNamespaceCopy(ns);
+      space.hidden.delete(meta.tablet);
+      def = space.add(name, meta.tablet, meta.number, catalogIndexes("enabled"), "hidden", metaId);
+      if (ns !== undefined) def.namespace = ns;
+      this.catalog = catalog;
     };
     await this.runMutation(
       async (db) => {
@@ -3835,11 +3843,12 @@ export class Engine {
    * Make hidden tables active and delete active ones, in ONE commit (Convex's `activate_tables`): a hidden
    * table replaces the active table of its name, which is deleted. Every transaction that used a replaced
    * or deleted table conflicts (it read the table's `_tables` document) and every query that read one is
-   * invalidated. `body` runs in the same transaction (an import's last checks).
+   * invalidated. `body` runs in the same transaction (an import's last checks). A hidden table replaces the table
+   * of its name in its own namespace; `deleteNames` are the root's, or `{ name, namespace }` for a component's.
    */
   async activateTables(
     tablets: TabletId[],
-    deleteNames: string[] = [],
+    deleteNames: (string | { name: string; namespace?: string })[] = [],
     body?: (db: Tx) => Promise<void>,
   ): Promise<{ deleted: TableDef[]; ts: bigint }> {
     let deleted: TableDef[] = [];
@@ -3850,27 +3859,31 @@ export class Engine {
         for (const tablet of tablets) {
           const t = tables.find((x) => x.tablet === tablet);
           if (!t || t.state !== "hidden") throw new Error(`Table ${tablet} is not a hidden table.`);
-          const old = activeTables(tables).find((x) => x.name === t.name);
+          const old = activeTables(tables, t.namespace).find((x) => x.name === t.name);
           if (old) toDelete.add(old.tablet);
           await db.patch(TABLES_TABLE, t._id, { state: "active" });
         }
-        for (const name of deleteNames) {
-          const old = activeTables(tables).find((x) => x.name === name);
+        for (const d of deleteNames) {
+          const { name, namespace } = typeof d === "string" ? { name: d, namespace: undefined } : d;
+          const old = activeTables(tables, namespace).find((x) => x.name === name);
           if (old) toDelete.add(old.tablet);
         }
         for (const tablet of toDelete) {
           const t = tables.find((x) => x.tablet === tablet)!;
           await db.patch(TABLES_TABLE, t._id, { state: "deleting" });
-          // A `v.id` a staged validator holds no longer points where its validation checked (7236c10).
+          // A `v.id` a staged validator holds no longer points where its validation checked (7236c10): the
+          // validators of the table's own namespace.
           if (this.opts.storedSchema)
-            await this.invalidateTableReferences(db, SYSTEM_TO_VIRTUAL_TABLE[t.name] ?? t.name);
+            await db.inComponent(t.namespace ?? null, () =>
+              this.invalidateTableReferences(db, SYSTEM_TO_VIRTUAL_TABLE[t.name] ?? t.name),
+            );
         }
         const purge = await this.dropDeletedTableIndexes(db, toDelete);
         if (body) await body(db);
         const deleteList = [...toDelete];
         db.onCommitVisible = (ts) => {
-          deleted = deleteList.map((tb) => this.catalog.byTablet(tb)!).filter(Boolean);
-          this.catalog = this.catalog.withTableStates({ activate: tablets, delete: deleteList });
+          deleted = deleteList.map((tb) => this.catalog.anyTablet(tb)!).filter(Boolean);
+          this.catalog = this.catalog.withTableStatesAcross({ activate: tablets, delete: deleteList });
           this.noteDeletedTables(purge, ts);
           this.cache.clear();
           this.cacheEpoch++;
@@ -3895,9 +3908,7 @@ export class Engine {
         (
           await db.query(TABLES_TABLE).collect()
         )
-          .filter(
-            (t) => t.state === "hidden" && t.namespace === undefined && now - (t._creationTime as number) > maxAgeMs,
-          )
+          .filter((t) => t.state === "hidden" && now - (t._creationTime as number) > maxAgeMs)
           .slice(0, 1000)
           .map((t) => tableMeta(t).tablet),
       ),
@@ -3920,7 +3931,7 @@ export class Engine {
         }
         const purge = await this.dropDeletedTableIndexes(db, gone);
         db.onCommitVisible = (ts) => {
-          this.catalog = this.catalog.withTableStates({ delete: gone });
+          this.catalog = this.catalog.withTableStatesAcross({ delete: gone });
           this.noteDeletedTables(purge, ts);
         };
       },

@@ -1,5 +1,5 @@
 # STUDY-204 — Components in snapshot export and import
-<!-- index: Components in snapshot export and import (STUDY-152 step 10, DV-215): the ZIP's `_components/<name>/` prefixes, import into a component path, streaming export's `_component` | study; PR 1 (export) built -->
+<!-- index: Components in snapshot export and import (STUDY-152 step 10, DV-215): the ZIP's `_components/<name>/` prefixes, import into a component path, streaming export's `_component` | study; PR 1 (export) and PR 2a (hidden tables by namespace) built -->
 
 STUDY-152 step 10. DV-215 accepted "export has only the root; a ZIP with `_components/…` is refused on import"
 until bunvex had components (owner, 2026-10-02). Components now exist (STUDY-152 steps 1–7), and bunvex's own
@@ -82,11 +82,46 @@ Import is unchanged in PR 1: a `_components/` entry is still refused, now with a
 components is not built yet. A backup is complete before it can be restored by bunvex, rather than restorable and
 silently incomplete.
 
-### PR 2: import
+### PR 2a: hidden tables in a component's namespace
+
+Convex's import creates, activates and deletes tables in any namespace (`TableModel` per namespace,
+`activate_tables`). In bunvex, `Engine.createHiddenTable` and `activateTables` worked in the root's namespace only.
+They now take the table's namespace:
+
+- `createHiddenTable` takes `namespace`. Numbers, names and `copyIndexesOf` are that namespace's, and the table is
+  installed in that component's catalog.
+- `activateTables` makes a hidden table replace the active table of its name in its own namespace, and takes
+  `{ name, namespace }` for the tables it deletes.
+- The tables a component replaces or deletes join the root's `deleting`, which the deletion worker empties, as
+  `buildCatalog` puts them (`Catalog.withTableStatesAcross`).
+- Staged validators are invalidated in the table's own namespace.
+- Hidden-table cleanup reaches every namespace, as Convex's `cleanup_hidden_tables` does, since it walks the global
+  `_tables` (`crates/application/src/system_table_cleanup/mod.rs:219-258`). STUDY-152 step 1 had kept it to the
+  root's, because a component's catalog could not drop a table then.
+
+Tests (`packages/core/test/hidden-tables.test.ts`):
+
+- A component's hidden table, at the component table's number, is invisible to the root's catalog and stays hidden
+  across a restart.
+- Activating it, with another table of the component deleted by name, replaces only the component's `items` and
+  deletes only its `other`. The root's tables of the same names are untouched, and the replaced tables are purged.
+- A stale hidden table in the component is dropped.
+
+`component-namespaces.test.ts` now expects a component's stale hidden table to be dropped.
+
+Sabotage, each making the new test fail:
+
+- The replaced table looked up in the root's namespace.
+- The catalog updated with the root-only `withTableStates`.
+- The cleanup kept to the root's again.
+
+### PR 2b: import
 
 `_components/` prefixes become a component path, appended to `componentPath` (`/api/import`, the CLI's
 `--component`). Each table is imported into that namespace. Missing components are created unmounted, as Convex's
-`prepare_component`. `--replace-all` follows C5 once confirmed. The parse in `import-parse.ts` carries each table's
+`prepare_component`. `--replace-all` deletes the tables the import does not have in **every** namespace that has a component path (C5
+confirmed in the source: `finalize_import`'s `to_delete`, `mod.rs:1075-1100`). The confirmation lists the
+changes per component under a `Component <path>` line (`confirmation.rs:108-234`). The parse in `import-parse.ts` carries each table's
 path; `imports.ts` creates and activates the hidden tables in that namespace. Its own study section is added with
 the PR.
 
