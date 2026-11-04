@@ -458,3 +458,74 @@ describe("download_export in the audit log (Convex's 8281a65)", () => {
     expect((await downloads()).length).toBe(before);
   });
 });
+
+// Convex's export reads its snapshot with a table iterator (crates/table_iteration/src/table_iterator.rs): each
+// page at a recent ts, each document changed since the snapshot at its revision then, from the document log. A
+// snapshot older than the index window (4 minutes) is still exported, as long as the document window (14 days)
+// holds it. Reading every page at the snapshot's own ts fails once the index window passes it.
+describe("an export longer than the index retention window", () => {
+  test("still exports its snapshot: changes and deletes after it, at their revision then", async () => {
+    const engine = await new Engine(
+      defineSchema({ items: defineTable(v.any()) }),
+      await MemoryPersistence.open(null, { durable: false }),
+      {
+        retention: {
+          background: false,
+          indexDelayMs: 0,
+          documentDelayMs: 3_600_000,
+          advanceEveryMs: 3_600_000,
+          documentEveryMs: 3_600_000,
+          checkpointEveryMs: 0,
+        },
+      },
+    ).init();
+    stops.push(() => engine.close());
+    const ids: string[] = [];
+    for (let n = 0; n < 5; n++) ids.push((await engine.mutation((db) => db.insert("items", { n }))) as string);
+    const store = new MemoryBlobStore();
+    const svc = new ExportService(engine, store, null, { deploymentName: "x" });
+    // The export holds when it starts on the table, its snapshot already taken.
+    const reached = Promise.withResolvers<void>();
+    const gate = Promise.withResolvers<void>();
+    const hooked = svc as unknown as { patch(id: string, fields: Record<string, unknown>): Promise<void> };
+    const patch = hooked.patch.bind(svc);
+    hooked.patch = async (id, fields) => {
+      if (fields.progress_message === "Backing up items") {
+        reached.resolve();
+        await gate.promise;
+      }
+      return patch(id, fields);
+    };
+    svc.start();
+    stops.push(() => svc.stop());
+    await svc.request(false);
+    await reached.promise;
+    // After the snapshot: one document changed, one deleted, one inserted; then the index window passes it all.
+    await engine.mutation((db) => db.patch(ids[1] as never, { n: 10 }));
+    await engine.mutation((db) => db.delete(ids[3] as never));
+    await engine.mutation((db) => db.insert("items", { n: 99 }));
+    await engine.retention!.advance();
+    await engine.retention!.deleteIndexes();
+    gate.resolve();
+    let row: Record<string, unknown> | null = null;
+    for (let i = 0; i < 400; i++) {
+      row = (await engine.query((db) => svc.latest(db))) as Record<string, unknown> | null;
+      if (row?.state === "completed" || row?.state === "failed") break;
+      await Bun.sleep(10);
+    }
+    expect(row?.state).toBe("completed");
+    let key = "";
+    for await (const l of store.list()) key = l.key;
+    const bytes = await new Response((await store.get(key))!).arrayBuffer();
+    const zip = await unzip(bytes);
+    const docs = zip
+      .read("items/documents.jsonl")
+      .trim()
+      .split("\n")
+      .map((l) => fromExportJson(l) as { _id: string; n: number });
+    // The snapshot's five, as they were: not the patch, the delete or the insert after it.
+    expect(docs.map((d) => [d._id, d.n]).sort((a, b) => Number(a[1]) - Number(b[1]))).toEqual(
+      ids.map((id, n) => [id, n]),
+    );
+  });
+});

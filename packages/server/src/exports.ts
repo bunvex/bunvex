@@ -28,6 +28,7 @@ import {
   SYSTEM_ACTOR,
   secondsKnob,
   type TableDef,
+  TableIterator,
   type Tx,
 } from "@bunvex/core";
 import type { BlobStore } from "@bunvex/file-storage";
@@ -329,7 +330,8 @@ export class ExportService {
       // Every namespace (Convex's `component_ids_to_paths`): the root's, then each component whose chain of parents
       // reaches the root, mounted or not, under its path's prefix (`_components/a/_components/b/`).
       const paths = await this.engine.query((db) => allComponentPaths(db), undefined, undefined, undefined, at);
-      const namespaces: { id: string | null; prefix: string; in: string; tables: TableDef[] }[] = [];
+      const namespaces: { id: string | null; prefix: string; in: string; tables: TableDef[]; storage?: TableDef }[] =
+        [];
       // In Convex's `ComponentId` order: the root's first, then each component by its id's internal bytes.
       const order = ([a]: [string | null, unknown], [b]: [string | null, unknown]) =>
         a === null ? -1 : b === null ? 1 : compareInternalIds(internalIdOf(a), internalIdOf(b));
@@ -341,8 +343,17 @@ export class ExportService {
           prefix: path.map((name) => `_components/${name}/`).join(""),
           in: path.length ? ` in '${formatComponentPath(path)}'` : "",
           tables: [...space.tables.values()].filter((t) => !t.name.startsWith("_")).sort((a, b) => a.number - b.number),
+          storage: space.tables.get(FILE_STORAGE_TABLE),
         });
       }
+      // The snapshot read past the index window, as Convex's table iterator: an export of a large deployment takes
+      // longer than its 4 minutes (STUDY-205).
+      const iterator = new TableIterator(
+        this.engine,
+        at,
+        namespaces.flatMap((ns) => [...ns.tables, ...(r.format.include_storage && ns.storage ? [ns.storage] : [])]),
+        PAGE_SIZE,
+      );
       // Each namespace's `_tables` first: they are small (Convex's order).
       for (const ns of namespaces) {
         await progress(`Backing up _tables${ns.in}`, true);
@@ -357,29 +368,11 @@ export class ExportService {
         for (const t of ns.tables) {
           await progress(`Backing up ${t.name}${ns.in}`, true);
           let written = 0;
-          const self = this;
           const lines = async function* () {
-            let last: string | null = null;
-            for (;;) {
-              const page = (await self.engine.query(
-                (db) =>
-                  db.inComponent(ns.id, () =>
-                    db
-                      .query(t.name)
-                      .withIndex("by_id", (q) => (last === null ? q : q.gt("_id", last)))
-                      .take(PAGE_SIZE),
-                  ),
-                undefined,
-                undefined,
-                undefined,
-                at,
-              )) as Record<string, Value>[];
-              if (!page.length) return;
-              yield new TextEncoder().encode(page.map((d) => `${toExportJson(d)}\n`).join(""));
+            for await (const page of iterator.pages(t)) {
+              yield new TextEncoder().encode(page.map((d) => `${toExportJson(d as Record<string, Value>)}\n`).join(""));
               written += page.length;
-              last = page[page.length - 1]!._id as string;
               await progress(`Backing up ${t.name}${ns.in}: ${commas(written)} documents`);
-              if (page.length < PAGE_SIZE) return;
             }
           };
           prepared.push({
@@ -395,7 +388,7 @@ export class ExportService {
       // The files last, as Convex: they are the slowest. The size limit is for all of them together.
       if (r.format.include_storage) {
         const total = { bytes: 0 };
-        for (const ns of namespaces) await this.exportStorage(zip, at, progress, ns, total);
+        for (const ns of namespaces) await this.exportStorage(zip, iterator, progress, ns, total);
       }
       await progress("Uploading backup", true);
       const size = await zip.finish();
@@ -424,35 +417,16 @@ export class ExportService {
 
   private async exportStorage(
     zip: ZipFileWriter,
-    at: bigint,
+    iterator: TableIterator,
     progress: (m: string, force?: boolean) => Promise<void>,
-    ns: { id: string | null; prefix: string; in: string },
+    ns: { id: string | null; prefix: string; in: string; storage?: TableDef },
     total: { bytes: number },
   ) {
     // A namespace's `_file_storage`, written as the virtual `_storage` (Convex's `write_storage_table`), with the URL's
     // UUID as `internalId`.
     const rows: FileStorageDoc[] = [];
-    let last: string | null = null;
-    for (;;) {
-      const page = (await this.engine.query(
-        (db) =>
-          db.inComponent(ns.id, () =>
-            db.asSystem(() =>
-              db
-                .query(FILE_STORAGE_TABLE)
-                .withIndex("by_id", (q) => (last === null ? q : q.gt("_id", last)))
-                .take(PAGE_SIZE),
-            ),
-          ),
-        undefined,
-        undefined,
-        undefined,
-        at,
-      )) as unknown as FileStorageDoc[];
-      rows.push(...page);
-      if (page.length < PAGE_SIZE) break;
-      last = page[page.length - 1]!._id;
-    }
+    if (ns.storage)
+      for await (const page of iterator.pages(ns.storage)) rows.push(...(page as unknown as FileStorageDoc[]));
     for (const row of rows) {
       total.bytes += Number(row.size);
       if (total.bytes > MAX_FILE_STORAGE_EXPORT_BYTES)

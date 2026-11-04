@@ -234,6 +234,19 @@ export class Retention {
       );
   }
 
+  /**
+   * Convex's `validate_document_snapshot`: a snapshot rebuilt from the document log (a table iterator's) is refused
+   * once the document window passed it.
+   */
+  checkDocuments(ts: bigint) {
+    if (ts < this.minDocumentTs)
+      throw new OutOfRetentionError(
+        ts,
+        this.minDocumentTs,
+        `Document snapshot timestamp out of leader retention window: ${ts} < ${this.minDocumentTs}`,
+      );
+  }
+
   private jitter(ms: number) {
     return ms * (0.5 + Math.random());
   }
