@@ -17,6 +17,8 @@ afterEach(() => {
 async function setup() {
   const issuer = await startIssuer({ cacheControl: "max-age=600" });
   stops.push(issuer.stop);
+  // `m:hold` waits for it: the connection's mutation queue stays busy until the test opens it.
+  const gate = Promise.withResolvers<void>();
   const engine = await new Engine(
     defineSchema({ items: defineTable(v.any()) }),
     await MemoryPersistence.open(null, { durable: false }),
@@ -33,6 +35,9 @@ async function setup() {
       await db.insert("items", { by: me?.subject ?? null });
       return me?.subject ?? null;
     }),
+    hold: mutation(async () => {
+      await gate.promise;
+    }),
   });
   const { server, sync, stop } = createServer({
     engine,
@@ -42,7 +47,7 @@ async function setup() {
     auth: { providers: [{ domain: issuer.url, applicationID: "app" }] },
   });
   stops.push(stop);
-  return { issuer, sync, url: `ws://127.0.0.1:${server.port}/api/1.0.0/sync` };
+  return { issuer, sync, gate, url: `ws://127.0.0.1:${server.port}/api/1.0.0/sync` };
 }
 
 async function client(url: string) {
@@ -96,6 +101,36 @@ async function client(url: string) {
 }
 
 describe("authentication over the sync protocol", () => {
+  test("a mutation runs as whoever sent it, not as whoever is authenticated once it starts", async () => {
+    // As Convex, the identity is taken as the mutation arrives: an `Authenticate` sent while it waits in the
+    // connection's queue (a switch of account, a sign-out) is for what is sent after it.
+    const { issuer, gate, url } = await setup();
+    const c = await client(url);
+    c.authenticate(await issuer.sign({ sub: "ada" }));
+    c.mutate(0, "m:hold");
+    c.mutate(1, "m:add");
+    c.mutate(2, "m:add");
+    c.authenticate(await issuer.sign({ sub: "bob" }));
+    c.mutate(3, "m:add");
+    c.authenticate(null);
+    c.mutate(4, "m:add");
+    c.subscribe(1, "m:whoami");
+    await c.until(() => c.transitions().some((t) => t.endVersion.identity === 3));
+    // Every message is handled: only the queue's first mutation holds the rest back.
+    gate.resolve();
+    const results = await c.until(() => {
+      const r = c.got.filter((m): m is v1.MutationResponse => m.type === "MutationResponse");
+      return r.length === 5 && r.map((m) => [m.requestId, m.success, m.result]);
+    });
+    expect(results).toEqual([
+      [0, true, null],
+      [1, true, "ada"],
+      [2, true, "ada"],
+      [3, true, "bob"],
+      [4, true, null],
+    ]);
+  });
+
   test("Authenticate User: the identity version advances and the queries re-run as that user", async () => {
     const { issuer, url } = await setup();
     const c = await client(url);

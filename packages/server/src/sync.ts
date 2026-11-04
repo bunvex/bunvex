@@ -1849,6 +1849,14 @@ export class SyncSession {
       });
     }
     span?.set("bunvex.function.path", m.udfPath).set("bunvex.sync.request_id", m.requestId);
+    // As Convex (`revalidate_identity` and the session id, crates/sync/src/worker.rs): the mutation runs as whoever
+    // sent it, in the session it was sent in, both taken as it arrives, not as it starts; an `Authenticate` sent
+    // after it, while it waits in the queue, changes neither. An identity expired by now ends the session.
+    const requested = this.requestCaller(m.requestId);
+    if (requested === null) return span?.finish();
+    // With a session (Connect came first), the request runs at most once: a resend after a reconnect gets the
+    // recorded answer (`_session_requests`). Without one, as in Convex, it just runs.
+    const session = this.sessionId;
     this.pendingMutations++;
     // Queued before any await, so the queue order is the order frames arrived (STUDY-22).
     this.mutations = this.mutations.then(async () => {
@@ -1857,8 +1865,6 @@ export class SyncSession {
         // A closed connection's queued mutations never start; the client resends what it got no answer for.
         if (this.closed) return;
         const { functions, callArgs } = this.hub.deps;
-        const requested = this.requestCaller(m.requestId);
-        if (requested === null) return;
         const caller: SourcedCaller = { ...requested, mutationQueueLength: queued };
         let component: string | null;
         try {
@@ -1877,9 +1883,6 @@ export class SyncSession {
           }
           path = componentFunctionName(id, udfPath);
         }
-        // With a session (Connect came first), the request runs at most once: a resend after a reconnect
-        // gets the recorded answer (`_session_requests`). Without one, as in Convex, it just runs.
-        const session = this.sessionId;
         // Convex's 60 s limit, from now (STUDY-64 §1.1): when it passes, the connection closes with 1011 at
         // once, and the run is told to stop before it commits (Convex drops its future; JS cannot be
         // interrupted). The queue stays blocked behind it, but a closed connection's queue never runs.
