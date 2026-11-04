@@ -109,7 +109,16 @@ export function compareInternalIds(a: string, b: string): number {
   // Engine-only ids (a search index's synthetic read-set index) are not 22 characters: they sort last.
   const ra = a.length === 22;
   const rb = b.length === 22;
-  if (ra && rb) return Buffer.compare(Buffer.from(a, "base64url"), Buffer.from(b, "base64url"));
+  if (ra && rb) {
+    // Without decoding (every commit's validation sorts its read-set's indexes by id): base64url digits, ranked
+    // in their alphabet, are the bytes' bits six at a time, most significant first (an id's padding bits are 0).
+    for (let i = 0; i < 22; i++) {
+      const x = B64_DECODE[a.charCodeAt(i)]!;
+      const y = B64_DECODE[b.charCodeAt(i)]!;
+      if (x !== y) return x < y ? -1 : 1;
+    }
+    return 0;
+  }
   if (ra !== rb) return ra ? -1 : 1;
   return a < b ? -1 : 1;
 }
