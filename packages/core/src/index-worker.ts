@@ -73,6 +73,11 @@ export interface IndexWorkerHost {
   minSnapshotTs(): bigint;
   /** The table's document count from the table summaries, or null while they are not built (Convex's `table_count`). */
   tableCount?(tablet: TabletId): number | null;
+  /**
+   * Retention's work skipped for `indexes` of `table` while they were being scanned: the commits after `afterTs`
+   * (Convex's `IndexWriter::run_retention`). Absent, or a no-op, on a store without retention.
+   */
+  retainBackfilled?(table: TabletId, indexes: IndexDef[], afterTs: bigint): Promise<void>;
 }
 
 /** A token bucket over index entries, as Convex's `governor` quota: `rate` per second, bursts up to `rate`. */
@@ -107,6 +112,11 @@ export class IndexWorker {
   private wakeBackoff: (() => void) | null = null;
   /** For tests and measurements. */
   readonly stats = { chunks: 0, docsIndexed: 0, checkpoints: 0, failures: 0 };
+  /**
+   * The indexes a scan is writing now: retention skips them (Convex's `retention_started` false), from before the
+   * scan's snapshot until its last chunk is written and `retentionStarted` committed.
+   */
+  readonly scanning = new Set<IndexId>();
 
   constructor(
     private readonly host: IndexWorkerHost,
@@ -201,8 +211,62 @@ export class IndexWorker {
       .map((m) => t.pending.find((p) => p.id === m.indexId))
       .filter((d): d is IndexDef => d !== undefined);
     if (defs.length === 0) return;
-    const { committer } = this.host;
+    // As Convex's `backfill_tablet`: an index whose `retentionStarted` is committed has every document already (a
+    // restart after it, or a failure in the steps that follow); scanning it again would write entries retention may
+    // have passed. Only the others are scanned, then each phase after is run again: each is idempotent.
+    const toScan = metas.filter((m) => !m.retentionStarted);
+    const scanDefs = defs.filter((d) => toScan.some((m) => m.indexId === d.id));
+    for (const d of scanDefs) this.scanning.add(d.id);
+    try {
+      if (scanDefs.length) await this.scanTable(t, toScan, scanDefs, empty);
+      if (this.stopped) return;
+      // Every document is in the indexes: as Convex's `mark_retention_started`, a commit of its own records it
+      // before the backfill finishes.
+      await this.host.system(async (db) => {
+        for (const m of metas) {
+          const row = await db.get(INDEX_TABLE, m._id);
+          const cur = row ? indexMeta(row as Record<string, unknown>) : null;
+          if (cur?.state === "backfilling" && !cur.retentionStarted)
+            await db.patch(INDEX_TABLE, m._id, indexStatePatch(cur, { retentionStarted: true }));
+        }
+      }, "_system/index_worker_retention_started");
+    } finally {
+      for (const d of scanDefs) this.scanning.delete(d.id);
+    }
+    // Then retention catches up on what it skipped, from the index's creation, before the index is published
+    // (Convex's `run_retention` from `index_created_lower_bound`).
+    let from: bigint | null = null;
+    for (const m of metas) {
+      const lb = m.createdLowerBound ?? 0n;
+      if (from === null || lb < from) from = lb;
+    }
+    await this.host.retainBackfilled?.(t.id, defs, from! > 0n ? from! - 1n : 0n);
 
+    // Done: as Convex's `finish_backfill`, a user index becomes `backfilled` (the schema change enables it);
+    // an index of a system table, or a system index, is enabled at once. Its `_index_backfills` row stays, as
+    // Convex's (nothing there deletes one).
+    await this.host.system(async (db) => {
+      const enabled: IndexId[] = [];
+      for (const m of metas) {
+        const row = await db.get(INDEX_TABLE, m._id);
+        const cur = row ? indexMeta(row as Record<string, unknown>) : null;
+        if (cur?.state === "backfilling") {
+          const enableNow = t.name.startsWith("_") || m.name in SYSTEM_INDEXES;
+          await db.patch(
+            INDEX_TABLE,
+            m._id,
+            indexStatePatch(cur, enableNow ? { state: "enabled", staged: false } : { state: "backfilled" }),
+          );
+          if (enableNow) enabled.push(m.indexId);
+        }
+      }
+      if (enabled.length)
+        db.onCommitVisible = (ts) => this.host.installIndexChanges({ enable: enabled, disable: [], drop: [] }, ts);
+    }, "_system/index_worker_finish_backfill");
+  }
+
+  /** Write every live document of `t` into `defs` (the indexes of `metas`), from their checkpoint. */
+  private async scanTable(t: TableDef, metas: IndexMeta[], defs: IndexDef[], empty: boolean) {
     // The checkpoints (Convex's `IndexBackfillModel`): created at the first pass, read on a resume. As Convex's since
     // `6830b7a` (STUDY-186 A10), the scan always reads at this transaction's snapshot, a fresh one: a resume goes on
     // after its cursor there, its counts kept and its rows' `snapshotTs` moved to the new scan
@@ -314,39 +378,6 @@ export class IndexWorker {
     }
     // The last progress, as Convex's `backfill_from_ts` flushes it after its walk: the row counts every document.
     if (sinceCheckpoint > 0) await checkpoint();
-
-    // Every document is in the indexes: as Convex's `mark_retention_started`, a commit of its own records it
-    // before the backfill finishes (bunvex has no catching up to do: each chunk committed at a new ts).
-    await this.host.system(async (db) => {
-      for (const m of metas) {
-        const row = await db.get(INDEX_TABLE, m._id);
-        const cur = row ? indexMeta(row as Record<string, unknown>) : null;
-        if (cur?.state === "backfilling" && !cur.retentionStarted)
-          await db.patch(INDEX_TABLE, m._id, indexStatePatch(cur, { retentionStarted: true }));
-      }
-    }, "_system/index_worker_retention_started");
-
-    // Done: as Convex's `finish_backfill`, a user index becomes `backfilled` (the schema change enables it);
-    // an index of a system table, or a system index, is enabled at once. Its `_index_backfills` row stays, as
-    // Convex's (nothing there deletes one).
-    await this.host.system(async (db) => {
-      const enabled: IndexId[] = [];
-      for (const m of metas) {
-        const row = await db.get(INDEX_TABLE, m._id);
-        const cur = row ? indexMeta(row as Record<string, unknown>) : null;
-        if (cur?.state === "backfilling") {
-          const enableNow = t.name.startsWith("_") || m.name in SYSTEM_INDEXES;
-          await db.patch(
-            INDEX_TABLE,
-            m._id,
-            indexStatePatch(cur, enableNow ? { state: "enabled", staged: false } : { state: "backfilled" }),
-          );
-          if (enableNow) enabled.push(m.indexId);
-        }
-      }
-      if (enabled.length)
-        db.onCommitVisible = (ts) => this.host.installIndexChanges({ enable: enabled, disable: [], drop: [] }, ts);
-    }, "_system/index_worker_finish_backfill");
   }
 
   /**

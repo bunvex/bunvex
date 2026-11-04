@@ -172,6 +172,7 @@ import {
   defineSchema,
   documentValidator,
   type EngineSchema,
+  type IndexDef,
   MAX_VECTOR_DIMENSIONS,
   maintainedIndexes,
   pushOrder,
@@ -867,7 +868,9 @@ export class Engine {
     if (hasRetention(this.persistence)) {
       this.retention = new Retention(this.persistence, this.committer, this.opts.retention, (tablet) => {
         const t = this.catalog.anyTablet(tablet);
-        return t ? maintainedIndexes(t) : [];
+        // Not an index a backfill is scanning (Convex's `retention_started` check): it catches up once done.
+        const scanning = this.indexWorker?.scanning;
+        return t ? maintainedIndexes(t).filter((ix) => !scanning?.has(ix.id)) : [];
       });
       this.retention.onTabletPurged = (tablet) => this.finishTableDeletion(tablet);
       await this.retention.start();
@@ -4117,6 +4120,8 @@ export class Engine {
         this.installIndexChanges(c, ts),
       finishSchema: () => this.finishSchema(),
       minSnapshotTs: () => this.retention?.minIndexTs ?? 0n,
+      retainBackfilled: async (table: TabletId, indexes: IndexDef[], afterTs: bigint) =>
+        this.retention?.catchUp(table, indexes, afterTs),
       tableCount: (tablet: TabletId) => {
         try {
           return this.tableSummaries.count(tablet);

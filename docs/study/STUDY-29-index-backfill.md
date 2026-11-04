@@ -98,7 +98,11 @@ Convex builds a new index and records what bunvex now does.
      and committed to `_index_backfills` by the worker loop (`:631-652`, `mod.rs:257-329`).
   8. Persistence v6 then reconciles deletions it recorded during the scan (`reconcile_index_backfill`), and
      index retention runs from `index_created_lower_bound` (`mark_retention_started`, `run_retention`,
-     `mod.rs:468-530`). Both clean up after writing at old timestamps; bunvex has no retention (DV-65).
+     `mod.rs:468-530`). Both clean up after writing at old timestamps. Until `retention_started`, the leader's index
+     retention skips the index (`accumulate_index_document`, retention.rs:1559-1568: "index backfill and retention
+     interact poorly"); `run_retention` then deletes, for the backfilled indexes only, what it skipped from
+     `index_created_lower_bound` to the window, before `finish_backfill`. A restart after `retention_started` does
+     not scan again (`backfill_tablet`'s `needs_backfill`).
   9. `finish_backfill` (`mod.rs:638-695`) moves the index to `Backfilled { staged }`. A system index, or an
      index of a system table, goes straight to `Enabled`: no push enables those.
 - Knobs: `crates/common/src/knobs.rs:726-750`, `:1609-1614`, `:2004-2005`.
@@ -180,8 +184,17 @@ Matched (no divergence): states, staged indexes and their errors, the errors' me
 serving until the swap, the `_index` read on lookups, `_index_backfills` checkpoints and resume, the knobs
 and their defaults, the per-table grouping, concurrency, backoff, and system indexes enabled by the worker.
 
-Not applicable: Convex's retention phase (`retention_started`, `run_retention`) and v6 reconciliation, which
-clean up after writing at old timestamps. bunvex does neither, and keeps every version (DV-65).
+Matched since retention exists (STUDY-33; the 2026-11-03 audit found it unmatched): the retention phase. The index
+deleter skips an index while a backfill scans its table (`IndexWorker.scanning`, from before the scan's snapshot until
+`retentionStarted` is committed); then `Retention.catchUp` deletes what it skipped, from the index's
+`indexCreatedLowerBound`, before the index becomes `backfilled`; an index whose `retentionStarted` is committed is not
+scanned again. Without it, a document changed or deleted after the scan's snapshot and passed by the deleter before
+the scan wrote its entry kept that entry, its tombstone gone: the new index answered with the old version
+(`packages/core/test/index-backfill-retention.test.ts`). bunvex's skip is held in memory, by the worker, not read from
+`_index` as Convex's: only a scan writes at old timestamps, and nothing scans before the worker marks the index.
+
+Not applicable: v6 reconciliation (`reconcile_index_backfill`), which cleans up after Postgres v6's scan-time
+deletions; bunvex's drivers have none.
 
 ## 5. Tests
 
@@ -201,6 +214,9 @@ clean up after writing at old timestamps. bunvex does neither, and keeps every v
     without a new backfill; staging it again disables it.
   - A new table's index needs no worker. A snapshot older than the enabling commit cannot read the index.
 - `packages/core/test/catalog.test.ts`: the existing STUDY-04 tests, waiting on `indexesReady()`.
+- `packages/core/test/index-backfill-retention.test.ts` (SQLite): a scan holds its chunk while a document it read
+  is deleted and the index deleter passes the delete; the new index leaves the document out, and no tombstone is left
+  once it is published. An index whose `retentionStarted` was committed before a restart is not scanned again.
 - **K24** (`@bunvex/persistence-conformance`, every driver): 3 000 documents, a new index, 8 writers during
   the backfill. Each driver's range scans are delayed so writes land inside chunks. At two snapshots, the
   index equals the live documents in key order. It passes on memory, SQLite and Postgres (all of K1–K24 on
@@ -213,7 +229,10 @@ clean up after writing at old timestamps. bunvex does neither, and keeps every v
   - enabling before the backfill is done: five of the seven tests;
   - no `readyTs` check: the older-snapshot test;
   - no `_index` read: the changed-index test;
-  - resume ignoring the checkpoint: the crash test (6 000 indexed again).
+  - resume ignoring the checkpoint: the crash test (6 000 indexed again);
+  - the deleter not skipping an index being scanned: the retention test (the tombstone pruned during the scan);
+  - no catch-up: the retention test (1 tombstone left);
+  - scanning an index whose `retentionStarted` is committed: the restart test (1 document indexed).
 
 ## 6. Open questions
 
