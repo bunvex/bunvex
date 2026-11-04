@@ -1204,3 +1204,95 @@ Decided by the owner on 2026-10-27, as recommended.
 | Q8 | **The connection split (Q6) in numbers.** With MongoDB's pool of 16 the main thread keeps 8 and 16 workers would get half a connection each; and the split would shrink the main pool even when no worker can start. | Split only when workers can start (a store with a reader, `MAX_ISOLATE_WORKERS` > 0). The main thread keeps max(8, ⌊total/4⌋). The worker count is also capped so each has at least 2 connections (min(`MAX_ISOLATE_WORKERS`, cores, ⌊rest/2⌋)). Not observable but in capacity |
 | Q9 | **SQLite's page cache per worker.** AD-46's 256 MiB is one connection's. N workers with their own would use N + 1 times the memory | Keep AD-46's value as the process total: the main thread keeps half, the workers share the other half. `BUNVEX_SQLITE_CACHE_SIZE` keeps its meaning as what the deployment spends |
 | Q10 | **An embedded server on a SQLite file** (`createServer` with a path): workers too, or in-thread unless asked? | Workers, as `bunvex-local-backend`: the same store, the same knob. `createServer({ executionWorkers: 0 })` turns them off |
+
+## 11. PR 3, planned (2026-11-04)
+
+PR 3 runs mutations on the execution workers and commits them from their outcome (§4.10, §6 row 3). Q1–Q10 hold
+as decided. STUDY-203 E-1 makes the workers the default executor once PR 3 and PR 4 are in.
+
+### 11.1 The spike
+
+A spike (branch `spike/mutation-workers`, not merged) ran a client's HTTP mutation on a worker and committed it from
+its outcome on the main thread:
+- **The outcome** carries each written document's old version (for the table summaries), the creation cursor the run
+  left, and whether the commit needs the transaction itself.
+- **The metadata epoch** carries the schema, so the worker validates writes as the main thread does.
+- **The commit** (`commitOutcome`): the committer takes the outcome's reads, documents, index entries and catalog
+  touches; the table summaries take the documents at `onVisible`. An OCC conflict backs off, waits for the write it
+  lost to, and runs a new attempt, as in-thread.
+- **What only an in-thread commit could do yet** ran the mutation again in the thread, at the same request: created
+  tables, after-commit effects, a commit timestamp (STUDY-53), the engine's `onCommitVisible`, writes to a table with
+  a text or vector index.
+
+Measured on DO `c-4` (sfo2), SQLite, 64 VUs, 20 s, 2 workers, `main` (2b) and the spike alternated, each twice:
+
+| median req/s | `main` | spike |
+|---|--:|--:|
+| `insert` | 1492 · 1586 | 2191 · 1830 |
+| `increment1000` | 974 · 1343 | 1360 · 1680 |
+| `mix` (90% reads) | 3038 · 3139 | 3108 · 3201 |
+
+- **Inserts and increments gain about 25%.** Inserts are too noisy to say more: one configuration's runs spread from
+  605 to 2238 req/s, with the droplet's fsync.
+- **The main thread is still the ceiling.** The server used 1.3–1.9 cores against `main`'s 0.8–1.0, but the main
+  thread stayed at one: HTTP, the commit, OCC, the commits sent to the workers, the outcome's decoding.
+- **A profile of the main thread** (local, `increment1000`) found no single cost left to cut:
+  - The validation's sort of a read-set's indexes decoded both ids into Buffers on every comparison. Comparing the
+    base64url digits instead is 17× faster per sort. It is its own PR, from `main`: in-thread mutations gain 2–3%.
+  - The spike's own costs are small: parsing the written documents for the table summaries (about 2% of the main
+    thread), the report's JSON (about 1%), the outcome's decoding (about 3%).
+  - The rest is spread over the HTTP request, the arguments' checks, the SQLite writer's encoding, the function log and
+    the metrics. PR 5 (the HTTP front threads) is what moves those.
+
+PR 3 goes on for what it adds besides throughput: with E-1, a mutation's runaway loop stops at its time limit and its
+worker is replaced, instead of stalling the server (DV-208), and a worker's memory is its own.
+
+### 11.2 What PR 3 builds
+
+**On a worker:** every mutation `offloads` lets through: a client's, over HTTP or a sync session, not the system
+identity's, none a tracer follows.
+- **Sync sessions** (STUDY-23 §4.3): the request carries the session's request id already (`CallRequest.session`); the
+  worker's runner looks up and records the session's outcome in the same transaction, as in-thread.
+- **A WebSocket mutation's deadline** (STUDY-64 §1.1) stays on the main thread. It is checked there before dispatch and
+  again when the outcome arrives, before the commit: the same points as in-thread (before the attempt, after the
+  handler).
+- **Schema validation:** the epoch carries the app's schema and each component's; the worker validates with them. A
+  push validating a new schema (`pendingValidators`, `stagedChecks`) keeps mutations in-thread until it finishes.
+
+**From the outcome, on the main thread:**
+- the commit as in the spike, with the creation cursor;
+- **writes to a table with a text or vector index:** the main thread parses those documents and applies the search
+  and vector parts at `onVisible`, as `searchCommit` does. It also checks the memory indexes' size first
+  (`checkMemoryIndexSizes`). Sending the tokens and vectors from the worker (§4.10) waits for a profile that shows
+  the parse.
+
+**Run again in-thread** (the worker's outcome is dropped: it committed nothing, and its lines and figures are not
+replayed). These are rare, and each is its own later step:
+- a commit timestamp in a write or the result (STUDY-53);
+- created tables;
+- after-commit effects (rooms);
+- the engine's own `onCommitVisible`.
+
+**Errors.** `ExecutionWorkerError` joins `isSystemError` (R2's narrow part, agreed with the audit session): a
+mutation whose worker died fails as a system error, and a scheduled or cron one is retried (#1036).
+
+### 11.3 Tests
+
+- **The differential check** (`checkWorkerOutcomes`, test/preload.ts) is extended to mutations. A worker's outcome is
+  compared with an in-thread run at the same snapshot: the documents, the index entries byte for byte, the old
+  versions, the result and the lines.
+- **Serializability:** STUDY-57's bank invariant over concurrent transfers (the total at every snapshot a query
+  reads, no balance below zero), and counters whose concurrent increments hand out every value once. STUDY-57's
+  runner registers its functions, which run in-thread (workers run a push's code only), so these run in
+  `query-workers.test.ts` on a pushed app.
+- **OCC:** a conflict is found on the main thread whichever side ran the mutation (`commitOutcome`), with the same
+  error and backoff; a sabotage that drops a worker's read set loses increments and transfers.
+- **Sessions:** a resent request answers its recorded outcome; a worker's session mutation commits its record with
+  its writes.
+- **Death:** a worker killed before its outcome commits nothing, and the mutation fails as a system error (a scheduled
+  one is retried); one killed after the outcome was sent commits once.
+- **Fallbacks:** each path in §11.2's "run again" list commits once, in-thread, with the worker's lines dropped.
+- A sabotage per item.
+
+**Measured** on DO `c-4` against `main`: `insert`, `increment1000`, `increment1` and `mix`, on SQLite and on Postgres
+on another box.
