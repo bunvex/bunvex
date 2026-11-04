@@ -1993,6 +1993,11 @@ export class Functions {
     const c = splitComponentFunctionName(name);
     const key = c ? componentFunctionName(c.id, c.name) : this.code.fns.has(name) ? name : registryKey(name);
     const f = c ? this.code.componentFns.get(key) : this.code.fns.get(key);
+    // A client reaches a component's function only through a component path, which only an admin (not acting as a
+    // user) or the system may give (Convex's `parse_admin_component_path`, crates/sync/src/worker.rs): a client's
+    // path that spells the registry's component name is no function of the app, so it is not found, as on Convex,
+    // where a function path never names a component.
+    if (fromClient && c && !isSystemIdentity(caller)) throw this.notFound(name);
     if (f) this.names.set(f, key);
     // As Convex (crates/udf/src/validation.rs): a missing function and an internal one called from a
     // client read the same, with the path stripped (no `.js`, no `:default`); a function of another kind

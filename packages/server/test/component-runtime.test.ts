@@ -5,11 +5,12 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { defineSchema, Engine } from "@bunvex/core";
+import { defineSchema, Engine, resolveComponentPath } from "@bunvex/core";
 import { SqlitePersistence } from "@bunvex/core/persistence/sqlite";
 import { MemoryBlobStore } from "@bunvex/file-storage";
 import { adminKeyCipherKey, issueAdminKey } from "../src/admin-keys.ts";
 import type { ModuleSource } from "../src/code-version.ts";
+import { componentFunctionName } from "../src/function-handles.ts";
 import { Functions } from "../src/functions.ts";
 import { createServer } from "../src/server.ts";
 import { syncUrl, v1Client } from "./v1-client.ts";
@@ -353,5 +354,33 @@ describe("over the websocket", () => {
         .transitions()
         .some((t) => t.modifications.some((m) => m.type === "QueryUpdated" && (m as { value: unknown }).value === 1)),
     );
+  });
+
+  test("a client's path spelling the registry's name of a component's function is not found", async () => {
+    // Only a component path reaches a component (an admin's or the system's); a function path is always the app's,
+    // as on Convex. Here, anonymously, by the name the registry keeps a component's function under.
+    const d = await deployment();
+    await d.push();
+    const component = await d.engine.query((db) => resolveComponentPath(db, ["counter"]));
+    const named = (path: string) => componentFunctionName(component!._id, path);
+    const c = await v1Client(syncUrl(d.s.server.port));
+    stops.push(() => c.ws.close());
+    c.mutate(1, named("lib:add"), { body: "anonymous" });
+    c.send({ type: "Action", requestId: 2, udfPath: named("lib:viaAction"), args: [{}] });
+    c.modify([{ type: "Add", queryId: 1, udfPath: named("lib:count"), args: [{}] }]);
+    const notFound = (path: string) => expect.stringContaining(`Could not find public function for '${named(path)}'`);
+    expect(await c.until(() => c.responses().find((r) => r.requestId === 1))).toMatchObject({
+      success: false,
+      result: notFound("lib:add"),
+    });
+    expect(await c.until(() => c.got.find((m) => m.type === "ActionResponse" && m.requestId === 2))).toMatchObject({
+      success: false,
+      result: notFound("lib:viaAction"),
+    });
+    expect(
+      await c.until(() => c.transitions().flatMap((t) => t.modifications.filter((m) => m.type === "QueryFailed"))[0]),
+    ).toMatchObject({ queryId: 1, errorMessage: notFound("lib:count") });
+    // The component's mutation never ran.
+    expect((await d.run("counter", "lib:count")).body).toEqual({ status: "success", value: 0 });
   });
 });
