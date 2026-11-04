@@ -10,6 +10,20 @@ included.
 bunvex is not affiliated with or endorsed by Convex, Inc. "Convex" is a trademark of Convex, Inc., used
 only to describe compatibility.
 
+bunvex's packages match the public API, behaviour and messages of these open-source projects of Convex, Inc.,
+each licensed under the Apache License, Version 2.0. They were written for bunvex:
+
+- convex (https://github.com/get-convex/convex-js), the client and function API: @bunvex/client, @bunvex/react,
+  @bunvex/react-auth0, @bunvex/react-clerk, @bunvex/server and @bunvex/values.
+- convex-test (https://github.com/get-convex/convex-test): @bunvex/testing.
+- convex-helpers (https://github.com/get-convex/convex-helpers): @bunvex/helpers.
+- Convex Auth (https://github.com/get-convex/convex-auth): @bunvex/auth.
+- The Convex components @convex-dev/batch-worker (https://github.com/get-convex/batch-worker),
+  @convex-dev/rate-limiter (https://github.com/get-convex/rate-limiter), @convex-dev/resend
+  (https://github.com/get-convex/resend), @convex-dev/sharded-counter (https://github.com/get-convex/sharded-counter)
+  and @convex-dev/workpool (https://github.com/get-convex/workpool): @bunvex/batch-worker, @bunvex/rate-limiter,
+  @bunvex/resend, @bunvex/sharded-counter and @bunvex/workpool.
+
 Third-party material bundled with the dashboard (@bunvex/ui, @bunvex/dashboard):
 
 - mapcn (https://github.com/AnmolSaini16/mapcn), MIT License — the map component
