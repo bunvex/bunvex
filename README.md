@@ -108,7 +108,7 @@ PERSISTENCE=sqlite bun bench/server.ts   # a server with the benchmark functions
 
 | Variable | Meaning |
 |---|---|
-| `PERSISTENCE` | `memory` (default), `sqlite`, `postgres` or `mysql` |
+| `PERSISTENCE` | `sqlite` (the default, as Convex: `$DATA/bunvex.sqlite`), `memory`, `postgres` or `mysql`. A `$DATA` holding a memory store from an older version and no SQLite file is refused: set `PERSISTENCE=memory` to keep it, or export and import it |
 | `PERSISTENCE_URL` | the URL for `postgres` and `mysql`. A URL without a database connects to the instance name's (`-` replaced by `_`), as Convex; a URL that names one keeps it |
 | `POSTGRES_URL`, `MYSQL_URL`, `DATABASE_URL` | Convex's names, accepted too: without `PERSISTENCE`, the first one set selects Postgres, MySQL or (deprecated) Postgres. bunvex's names win when both are set. Unlike Convex, a URL that names a database is accepted and kept |
 | `DO_NOT_REQUIRE_SSL` | any non-empty value: connect to Postgres/MySQL without requiring TLS. By default, as Convex, the connection must be encrypted and the server's certificate verified (chain and host name); a Postgres connection must also be read-write (never a standby) |
