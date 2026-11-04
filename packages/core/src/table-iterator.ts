@@ -15,7 +15,9 @@
 // (PERSIST-01 C16), so the snapshot itself is enough.
 
 import { encodeId } from "@bunvex/values";
+import { type Catalog, COMPONENTS_TABLE, TABLES_TABLE, type TableMeta, tableMeta } from "./catalog.ts";
 import type { Committer } from "./committer.ts";
+import { componentMeta, componentPathsOf } from "./components.ts";
 import { internalIdBytes } from "./internal-id.ts";
 import { compareKeys, encodeKey, prefixEnd } from "./keyenc.ts";
 import { hasRetention, type InternalId, type Persistence, type TabletId } from "./persistence/index.ts";
@@ -27,6 +29,9 @@ const FULL_LO = new Uint8Array(0);
 const FULL_HI = Uint8Array.from([0xff, 0xff, 0xff, 0xff]);
 /** Commits read from the document log per round trip. */
 const LOG_PAGE = 256;
+
+/** A document at the snapshot, and the ts of that version. */
+export type SnapshotRevision = { doc: Doc; ts: bigint };
 
 /** What the iterator reads: an engine has all three. */
 export type TableIteratorSource = {
@@ -73,10 +78,27 @@ export class TableIterator {
 
   /** Every document of `table` at the snapshot, in `by_id` order, a page at a time. */
   async *pages(table: Pick<TableDef, "id" | "byId">): AsyncGenerator<Doc[]> {
+    for await (const page of this.revisions(table)) yield page.map((r) => r.doc);
+  }
+
+  /**
+   * The same, each document with the ts of its version at the snapshot, from the document after `after` (an
+   * `_id`) on when given.
+   */
+  async *revisions(table: Pick<TableDef, "id" | "byId">, after?: string): AsyncGenerator<SnapshotRevision[]> {
     const c = this.changed.get(table.id);
     if (!c) throw new Error(`table ${table.id} was not registered with this iterator`);
     const p = this.src.persistence;
     let lo: Uint8Array = FULL_LO;
+    if (after !== undefined) {
+      c.cursor = encodeKey([after]);
+      lo = prefixEnd(c.cursor);
+      // What was noted at or before it is not read again.
+      const past = (e: { key: Uint8Array }) => compareKeys(e.key, c.cursor!) <= 0;
+      for (const e of [...c.sorted, ...c.fresh]) if (past(e)) c.ids.delete(e.id);
+      c.sorted = c.sorted.filter((e) => !past(e));
+      c.fresh = c.fresh.filter((e) => !past(e));
+    }
     for (;;) {
       const ts = this.direct ? this.snapshot : this.src.committer.visibleTs;
       this.src.retention?.checkDocuments(this.snapshot);
@@ -86,11 +108,11 @@ export class TableIterator {
       const last = rows.length === this.pageSize ? decodeDoc(rows[rows.length - 1]!.json) : null;
       // The last key this page covers; past the end of the table when it is the last page.
       const end = last ? encodeKey([last._id]) : null;
-      const page: { key: Uint8Array; doc: Doc }[] = [];
+      const page: (SnapshotRevision & { key: Uint8Array })[] = [];
       for (const r of rows) {
         if (c.ids.has(r.id)) continue;
         const doc = decodeDoc(r.json);
-        page.push({ key: encodeKey([doc._id]), doc });
+        page.push({ key: encodeKey([doc._id]), doc, ts: r.ts });
       }
       // The changed ids this page covers, at their version then.
       const due = this.takeDue(c, end);
@@ -102,11 +124,11 @@ export class TableIterator {
         this.src.retention?.checkDocuments(this.snapshot);
         for (let i = 0; i < due.length; i++) {
           const v = versions[i];
-          if (v) page.push({ key: due[i]!.key, doc: decodeDoc(v.json) });
+          if (v) page.push({ key: due[i]!.key, doc: decodeDoc(v.json), ts: v.ts });
         }
         page.sort((a, b) => compareKeys(a.key, b.key));
       }
-      if (page.length) yield page.map((e) => e.doc);
+      if (page.length) yield page.map(({ doc, ts }) => ({ doc, ts }));
       if (!end) break;
       c.cursor = end;
       lo = prefixEnd(end);
@@ -152,4 +174,26 @@ export class TableIterator {
     }
     this.logTs = upTo;
   }
+}
+
+/**
+ * The active tables and every component's path at `snapshot`, read through a table iterator (Convex's
+ * `snapshot_table_mapping` and `snapshot_component_paths`): a table deleted since is in it, one created since is not.
+ */
+export async function snapshotTables(
+  src: TableIteratorSource & { readonly catalog: Pick<Catalog, "tables"> },
+  snapshot: bigint,
+): Promise<{ tables: TableMeta[]; paths: Map<string | null, string[]> }> {
+  const tablesTable = src.catalog.tables.get(TABLES_TABLE)!;
+  const componentsTable = src.catalog.tables.get(COMPONENTS_TABLE)!;
+  const it = new TableIterator(src, snapshot, [tablesTable, componentsTable]);
+  const tables: TableMeta[] = [];
+  for await (const page of it.pages(tablesTable))
+    for (const row of page) {
+      const m = tableMeta(row);
+      if (m.state === "active") tables.push(m);
+    }
+  const components = [];
+  for await (const page of it.pages(componentsTable)) for (const row of page) components.push(componentMeta(row));
+  return { tables, paths: componentPathsOf(components) };
 }
