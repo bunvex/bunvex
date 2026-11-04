@@ -5,7 +5,8 @@
 //   `canceled`; one export at a time; timestamps in nanoseconds, as Convex stores them;
 // - the export reads ONE snapshot: `_tables/documents.jsonl`, each user table's `documents.jsonl` (in `_id`
 //   order, Convex's lossless encoding) and `generated_schema.jsonl` (`"uniform"`), smallest table first, and
-//   with `includeStorage` `_storage/documents.jsonl` and every file as `_storage/<id><.ext>`;
+//   with `includeStorage` `_storage/documents.jsonl` and every file as `_storage/<id><.ext>`; each component's under
+//   its path's `_components/<name>/` prefix, as Convex's `get_export_path_prefix` (STUDY-204);
 // - the ZIP goes to the `exports` blob store; it expires 14 days after its start, and is deleted (with its
 //   row) 30 days after that; a download does not check the expiration, as Convex's.
 import { createHmac, timingSafeEqual } from "node:crypto";
@@ -13,15 +14,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   type AuditLogActor,
+  allComponentPaths,
   type Engine,
   EXPORTS_TABLE,
   FILE_STORAGE_TABLE,
   type FileStorageDoc,
   formatBytes,
+  formatComponentPath,
   insertAuditLogEvents,
   knob,
   SYSTEM_ACTOR,
   secondsKnob,
+  type TableDef,
   type Tx,
 } from "@bunvex/core";
 import type { BlobStore } from "@bunvex/file-storage";
@@ -320,53 +324,74 @@ export class ExportService {
     try {
       await zip.add("README.md", EXPORT_README);
       const catalog = this.engine.catalog;
-      const tables = [...catalog.tables.values()]
-        .filter((t) => !t.name.startsWith("_"))
-        .sort((a, b) => a.number - b.number);
-      await progress("Backing up _tables", true);
-      await zip.add(
-        "_tables/documents.jsonl",
-        tables.map((t) => `{"name":${JSON.stringify(t.name)},"id":${t.number}}\n`).join(""),
-      );
-      // Each table compressed first, so they can be written smallest first, as Convex.
-      const prepared = [];
-      for (const t of tables) {
-        await progress(`Backing up ${t.name}`, true);
-        let written = 0;
-        const self = this;
-        const lines = async function* () {
-          let last: string | null = null;
-          for (;;) {
-            const page = (await self.engine.query(
-              (db) =>
-                db
-                  .query(t.name)
-                  .withIndex("by_id", (q) => (last === null ? q : q.gt("_id", last)))
-                  .take(PAGE_SIZE),
-              undefined,
-              undefined,
-              undefined,
-              at,
-            )) as Record<string, Value>[];
-            if (!page.length) return;
-            yield new TextEncoder().encode(page.map((d) => `${toExportJson(d)}\n`).join(""));
-            written += page.length;
-            last = page[page.length - 1]!._id as string;
-            await progress(`Backing up ${t.name}: ${commas(written)} documents`);
-            if (page.length < PAGE_SIZE) return;
-          }
-        };
-        prepared.push({
-          docs: await zip.prepare(`${t.name}/documents.jsonl`, lines()),
-          schema: await zip.prepare(`${t.name}/generated_schema.jsonl`, '"uniform"\n'),
+      // Every namespace (Convex's `component_ids_to_paths`): the root's, then each component whose chain of parents
+      // reaches the root, mounted or not, under its path's prefix (`_components/a/_components/b/`).
+      const paths = await this.engine.query((db) => allComponentPaths(db), undefined, undefined, undefined, at);
+      const namespaces: { id: string | null; prefix: string; in: string; tables: TableDef[] }[] = [];
+      for (const [id, path] of [...paths].sort(([a], [b]) => (a === null ? -1 : b === null ? 1 : a < b ? -1 : 1))) {
+        const space = id === null ? catalog : catalog.components.get(id);
+        if (!space) continue;
+        namespaces.push({
+          id,
+          prefix: path.map((name) => `_components/${name}/`).join(""),
+          in: path.length ? ` in '${formatComponentPath(path)}'` : "",
+          tables: [...space.tables.values()].filter((t) => !t.name.startsWith("_")).sort((a, b) => a.number - b.number),
         });
       }
+      // Each namespace's `_tables` first: they are small (Convex's order).
+      for (const ns of namespaces) {
+        await progress(`Backing up _tables${ns.in}`, true);
+        await zip.add(
+          `${ns.prefix}_tables/documents.jsonl`,
+          ns.tables.map((t) => `{"name":${JSON.stringify(t.name)},"id":${t.number}}\n`).join(""),
+        );
+      }
+      // Each table compressed first, so they can be written smallest first, as Convex.
+      const prepared = [];
+      for (const ns of namespaces)
+        for (const t of ns.tables) {
+          await progress(`Backing up ${t.name}${ns.in}`, true);
+          let written = 0;
+          const self = this;
+          const lines = async function* () {
+            let last: string | null = null;
+            for (;;) {
+              const page = (await self.engine.query(
+                (db) =>
+                  db.inComponent(ns.id, () =>
+                    db
+                      .query(t.name)
+                      .withIndex("by_id", (q) => (last === null ? q : q.gt("_id", last)))
+                      .take(PAGE_SIZE),
+                  ),
+                undefined,
+                undefined,
+                undefined,
+                at,
+              )) as Record<string, Value>[];
+              if (!page.length) return;
+              yield new TextEncoder().encode(page.map((d) => `${toExportJson(d)}\n`).join(""));
+              written += page.length;
+              last = page[page.length - 1]!._id as string;
+              await progress(`Backing up ${t.name}${ns.in}: ${commas(written)} documents`);
+              if (page.length < PAGE_SIZE) return;
+            }
+          };
+          prepared.push({
+            docs: await zip.prepare(`${ns.prefix}${t.name}/documents.jsonl`, lines()),
+            schema: await zip.prepare(`${ns.prefix}${t.name}/generated_schema.jsonl`, '"uniform"\n'),
+          });
+        }
       prepared.sort((a, b) => a.docs.usize - b.docs.usize);
       for (const p of prepared) {
         await zip.append(p.docs);
         await zip.append(p.schema);
       }
-      if (r.format.include_storage) await this.exportStorage(zip, at, progress);
+      // The files last, as Convex: they are the slowest. The size limit is for all of them together.
+      if (r.format.include_storage) {
+        const total = { bytes: 0 };
+        for (const ns of namespaces) await this.exportStorage(zip, at, progress, ns, total);
+      }
       await progress("Uploading backup", true);
       const size = await zip.finish();
       const written = await this.store.put(Bun.file(zip.path).stream());
@@ -392,19 +417,27 @@ export class ExportService {
     }
   }
 
-  private async exportStorage(zip: ZipFileWriter, at: bigint, progress: (m: string, force?: boolean) => Promise<void>) {
-    // `_file_storage`, written as the virtual `_storage` (Convex's `write_storage_table`), with the URL's UUID as
-    // `internalId`.
+  private async exportStorage(
+    zip: ZipFileWriter,
+    at: bigint,
+    progress: (m: string, force?: boolean) => Promise<void>,
+    ns: { id: string | null; prefix: string; in: string },
+    total: { bytes: number },
+  ) {
+    // A namespace's `_file_storage`, written as the virtual `_storage` (Convex's `write_storage_table`), with the URL's
+    // UUID as `internalId`.
     const rows: FileStorageDoc[] = [];
     let last: string | null = null;
     for (;;) {
       const page = (await this.engine.query(
         (db) =>
-          db.asSystem(() =>
-            db
-              .query(FILE_STORAGE_TABLE)
-              .withIndex("by_id", (q) => (last === null ? q : q.gt("_id", last)))
-              .take(PAGE_SIZE),
+          db.inComponent(ns.id, () =>
+            db.asSystem(() =>
+              db
+                .query(FILE_STORAGE_TABLE)
+                .withIndex("by_id", (q) => (last === null ? q : q.gt("_id", last)))
+                .take(PAGE_SIZE),
+            ),
           ),
         undefined,
         undefined,
@@ -415,19 +448,21 @@ export class ExportService {
       if (page.length < PAGE_SIZE) break;
       last = page[page.length - 1]!._id;
     }
-    let total = 0;
     for (const row of rows) {
-      total += Number(row.size);
-      if (total > MAX_FILE_STORAGE_EXPORT_BYTES)
+      total.bytes += Number(row.size);
+      if (total.bytes > MAX_FILE_STORAGE_EXPORT_BYTES)
         throw new ExportError(
           400,
           "ExportFileStorageTooLarge",
-          `File storage is too large to include in this backup (${formatBytes(total)} > maximum size ${formatBytes(MAX_FILE_STORAGE_EXPORT_BYTES)}). You can still create a tables-only backup. Restoring it replaces table data while leaving the target deployment's current file storage unchanged.`,
+          `File storage is too large to include in this backup (${formatBytes(total.bytes)} > maximum size ${formatBytes(MAX_FILE_STORAGE_EXPORT_BYTES)}). You can still create a tables-only backup. Restoring it replaces table data while leaving the target deployment's current file storage unchanged.`,
         );
     }
-    await progress(`Backing up _storage: ${commas(rows.length)} / ${commas(rows.length)} entries (metadata)`, true);
+    await progress(
+      `Backing up _storage${ns.in}: ${commas(rows.length)} / ${commas(rows.length)} entries (metadata)`,
+      true,
+    );
     await zip.add(
-      "_storage/documents.jsonl",
+      `${ns.prefix}_storage/documents.jsonl`,
       rows
         .map(
           (r) =>
@@ -439,9 +474,12 @@ export class ExportService {
     for (const row of rows) {
       const body = this.files ? await this.files.get(row.storageKey) : null;
       if (!body) throw new Error(`file missing from storage: ${row._id} with key ${row.storageKey}`);
-      await zip.add(`_storage/${row._id}${extensionOf(row.contentType)}`, body as unknown as AsyncIterable<Uint8Array>);
+      await zip.add(
+        `${ns.prefix}_storage/${row._id}${extensionOf(row.contentType)}`,
+        body as unknown as AsyncIterable<Uint8Array>,
+      );
       n++;
-      await progress(`Backing up _storage: ${commas(n)} / ${commas(rows.length)} files (downloading)`);
+      await progress(`Backing up _storage${ns.in}: ${commas(n)} / ${commas(rows.length)} files (downloading)`);
     }
   }
 

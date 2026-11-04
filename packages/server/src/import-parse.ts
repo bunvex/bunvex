@@ -455,12 +455,13 @@ function tableNameOf(name: string): string {
   return name;
 }
 
-/** Components are refused (DV-215): bunvex has none yet. */
+// DV-215 (STUDY-204): a component's entries are exported, not yet imported (PR 2).
+/** A component's entries are refused: importing into a component is not built yet. */
 function refuseComponents(prefix: string | undefined, file: string) {
   if (prefix && /(^|\/)_components\/[^/]+\/$/.test(prefix))
     throw new ImportError(
       "ComponentsNotSupported",
-      `${file} belongs to a component, and bunvex does not have components yet. Import a snapshot of an app without components.`,
+      `${file} belongs to a component, and bunvex does not import into components yet. Import a snapshot of an app without components.`,
     );
 }
 
