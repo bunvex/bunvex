@@ -34,6 +34,25 @@ afterEach(async () => {
 
 const mod = (path: string, source: string): ModuleSource => ({ path, source, environment: "isolate" });
 
+/**
+ * At most this many of the tests' requests are open at once. A burst of new connections past the listen backlog
+ * (`kern.ipc.somaxconn`, 128 on macOS) while the server's thread is busy is reset by the kernel (ECONNRESET) before
+ * the server sees it.
+ */
+const OPEN_REQUESTS = 64;
+let open = 0;
+const waiting: (() => void)[] = [];
+async function limited<T>(f: () => Promise<T>): Promise<T> {
+  while (open >= OPEN_REQUESTS) await new Promise<void>((r) => waiting.push(r));
+  open++;
+  try {
+    return await f();
+  } finally {
+    open--;
+    waiting.shift()?.();
+  }
+}
+
 const SCHEMA = mod(
   "schema.js",
   `import { defineSchema, defineTable } from "@bunvex/server";
@@ -117,14 +136,15 @@ async function deployment(o: { workers?: number; store?: Store } = {}) {
   await s.codeReady;
   stops.push(() => s.shutdown());
   const api = `http://127.0.0.1:${s.server.port}`;
-  const post = async (path: string, body: object, admin = true) => {
-    const r = await fetch(`${api}${path}`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...(admin ? { authorization: `Bunvex ${KEY}` } : {}) },
-      body: JSON.stringify(body),
+  const post = (path: string, body: object, admin = true) =>
+    limited(async () => {
+      const r = await fetch(`${api}${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...(admin ? { authorization: `Bunvex ${KEY}` } : {}) },
+        body: JSON.stringify(body),
+      });
+      return (await r.json()) as Record<string, any>;
     });
-    return (await r.json()) as Record<string, any>;
-  };
   const push = async (version: string) => {
     const start = await post("/api/deploy2/start_push", {
       adminKey: KEY,
