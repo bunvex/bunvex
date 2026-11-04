@@ -39,7 +39,12 @@ export const DEBUG_ROUTE = /^\/api\/debug\/(subscriptions|query_cache|index_cach
 /** The longest a follow request waits for an invalidation, as the log streams' long poll. */
 const FOLLOW_MAX_MS = 60_000;
 
-type Ctx = { engine: Engine; functions: Functions; sync: SyncHub };
+/** `draining`: aborted when the server starts to shut down, so that a long poll answers at once. */
+type Ctx = { engine: Engine; functions: Functions; sync: SyncHub; draining?: AbortSignal };
+
+/** A long poll's signal: the request's, and the server's shutdown. */
+const pollSignal = (ctx: { draining?: AbortSignal }, req: Request) =>
+  ctx.draining ? AbortSignal.any([req.signal, ctx.draining]) : req.signal;
 
 const jsonResponse = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -201,7 +206,7 @@ async function invalidations(ctx: Ctx, url: URL, req: Request): Promise<Response
   const t = q.get("timeoutMs");
   const timeoutMs = t === null ? FOLLOW_MAX_MS : Math.max(0, Math.min(FOLLOW_MAX_MS, Number(t) || 0));
   const filter = q.get("path");
-  const { entries, newCursor } = await ctx.sync.inspector.after(cursor, timeoutMs, req.signal);
+  const { entries, newCursor } = await ctx.sync.inspector.after(cursor, timeoutMs, pollSignal(ctx, req));
   const shown = entries
     .map((e: FeedRecord) => ({ e, ...splitExecKey(e.execKey) }))
     .filter((x) => matches(x.path, filter))
@@ -312,12 +317,7 @@ function roomKeyOf(params: URLSearchParams): RoomKey | string {
 }
 
 /** The rooms routes; `null` when `url` is none of them. Throws the caller's access error. */
-export async function roomsRoute(
-  ctx: { engine: Engine; functions: Functions; sync: SyncHub },
-  url: URL,
-  req: Request,
-  caller: Caller,
-): Promise<Response | null> {
+export async function roomsRoute(ctx: Ctx, url: URL, req: Request, caller: Caller): Promise<Response | null> {
   const action = ROOMS_ACTION_ROUTE.exec(url.pathname);
   if (action && req.method === "POST") return roomAction(ctx, action[1] as RoomAction, req, caller);
   const m = ROOMS_ROUTE.exec(url.pathname);
@@ -335,7 +335,7 @@ export async function roomsRoute(
       return badRequest("`cursor` must be a non-negative integer.");
     const t = url.searchParams.get("timeoutMs");
     const timeoutMs = t === null ? FOLLOW_MAX_MS : Math.max(0, Math.min(FOLLOW_MAX_MS, Number(t) || 0));
-    return jsonResponse(await hub.tapEvents(key, cursor, timeoutMs, req.signal));
+    return jsonResponse(await hub.tapEvents(key, cursor, timeoutMs, pollSignal(ctx, req)));
   }
   const rawCount = url.searchParams.get("numItems");
   const numItems = rawCount === null ? MEMBERS_PAGE_MAX : Number(rawCount);

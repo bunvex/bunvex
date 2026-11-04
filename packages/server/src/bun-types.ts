@@ -10,6 +10,8 @@ export interface BunServer {
   readonly hostname: string | undefined;
   readonly url: URL;
   stop(closeActiveConnections?: boolean): Promise<void>;
+  /** The HTTP requests in flight (a graceful shutdown waits for them). */
+  readonly pendingRequests: number;
 }
 
 /** A WebSocket of `Bun.serve`, as a sync session drives it. */

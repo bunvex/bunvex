@@ -574,6 +574,18 @@ const IMPORT_FINISH_UPLOAD_ARGS: BodyShape = {
 };
 /** Convex's pause routes (STUDY-63). */
 /**
+ * Stop `s` accepting connections and wait for its HTTP requests in flight to end, then close the connections left
+ * (websockets, idle keep-alives). Bun's `stop(false)` alone would also wait for every websocket to close.
+ */
+async function drain(s: BunServer | null): Promise<void> {
+  if (!s) return;
+  const stopped = s.stop(false);
+  while (s.pendingRequests > 0) await Bun.sleep(5);
+  s.stop(true);
+  await stopped;
+}
+
+/**
  * Each push route's request struct (Convex's deploy_config.rs, deploy_config2.rs, application/src/deploy_config.rs
  * `StartPushRequest`): its name and top-level fields, for serde's body errors. Nested values are checked by the
  * push itself.
@@ -875,6 +887,11 @@ export function createServer(opts: ServerOptions) {
       }),
   );
   let server: BunServer | null = null;
+  /**
+   * Aborted once a shutdown starts draining (B7): a long poll (the log streams, the inspector's follows) answers at
+   * once, empty, as its client asks again elsewhere, instead of holding the drain for up to a minute.
+   */
+  const draining = new AbortController();
 
   const json = (body: unknown, status = 200) =>
     new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -1270,7 +1287,11 @@ export function createServer(opts: ServerOptions) {
     authorize();
     let requestId: string | null = null;
     if (parts && session !== null && counter !== null) requestId = wsRequestId(session, Number(counter));
-    const { parts: found, newCursor } = await functionLog.after(cursor, LONG_POLL_MS, req.signal);
+    const { parts: found, newCursor } = await functionLog.after(
+      cursor,
+      LONG_POLL_MS,
+      AbortSignal.any([req.signal, draining.signal]),
+    );
     const client = req.headers.get("bunvex-client");
     const structured = parts && wantsStructuredLines(client);
     // Why each run ran and its trace (STUDY-131 AD-27): for the dashboard's stream only, so the CLI's output
@@ -1341,13 +1362,13 @@ export function createServer(opts: ServerOptions) {
     }
     if (/^\/api\/(v1\/)?(update|list)_environment_variables$/.test(url.pathname)) return envRoute(url, req, caller);
     // The subscriptions and invalidation inspector (STUDY-131 AD-25): ViewMetrics.
-    const debug = await debugRoute({ engine, functions, sync }, url, req, caller);
+    const debug = await debugRoute({ engine, functions, sync, draining: draining.signal }, url, req, caller);
     if (debug) return debug;
     // The deployment's topology (STUDY-131 §11, AD-04): ViewMetrics.
     const topo = topologyRoute({ functions, topology }, url, req, caller);
     if (topo) return topo;
     // The rooms in memory and their definitions (AD-43): ViewMetrics; the dashboard's actions on them: WriteData.
-    const roomsDebug = await roomsRoute({ engine, functions, sync }, url, req, caller);
+    const roomsDebug = await roomsRoute({ engine, functions, sync, draining: draining.signal }, url, req, caller);
     if (roomsDebug) return roomsDebug;
     if (url.pathname === "/api/v1/list_audit_log_events" && req.method === "GET")
       return listAuditLogEvents(url, caller);
@@ -2812,6 +2833,11 @@ export function createServer(opts: ServerOptions) {
     /** A clean exit: stop serving, let the last commits land, release the store's lease (PERSIST-01 C7, so
      *  a replacement process opens at once instead of after the lease's TTL) and close the store. */
     shutdown: async () => {
+      // First the requests (Convex's `run_server_inner`: "draining existing requests" before `st.shutdown()`): no new
+      // connection is accepted, every HTTP request in flight runs to its end with the engine and the workers it needs
+      // still up, then what is left (the websockets, which reconnect elsewhere) is closed.
+      draining.abort();
+      await Promise.all([drain(server), drain(site)]);
       // Every background task that reads or writes the store stops before it closes: after this resolves,
       // nothing of the server touches the store (a caller may delete its files).
       serverMetrics.stop();
@@ -2826,8 +2852,6 @@ export function createServer(opts: ServerOptions) {
       await scheduler.stop();
       await cronExecutor.stop();
       sync.stop();
-      site?.stop(true);
-      server?.stop(true);
       builtinScreen?.stop();
       functionLog.close();
       // The function sandbox's children (by their own pids), once nothing can call them; the execution workers, whose
