@@ -31,6 +31,12 @@ Before implementing a feature that Convex has:
 4. **Never copy Convex code.** Study it, then write bunvex's version from scratch (see [NOTICE](../../NOTICE)).
    Quoting a constant or a format description in a study is fine; pasting an implementation is not.
 
+**A refactor needs no study** (owner, 2026-11-04). A PR that changes how bunvex's code is organised and no
+behaviour an app or an operator can observe, such as one call-dispatch path for HTTP and WebSocket or splitting
+`engine.ts`, describes its design in a short note in the PR instead: what moves where, and why. The existing tests
+pass unchanged, and any new test pins behaviour that already held. A refactor that changes behaviour is not
+one: the change needs its study.
+
 A study is not a spec. A spec (`docs/specs/`) records a bunvex design decision, such as the persistence
 contract or the package layout. A study records what Convex does and how bunvex maps it. A study may lead
 to a spec.

@@ -22,6 +22,8 @@ deliberate, documented differences only. Read [ARCHITECTURE.md](ARCHITECTURE.md)
   - what apps observe;
   - how bunvex does it;
   - the divergences.
+- A refactor that changes no behaviour an app or operator observes needs no study: put a short design note in the
+  PR, and the existing tests must pass unchanged (owner, 2026-11-04; docs/study/README.md).
 - Match Convex by default. **Ask the owner about every divergence** instead of deciding it yourself, and
   record the decision in [docs/parity/divergences.md](docs/parity/divergences.md).
 - Additions (what Convex does not have) are proposed in a study, decided by the owner and recorded in
