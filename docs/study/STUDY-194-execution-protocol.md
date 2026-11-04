@@ -1294,5 +1294,24 @@ mutation whose worker died fails as a system error, and a scheduled or cron one 
 - **Fallbacks:** each path in §11.2's "run again" list commits once, in-thread, with the worker's lines dropped.
 - A sabotage per item.
 
-**Measured** on DO `c-4` against `main`: `insert`, `increment1000`, `increment1` and `mix`, on SQLite and on Postgres
-on another box.
+### 11.4 Measured (2026-11-04)
+
+Two DO `c-4` (sfo2), 64 VUs, 20 s, 2 workers, the functions pushed. `main` (`a86df6a2`) and the PR were alternated, each
+run twice (`bench/results/cloud/2026-11-04-s194-pr3/`). Medians, req/s:
+
+| | `insert` | `increment1000` | `increment1` | `mix` | `uncached` |
+|---|--:|--:|--:|--:|--:|
+| SQLite, `main` | 3299 · 3205 | 1789 · 1727 | 381 · 374 | 3691 · 3720 | 3205 · 3213 |
+| SQLite, PR 3 | 3761 · 3728 | 2655 · 2639 | 345 · 345 | 3694 · 3670 | 3169 · 3233 |
+| Postgres on another box, `main` | 2292 · 2293 | 1389 · 1372 | 136 · 136 | 3453 · 3424 | |
+| Postgres on another box, PR 3 | 2784 · 2832 | 1789 · 1825 | 129 · 132 | 3583 · 3455 | |
+
+- **Inserts +15 % (SQLite) and +22 % (Postgres); increments over 1000 keys +51 % and +31 %.** The server uses 2.0–2.45
+  cores for them instead of 1.1, and p99 is the same or lower.
+- **Reads are unchanged.** Their queries already ran on the workers (2b).
+- **One hot key is 4–9 % slower.** With every VU on one counter, each attempt conflicts with the one before. A worker's run
+  puts a round trip between its snapshot and its commit, so fewer attempts commit per second. Errors (attempts out of
+  retries) are in the same proportion as `main`.
+- The gain is larger than the spike's (§11.1, about 25 %), on other droplets and a newer `main`. These droplets were
+  steadier: one configuration's two medians are within 5 % of each other, where the spike's inserts spread from 605 to
+  2238 req/s. The bench's tables have no text index, so nothing here ran twice.
