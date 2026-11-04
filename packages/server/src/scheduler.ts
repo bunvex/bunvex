@@ -24,7 +24,6 @@ import {
   dueJobs,
   type Engine,
   getJob,
-  IndexesUnavailableError,
   insertJob,
   isJobId,
   isStopped,
@@ -66,7 +65,7 @@ import {
   toJsonValue,
   type Value,
 } from "@bunvex/values";
-import { describeUncaught, newRequestId } from "./errors.ts";
+import { describeUncaught, isSystemError, newRequestId } from "./errors.ts";
 import { functionAddress } from "./function-handles.ts";
 import { type ComponentRuntime, type Functions, type SourcedCaller, THROTTLED } from "./functions.ts";
 
@@ -694,7 +693,10 @@ export class ScheduledJobExecutor {
           if (this.stopped) return;
           continue;
         }
-        if (isSystemFailure(e)) throw e;
+        // A system error (the committer stopped, an index still being rebuilt after a start (STUDY-79), a failed
+        // store read, the function sandbox gone…) is not the mutation's: the job stays pending and is tried again
+        // with backoff, as Convex's (crates/application/src/scheduled_jobs/mod.rs, a non-deterministic error).
+        if (isSystemError(e)) throw e;
         // The mutation's own error: its writes are gone; record it.
         // saved under the function's name, as Convex's (`WriteSource::mutation`)
         await this.finish(job, { kind: "failed", error: describeUncaught(e).message }, job.name);
@@ -789,10 +791,4 @@ export class ScheduledJobExecutor {
       this.scheduleGc(timerDelay(next), failures);
     }, delayMs);
   }
-}
-
-/** A failure of the system rather than of the function: the job is retried later, not failed. */
-function isSystemFailure(e: unknown) {
-  // An index still being rebuilt after a start (STUDY-79) is the system's too: the job runs later.
-  return e instanceof CommitterStoppedError || e instanceof IndexesUnavailableError;
 }

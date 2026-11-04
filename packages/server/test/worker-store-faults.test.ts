@@ -2,12 +2,19 @@
 // next task is logged and retried, never let out as an unhandled rejection (which ends the process). Convex's
 // workers run in a loop that logs, backs off and tries again (crates/application/src/exports/worker.rs,
 // snapshot_import/worker.rs). The cron executor's case is in cron.test.ts.
+//
+// A scheduled mutation that meets such a fault is not failed: the fault is the system's, so the job is tried again
+// with backoff, as Convex reschedules a job after a non-deterministic error
+// (crates/application/src/scheduled_jobs/mod.rs).
 import { afterEach, expect, test } from "bun:test";
-import { defineSchema, Engine } from "@bunvex/core";
+import { defineSchema, defineTable, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { MemoryBlobStore } from "@bunvex/file-storage";
+import { v } from "@bunvex/values";
 import { ExportError, ExportService } from "../src/exports.ts";
+import { Functions, internalMutation, mutation } from "../src/functions.ts";
 import { ImportService } from "../src/imports.ts";
+import { ScheduledJobExecutor } from "../src/scheduler.ts";
 import { captureErrors, failingReads, watchUnhandled } from "./faulty-store.ts";
 
 const stops: (() => unknown)[] = [];
@@ -77,4 +84,36 @@ test("import worker: dropping a failed import's tables while the store fails rea
   }, "the import to be recorded failed");
   expect(row.state.state).toBe("failed");
   expect(unhandled.seen).toEqual([]);
+});
+
+test("scheduled mutation: a store read failing during its run is retried, not recorded as its failure", async () => {
+  const { store, state } = failingReads(await MemoryPersistence.open(null, { durable: false }));
+  const engine = await new Engine(defineSchema({ items: defineTable(v.any()) }), store).init();
+  let runs = 0;
+  const functions = new Functions(engine).register("m", {
+    charge: internalMutation(async ({ db }) => {
+      // The first run reads while the store fails (a fault that outlived the driver's retries).
+      if (++runs === 1) state.failing = true;
+      try {
+        await db.query("items").collect();
+      } finally {
+        state.failing = false;
+      }
+      await db.insert("items", { run: runs });
+    }),
+    schedule: mutation(async ({ scheduler }) => scheduler.runAfter(0, "m:charge", {})),
+  });
+  const ex = new ScheduledJobExecutor(engine, functions, { errorInitialBackoffMs: 1, errorMaxBackoffMs: 5 });
+  ex.start();
+  stops.push(() => ex.stop());
+  const id = await functions.runMutation("m:schedule", {});
+  const job = await until(async () => {
+    const j = (await engine.query((db) => db.system.get(id as never))) as { state: { kind: string } } | null;
+    return j?.state.kind === "success" && j;
+  }, "the job to succeed");
+  expect(job.state).toEqual({ kind: "success" });
+  expect(state.failed).toBeGreaterThan(0);
+  expect(runs).toBe(2);
+  expect(ex.stats).toMatchObject({ succeeded: 1, failed: 0, systemErrors: 1 });
+  expect((await engine.query((db) => db.query("items").collect())).map((d) => d.run)).toEqual([2]);
 });
