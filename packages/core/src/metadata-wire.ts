@@ -235,14 +235,23 @@ export function decodeSearchState(s: string): SearchIndexStates {
 /** How many metadata epochs a worker keeps; the main thread counts the same, and sends again one that fell out. */
 export const METADATA_EPOCHS_KEPT = 4;
 
-/** One epoch's metadata as a worker gets it, posted before the first request that names it. */
-export type Metadata = { epoch: number; catalog: Catalog; search: SearchIndexStates };
+/**
+ * One epoch's metadata as a worker gets it, posted before the first request that names it. `schema`: the active
+ * schemas a mutation's writes are validated by, as the engine's text (the app's and each component's), or null.
+ */
+export type Metadata = { epoch: number; catalog: Catalog; search: SearchIndexStates; schema: string | null };
 
-export function encodeMetadata(epoch: number, catalog: Catalog, search: SearchIndexes): string {
+export function encodeMetadata(
+  epoch: number,
+  catalog: Catalog,
+  search: SearchIndexes,
+  schema: string | null = null,
+): string {
   const w = new Out("m");
   w.num(epoch);
   w.str(encodeCatalog(catalog));
   w.str(encodeSearchState(search));
+  w.opt(schema);
   return w.s;
 }
 
@@ -257,8 +266,10 @@ export function decodeMetadata(s: string): Metadata {
   const catalog = decodeCatalog(r.str());
   r.at("search");
   const search = decodeSearchState(r.str());
+  r.at("schema");
+  const schema = r.opt();
   r.close();
-  return { epoch, catalog, search };
+  return { epoch, catalog, search, schema };
 }
 
 /**

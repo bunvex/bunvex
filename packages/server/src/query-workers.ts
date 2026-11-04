@@ -7,11 +7,11 @@
 // Workers start only where they can read the store themselves (`Persistence.reader`: a SQLite file, a Postgres or MySQL database), under the `vm`
 // executor and the process's own clock; the server checks those (§10.4).
 import { availableParallelism } from "node:os";
-import type { Engine, Persistence, StoreReader } from "@bunvex/core";
+import type { CallOutcome, Engine, Persistence, StoreReader } from "@bunvex/core";
 import { decodeCallOutcome, formatDuration, inExecutable, threadEntry, workerOutcomesChecked } from "@bunvex/core";
 import { type CodeHeld, CodeShipper, newCodeHeld } from "./execution-code.ts";
 import { ExecutionWorkerError, ExecutionWorkers } from "./execution-workers.ts";
-import type { CodeSources, Functions } from "./functions.ts";
+import { type CodeSources, checkDeadline, type Deadline, type Functions } from "./functions.ts";
 
 /** What a worker starts from: the store to read, the engine's identity and visible ts, the server's settings. */
 export type QueryWorkerInit = {
@@ -107,8 +107,18 @@ export function startQueryWorkers(o: {
   engine.queryWorkers = {
     wants: (local) => (local as { code?: unknown } | undefined)?.code !== undefined && pool.readyOrStart(),
     run(text, local, prepare, inThread) {
-      const code = (local as { code?: { epoch: number; sources: CodeSources } } | undefined)?.code;
+      const { code, deadline } = (local ?? {}) as {
+        code?: { epoch: number; sources: CodeSources };
+        deadline?: Deadline;
+      };
       if (!code) return null;
+      // A WebSocket mutation's deadline is checked here, where the in-thread run checks it: before it runs, and once
+      // its handler returned (its outcome came back), before the commit.
+      try {
+        checkDeadline(deadline);
+      } catch (e) {
+        return Promise.reject(e);
+      }
       const timeoutMs = functions.userTimeoutMs;
       const sent = pool.call(`${code.epoch}:${text}`, timeoutMs, (w) => {
         prepare(w);
@@ -130,11 +140,17 @@ export function startQueryWorkers(o: {
       });
       if (!sent) return null;
       // The call that never yielded fails as the function's own timeout; the others as system errors.
-      const answered = sent.catch((e) => {
-        if (e instanceof ExecutionWorkerError && e.reason === "timeout")
-          throw new Error(`Function execution timed out (maximum duration: ${formatDuration(timeoutMs)})`);
-        throw e;
-      });
+      const answered = sent.then(
+        (outcome) => {
+          checkDeadline(deadline);
+          return outcome;
+        },
+        (e) => {
+          if (e instanceof ExecutionWorkerError && e.reason === "timeout")
+            throw new Error(`Function execution timed out (maximum duration: ${formatDuration(timeoutMs)})`);
+          throw e;
+        },
+      );
       if (!workerOutcomesChecked()) return answered;
       return answered.then(async (there) => {
         const mismatch = outcomeMismatch(await inThread(), there);
@@ -166,7 +182,8 @@ export function connectionSplit(
 /**
  * Where a worker's outcome differs from the in-thread one for the same request, or null (STUDY-194 2b's differential
  * check): every field, the report's lines and figures included, but what measures time (the user time, each line's
- * timestamp).
+ * timestamp) and the ids a mutation's inserts drew (random on each run): the worker's are read as the in-thread
+ * run's, matched by the position of their document among the writes.
  */
 export function outcomeMismatch(here: string, there: string): string | null {
   const view = (text: string) => {
@@ -183,20 +200,45 @@ export function outcomeMismatch(here: string, there: string): string | null {
   };
   const a = view(here);
   const b = view(there);
+  const drawn = drawnIds(a.writes, b.writes);
+  const asInThread = (text: string) => {
+    for (const [worker, inThread] of drawn) text = text.replaceAll(worker, inThread);
+    return text;
+  };
   for (const k of Object.keys(a) as (keyof typeof a)[]) {
     const x = stringify(a[k]);
-    const y = stringify(b[k]);
+    const y = asInThread(stringify(b[k]));
     if (x === y) continue;
     const xs = a[k];
     const ys = b[k];
     if (Array.isArray(xs) && Array.isArray(ys)) {
       let i = 0;
-      while (i < xs.length && i < ys.length && stringify(xs[i]) === stringify(ys[i])) i++;
+      while (i < xs.length && i < ys.length && stringify(xs[i]) === asInThread(stringify(ys[i]))) i++;
       return `${k} [${i}] (of ${xs.length} in-thread, ${ys.length} on the worker): in-thread ${stringify(xs[i])}, worker ${stringify(ys[i])}`;
     }
     return `${k}: in-thread ${x.slice(0, 400)}, worker ${y.slice(0, 400)}`;
   }
   return null;
+}
+
+/**
+ * The ids two runs of one mutation drew for the same inserted documents, as the worker's text and the in-thread one's:
+ * the internal id, the document id, and the document id as an index key holds it (its characters, which `stringify`
+ * shows in hex).
+ */
+function drawnIds(a: CallOutcome["writes"], b: CallOutcome["writes"]): [string, string][] {
+  const out: [string, string][] = [];
+  if (!a || !b) return out;
+  for (let i = 0; i < a.docs.length && i < b.docs.length; i++) {
+    const x = a.docs[i]!;
+    const y = b.docs[i]!;
+    if (x.id === y.id || x.json === null || y.json === null || a.olds[i] !== null || b.olds[i] !== null) continue;
+    const xId = (JSON.parse(x.json) as { _id: string })._id;
+    const yId = (JSON.parse(y.json) as { _id: string })._id;
+    const hex = (id: string) => Buffer.from(id).toString("hex");
+    out.push([y.id, x.id], [yId, xId], [hex(yId), hex(xId)]);
+  }
+  return out;
 }
 
 /** The fields the runtime gives an error thrown in the server's own code: where in that code it was thrown. */

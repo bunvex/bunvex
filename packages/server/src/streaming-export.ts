@@ -18,9 +18,12 @@ import {
   reduceShape,
   SCHEMAS_TABLE,
   type SchemaJson,
+  type SnapshotRevision,
   schemaStateOf,
   shapeOf,
+  snapshotTables,
   type TableDef,
+  TableIterator,
   type TabletId,
   UnionBuilder,
 } from "@bunvex/core";
@@ -263,7 +266,33 @@ export function streamedTables(engine: Engine, paths: Map<string | null, string>
   return out.sort((a, b) => compareInternalIds(a.t.id, b.t.id));
 }
 
-/** `list_snapshot`: one table's documents at `snapshot`, by id, a page at a time. */
+/** A table `list_snapshot` streams, as of its snapshot. */
+type SnapshotTable = { def: TableDef; name: string; component: string; cols: Columns };
+
+/**
+ * Convex's `list_snapshot_table_iterator_cache`: the iterator of the last page, kept for the call that continues
+ * it (same snapshot, selection and cursor). One entry, taken out while a call uses it: a call that does not
+ * continue it starts its own.
+ */
+type ListSnapshotState = {
+  snapshot: bigint;
+  selection: string;
+  /** The tables left, the current one first. */
+  tables: SnapshotTable[];
+  iterator: TableIterator;
+  /** The cursor the next call continues from. */
+  cursor: { tablet: TabletId; id: string | null };
+  /** The current table's revisions, and those read but not returned yet. */
+  stream: { revisions: AsyncGenerator<SnapshotRevision[]>; buffer: SnapshotRevision[] } | null;
+};
+const listSnapshotCache = new WeakMap<Engine, ListSnapshotState>();
+/** Convex's: the table iterator of `list_snapshot` reads pages of 100. */
+const LIST_SNAPSHOT_ITERATOR_PAGE = 100;
+
+/**
+ * `list_snapshot`: one table's documents at `snapshot`, by id, a page at a time. The snapshot is read through a
+ * table iterator, as Convex's: it can be older than the index retention window, up to its age limit.
+ */
 export async function listSnapshot(deps: Deps, args: Record<string, unknown>): Promise<string> {
   const { engine } = deps;
   const { f, check: checkFormat } = lateFormat(args.format as string | undefined);
@@ -291,60 +320,108 @@ export async function listSnapshot(deps: Deps, args: Record<string, unknown>): P
       );
     }
   }
-  // The components as of the snapshot, as Convex's `snapshot_component_paths(snapshot)`.
-  let paths: Map<string | null, string>;
-  try {
-    paths = await componentPathsAt(engine, snapshotNs);
-  } catch (e) {
-    if (e instanceof OutOfRetentionError) throw tooOld(snapshotNs);
-    throw e;
-  }
-  const tables = streamedTables(engine, paths)
-    .map(({ t, component }) => ({ t, component, cols: tableSelection(selection, component, t.name) }))
-    .filter((x) => x.cols !== null && (cursor === null || compareInternalIds(x.t.id, cursor.tablet) >= 0));
   const out = (values: string[], next: string | null) => {
     checkFormat();
     return `{"values":[${values.join(",")}],"snapshot":${snapshotNs},"cursor":${next === null ? "null" : JSON.stringify(next)},"hasMore":${next !== null}}`;
   };
-  if (tables.length === 0) return out([], null);
-  const { t, component, cols } = tables[0]!;
-  const after = cursor !== null && cursor.tablet === t.id ? cursor.id : null;
-  let page: Record<string, Value>[];
   try {
-    page = (await engine.query(
-      (db) =>
-        db.asSystem(() =>
-          db
-            .queryDef(t)
-            .withIndex("by_id", (q) => (after === null ? q : q.gt("_id", after)))
-            .take(SNAPSHOT_LIST_LIMIT),
+    const selectionKey = JSON.stringify(selection);
+    const cached = listSnapshotCache.get(engine);
+    listSnapshotCache.delete(engine);
+    let state: ListSnapshotState;
+    if (
+      cached &&
+      cursor !== null &&
+      cached.snapshot === snapshotNs &&
+      cached.selection === selectionKey &&
+      cached.cursor.tablet === cursor.tablet &&
+      cached.cursor.id === cursor.id
+    )
+      state = cached;
+    else {
+      const tables = await tablesAt(engine, snapshotNs, selection, cursor);
+      if (tables.length === 0) return out([], null);
+      state = {
+        snapshot: snapshotNs,
+        selection: selectionKey,
+        tables,
+        iterator: new TableIterator(
+          engine,
+          snapshotNs,
+          tables.map((t) => t.def),
+          LIST_SNAPSHOT_ITERATOR_PAGE,
         ),
-      undefined,
-      undefined,
-      undefined,
-      snapshotNs,
-    )) as Record<string, Value>[];
+        cursor: cursor ?? { tablet: tables[0]!.def.id, id: null },
+        stream: null,
+      };
+    }
+    const table = state.tables[0]!;
+    if (state.stream === null) {
+      const after = cursor !== null && cursor.tablet === table.def.id ? cursor.id : null;
+      state.stream = { revisions: state.iterator.revisions(table.def, after ?? undefined), buffer: [] };
+    }
+    const stream = state.stream;
+    const values: string[] = [];
+    let last: string | null = null;
+    let done = false;
+    while (values.length < SNAPSHOT_LIST_LIMIT) {
+      if (stream.buffer.length === 0) {
+        const r = await stream.revisions.next();
+        if (r.done) {
+          done = true;
+          break;
+        }
+        stream.buffer = r.value;
+        continue;
+      }
+      const { doc, ts } = stream.buffer.shift()!;
+      values.push(
+        docJson(table.component, table.name, ts, null, pickColumns(doc as Record<string, Value>, table.cols), f),
+      );
+      last = doc._id;
+    }
+    if (!done) {
+      state.cursor = { tablet: table.def.id, id: last };
+      listSnapshotCache.set(engine, state);
+      return out(values, JSON.stringify(state.cursor));
+    }
+    const next = state.tables[1];
+    if (!next) return out(values, null);
+    state.tables = state.tables.slice(1);
+    state.cursor = { tablet: next.def.id, id: null };
+    state.stream = null;
+    listSnapshotCache.set(engine, state);
+    return out(values, JSON.stringify(state.cursor));
   } catch (e) {
     if (e instanceof OutOfRetentionError) throw tooOld(snapshotNs);
     throw e;
   }
-  // Each document as of the snapshot, `_ts` its revision's ts (PERSIST-01 C16); a third-party store without
-  // `getVersions` gives the snapshot instead.
-  const versions = engine.persistence.getVersions
-    ? await engine.persistence.getVersions(
-        t.id,
-        page.map((d) => internalIdOf(d._id as string)),
-        snapshotNs,
-      )
-    : null;
-  const values = page.map((d, i) => {
-    const v = versions?.[i];
-    return docJson(component, t.name, v ? v.ts : snapshotNs, null, pickColumns(d, cols!), f);
-  });
-  if (page.length >= SNAPSHOT_LIST_LIMIT)
-    return out(values, JSON.stringify({ tablet: t.id, id: page[page.length - 1]!._id }));
-  const next = tables[1];
-  return out(values, next ? JSON.stringify({ tablet: next.t.id, id: null }) : null);
+}
+
+/**
+ * The tables the selection takes at `snapshot`, from the cursor's on, by tablet (Convex's `snapshot_table_mapping`
+ * and `snapshot_component_paths`): the active user tables then, in a namespace with a component path then.
+ */
+async function tablesAt(
+  engine: Engine,
+  snapshot: bigint,
+  selection: Selection,
+  cursor: { tablet: TabletId } | null,
+): Promise<SnapshotTable[]> {
+  const { tables, paths } = await snapshotTables(engine, snapshot);
+  const out: SnapshotTable[] = [];
+  for (const m of tables) {
+    if (m.name.startsWith("_")) continue;
+    const path = paths.get(m.namespace ?? null);
+    if (path === undefined) continue;
+    if (cursor !== null && compareInternalIds(m.tablet, cursor.tablet) < 0) continue;
+    const component = formatComponentPath(path);
+    const cols = tableSelection(selection, component, m.name);
+    // A table deleted since keeps its definition until its documents are gone (after the document window).
+    const def = engine.catalog.anyTablet(m.tablet);
+    if (cols !== null && def) out.push({ def, name: m.name, component, cols });
+  }
+  return out.sort((a, b) => compareInternalIds(a.def.id, b.def.id));
 }
 
 const tooOld = (ns: bigint) => bad("SnapshotTooOld", `Snapshot value ${ns} is too far in the past.`);

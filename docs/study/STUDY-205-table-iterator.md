@@ -1,5 +1,5 @@
 # STUDY-205 — Table iterator: reading a snapshot past the index window
-<!-- index: Table iterator (Convex's `TableIterator`): a snapshot read after the 4-minute index window passed it, from recent `by_id` pages plus the document log; the ZIP export reads through it (audit B8) | built -->
+<!-- index: Table iterator (Convex's `TableIterator`): a snapshot read after the 4-minute index window passed it, from recent `by_id` pages plus the document log; the ZIP export (audit B8) and `list_snapshot` (DV-306) read through it | built -->
 
 The 2026-11-03 production audit (B8) found a gap in the ZIP export (STUDY-42). It read every page at its snapshot's
 ts. Retention refuses a read below the index window, which trails the newest commit by 4 minutes (STUDY-33,
@@ -107,6 +107,72 @@ directly, as Convex's does.
 
 ## 4. Divergences
 
-None new. B8 was not a recorded divergence: Convex's export does not fail this way. DV-306 (`list_snapshot` only
-within the index window) stays as decided. The iterator it was waiting for exists now; `list_snapshot` taking
-it, with an iterator kept across calls as Convex's cache does, is a later PR.
+None new. B8 was not a recorded divergence: Convex's export does not fail this way. DV-306 is resolved by §5.
+
+## 5. `list_snapshot`
+
+DV-306 had accepted a `list_snapshot` that read its snapshot only within the index window, until bunvex had a table
+iterator (owner, 2026-10-03). The owner chose to match Convex now (2026-11-04).
+
+### How Convex does it
+
+`Database::list_snapshot` (`crates/database/src/database.rs:2325-2595`):
+
+- **Its tables and component paths are the snapshot's.** `snapshot_table_mapping` (`:1361-1388`) reads `_tables`
+  through a table iterator and keeps the *active* tables, so a table deleted since the snapshot is listed and one
+  created since is not. `snapshot_component_paths` (`:1431-1458`) reads `_components` the same way, and
+  `snapshot_by_id_indexes` reads `_index`. Each is cached per snapshot ts.
+- **The tables left are walked by tablet,** from the cursor's on. The iterator reads pages of 100 (`table_iterator(snapshot,
+  100)`), and a call returns up to `SNAPSHOT_LIST_LIMIT` (1024) documents or `SNAPSHOT_LIST_TIME_LIMIT` (60 s). The
+  cursor is the last document's id. When the table ends, the cursor is the next table's start.
+- **One iterator is kept between calls** (`list_snapshot_table_iterator_cache`, one entry), with its key: the
+  snapshot, the tablets left, the `by_id` index and the cursor. A call whose key matches takes it and continues the
+  stream. Otherwise it starts a new iterator, from the cursor. The entry is cleared while a call holds it. The
+  stream continues into the next table on the same `MultiTableIterator`, so the document log read for the first
+  table serves the next ones.
+- **Age:** `LIST_SNAPSHOT_MAX_AGE_SECS` (5 days), and the iterator's document-window check.
+
+### How bunvex does it
+
+`listSnapshot` (`packages/server/src/streaming-export.ts`):
+
+- `snapshotTables` (`packages/core/src/table-iterator.ts`) reads `_tables` and `_components` through a table
+  iterator at the snapshot. The active user tables then are kept, in a namespace with a component path then, by
+  tablet. A table deleted since is read with its definition, which the catalog keeps until the document window has
+  passed its deletion and its documents are purged (PERSIST-01 C18). That is longer than the 5-day age limit.
+- The iterator is created for every selected table from the cursor's on, in pages of 100. `revisions(table, after)`
+  gives each document with the ts of its version at the snapshot, so a value's `_ts` takes no extra read.
+- **The cache is one entry per engine:** the snapshot, the selection, the tables left, the iterator, the cursor the
+  next call continues from, and the current table's stream with the documents read but not returned. A call takes
+  it out and puts it back when it ends, as Convex's does. A call that does not continue it starts a new iterator,
+  from its cursor. That covers a repeated cursor, a second connector, or a restart.
+- An `OutOfRetentionError` (the document window has passed the snapshot) is `SnapshotTooOld`, as before.
+- Not taken: `SNAPSHOT_LIST_TIME_LIMIT`. A page of 1024 is read in milliseconds, far from 60 s.
+- `document_deltas` is unchanged: it reads the document log, as Convex's does.
+
+### Tests (`packages/server/test/streaming-export.test.ts`)
+
+- **Across pages, with writes going on.** Two tables (2 500 and 3 documents) are listed at once at a snapshot. Then
+  the same snapshot is listed again, past the index window, with writes between pages:
+  - patches of documents already listed and not yet listed;
+  - deletes and inserts;
+  - a new table;
+  - a patch of the small table, which is then deleted.
+
+  The pages equal the first listing's, cursors included. In the middle, a cursor that does not continue the last
+  page gets the same page as before.
+- **Too old.** A snapshot the document window passed is `SnapshotTooOld`.
+
+Sabotage, each making the first test fail:
+
+- `list_snapshot` as it was: `SnapshotTooOld`.
+- The latest catalog's active and hidden tables: the deleted table is missing.
+- Every table the catalog has now: the new table gets a page.
+- The cached iterator taken whatever the cursor: the repeated cursor gets the wrong page.
+- The documents read but not returned dropped from the cache: they are missing.
+
+### Measurement
+
+A whole `list_snapshot` of 200 000 documents (about 120 bytes each) on SQLite, index cache off, best of 4: 3 607 ms
+before, 2 047 ms now. The kept iterator reads each page once, where each call used to run a query and then read
+the versions of its 1024 documents.

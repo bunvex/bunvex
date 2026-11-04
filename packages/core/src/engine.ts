@@ -103,6 +103,7 @@ import {
   type FlushRetryOptions,
   type Interval,
   MAX_REPEATABLE_TS_GLOBAL,
+  type SearchDoc,
   type WriteBatchLimits,
   type WriteLogRetention,
 } from "./committer.ts";
@@ -454,7 +455,12 @@ export class Engine {
   private catalogNow = new Catalog();
   /** How many times the catalog was replaced or changed in place (a created table). */
   private catalogChanges = 0;
-  private metadataSeen = { catalog: -1, search: -1, epoch: 0 };
+  private metadataSeen = { catalog: -1, search: -1, schema: -1, epoch: 0 };
+  /** How many times the active schemas changed (the app's or a component's), and their text for workers. */
+  private schemaChanges = 0;
+  private schemaText: string | null | undefined;
+  /** The latest creation cursor a worker's mutation left (`CallOutcome.creation`): `transactionStart` starts past it. */
+  private creationFloor = 0;
   /**
    * A number for the metadata a transaction reads when it begins (the catalog, the text indexes' states): it
    * changes when they do, so a worker's copy is checked by it.
@@ -463,9 +469,10 @@ export class Engine {
   get metadataEpoch(): number {
     const m = this.metadataSeen;
     const search = this.searchIndexes.generation;
-    if (m.catalog !== this.catalogChanges || m.search !== search) {
+    if (m.catalog !== this.catalogChanges || m.search !== search || m.schema !== this.schemaChanges) {
       m.catalog = this.catalogChanges;
       m.search = search;
+      m.schema = this.schemaChanges;
       m.epoch++;
     }
     return m.epoch;
@@ -589,7 +596,7 @@ export class Engine {
     }
     if (sent.has(epoch)) return;
     sent.add(epoch);
-    w.post(encodeMetadata(epoch, this.catalog, this.searchIndexes));
+    w.post(encodeMetadata(epoch, this.catalog, this.searchIndexes, this.workerSchema()));
   }
 
   /**
@@ -1250,7 +1257,7 @@ export class Engine {
             if (ns)
               for (const t of [...ns.tables.values(), ...ns.hidden.values(), ...ns.deleting.values()]) deleted.push(t);
             components.delete(c);
-            this.componentSchemas.delete(c);
+            if (this.componentSchemas.delete(c)) this.schemasChanged();
           }
           for (const t of deleted) next.deleting.set(t.id, t);
           next.components = components;
@@ -1357,6 +1364,27 @@ export class Engine {
 
   private installValidators(schema: EngineSchema) {
     this.docValidators = validatorsOf(schema);
+    this.schemasChanged();
+  }
+
+  /** The active schemas changed (the app's or a component's): a worker's mutations validate by the new ones. */
+  private schemasChanged() {
+    this.schemaChanges++;
+    this.schemaText = undefined;
+  }
+
+  /**
+   * The active schemas a worker's mutations validate their writes by (`WorkerSchemas`), as text: null when none
+   * validates anything.
+   */
+  private workerSchema(): string | null {
+    if (this.schemaText === undefined) {
+      const components: [string, SchemaJson][] = [];
+      for (const [id, c] of this.componentSchemas) if (c.validators.size) components.push([id, schemaToJson(c.schema)]);
+      const app = this.docValidators.size ? schemaToJson(this.schema) : null;
+      this.schemaText = app || components.length ? JSON.stringify({ app, components } satisfies WorkerSchemas) : null;
+    }
+    return this.schemaText;
   }
 
   /**
@@ -1489,6 +1517,7 @@ export class Engine {
         c.schema = schemaFromJson(JSON.parse(active.schema as string) as SchemaJson);
         c.validators = validatorsOf(c.schema);
         c.activeSchemaId = active._id as string;
+        this.schemasChanged();
       }
       if (pending) {
         const schema = schemaFromJson(JSON.parse(pending.schema as string) as SchemaJson);
@@ -1957,10 +1986,10 @@ export class Engine {
    * `VectorIndexTooLarge`, until a flush brings it down. Indexes being built never refuse writes. Only with
    * segments: without a store there is nothing to flush into.
    */
-  private checkMemoryIndexSizes(tx: Tx) {
+  private checkMemoryIndexSizes(tables: Iterable<TableDef>) {
     if (!this.searchSegments) return;
     const limits = this.segmentLimits;
-    for (const t of tx.writtenTables()) {
+    for (const t of tables) {
       for (const e of this.searchIndexes.forTablet(t.id))
         if (e.ready && e.index.memoryBytes >= limits.textHardLimitBytes) {
           this.scheduleFlush("text", e);
@@ -3697,6 +3726,7 @@ export class Engine {
             schemas.schema = c.schema;
             schemas.validators = validatorsOf(c.schema);
             schemas.activeSchemaId = c.id;
+            this.schemasChanged();
             if (c.id !== null && schemas.pendingPush?.id === c.id) schemas.pendingPush = null;
           }
           this.schema = pending.schema;
@@ -4149,7 +4179,10 @@ export class Engine {
    * would otherwise sort after the next transaction's first).
    */
   private transactionStart(snapshot: bigint): number {
-    const last = this.lastTx ? Math.max(this.lastStart, this.lastTx.creationCursor) : this.lastStart;
+    const last = Math.max(
+      this.lastTx ? Math.max(this.lastStart, this.lastTx.creationCursor) : this.lastStart,
+      this.creationFloor,
+    );
     this.lastStart = transactionStart(snapshot, this.runtime.preciseNow(), last);
     return this.lastStart;
   }
@@ -4191,9 +4224,16 @@ export class Engine {
 
   /** A worker's transaction (`follow`): a query's, on the metadata its request names, counts and searches asked. */
   private beginFollowingTx(s: TxStart, f: NonNullable<Engine["following"]>): Tx {
-    if (s.kind !== "query" || s.metadata === undefined) throw new Error("an execution worker runs queries only");
+    if (s.metadata === undefined) throw new Error("an execution worker runs calls only");
     const m = f.metadata.get(s.metadata);
-    const tx = new Tx(m.catalog, this.persistence, s.ts, false, s.now, s.system);
+    const mutation = s.kind === "mutation";
+    const tx = new Tx(m.catalog, this.persistence, s.ts, mutation, s.now, s.system);
+    if (mutation) {
+      // The epoch's schemas, built once per text.
+      const v = m.schema === null ? null : this.followerValidatorsOf(m.schema);
+      if (v?.app) tx.docValidators = v.app;
+      tx.componentValidators = (ns) => v?.components.get(ns);
+    }
     if (!s.tracked) tx.indexCache = f.indexCache;
     tx.identity = s.identity;
     tx.systemIdentity = s.systemIdentity;
@@ -4204,6 +4244,26 @@ export class Engine {
     tx.tableCount = (tablet, ts) => f.ops.count(tablet, ts);
     if (s.tracked) tx.prevEndCursor = s.journal;
     return tx;
+  }
+
+  /** A worker's validators, from the schemas' text (`workerSchema`), kept for the latest text. */
+  private followerValidators: {
+    text: string;
+    app: Map<string, GenericValidator> | null;
+    components: Map<string, Map<string, GenericValidator>>;
+  } | null = null;
+
+  private followerValidatorsOf(text: string) {
+    if (this.followerValidators?.text !== text) {
+      const json = JSON.parse(text) as WorkerSchemas;
+      const of = (s: SchemaJson) => validatorsOf(schemaFromJson(s));
+      this.followerValidators = {
+        text,
+        app: json.app === null ? null : of(json.app),
+        components: new Map(json.components.map(([id, s]) => [id, of(s)])),
+      };
+    }
+    return this.followerValidators;
   }
 
   /** What a mutation's transaction writes in itself once its body returned (`CallHost.finish`). */
@@ -4318,6 +4378,9 @@ export class Engine {
               } catch (e) {
                 outcome = notRun(request.id, call.bodies.encodeError(e));
               }
+              // What only an in-thread commit can do yet (`CallOutcome.inThreadOnly`) runs again in the thread, at
+              // the same request: this run committed nothing, and its lines are not replayed.
+              if (outcome.inThreadOnly) return null;
               call.bodies.replay(outcome.report, call.local);
               return { outcome, local: null };
             } finally {
@@ -4342,7 +4405,7 @@ export class Engine {
       const run = offloaded ? async () => (await offloaded()) ?? (await inThread()) : inThread;
       const { outcome, local } = await (opts.wrap ? opts.wrap(run) : run)();
       if (outcome.id !== request.id) throw new Error(`call ${request.id} was answered as call ${outcome.id}`);
-      const ran = { tx: local?.tx, observedTime: outcome.observedTime, now: start.now, outcome };
+      const ran = { tx: local?.tx, observedTime: outcome.observedTime, now: start.now, ts: start.ts, outcome };
       if (outcome.status === "failed")
         return { ...ran, ok: false, error: call.bodies.decodeError(outcome.error ?? "") };
       // A worker's value is its result's text, parsed only when asked for: the HTTP API answers with the text.
@@ -4360,13 +4423,15 @@ export class Engine {
   }
 
   /**
-   * Whether a call runs on an execution worker when one is ready: a query, not the system identity's (§10.4), and
-   * none a tracer follows (its spans do not cross yet).
+   * Whether a call runs on an execution worker when one is ready: a query or a mutation, not the system identity's
+   * (§10.4), and none a tracer follows (its spans do not cross yet). A mutation stays in-thread while a push validates
+   * a new schema or a schema stages document checks: those checks write in the transaction itself (`finishTx`).
    */
   private offloads(call: Call, start: TxStart): boolean {
     return (
       this.queryWorkers !== null &&
-      call.spec.kind === "query" &&
+      (call.spec.kind === "query" ||
+        (call.spec.kind === "mutation" && this.pendingValidators === null && this.stagedChecks === null)) &&
       !start.systemIdentity &&
       !this.tracerOf.on &&
       this.queryWorkers.wants(call.local)
@@ -4908,6 +4973,15 @@ export class Engine {
       }
       if (!ran.ok) throw ran.error;
       if (ran.value === REFUSED) throw refused?.error;
+      // A worker's run (no transaction here): the commit from its outcome alone.
+      if (!ran.tx) {
+        const r = await this.commitOutcome(ran, source, failures, maxRetries, initialMs, maxMs);
+        if (r === RETRY) {
+          failures++;
+          continue;
+        }
+        return withTs ? { value: ran.value, ts: r } : ran.value;
+      }
       const raw = ran.value;
       // What the commit still takes from the transaction itself, in-thread until the runner sends it (PR 3).
       const tx = ran.tx as Tx;
@@ -4920,7 +4994,7 @@ export class Engine {
         runAfterCommit(tx);
         return withTs ? { value, ts: snapshot } : value;
       }
-      this.checkMemoryIndexSizes(tx);
+      this.checkMemoryIndexSizes(tx.writtenTables());
       const { docs, idx } = writes;
       try {
         const pending: Parameters<Committer["commit"]>[0] = {
@@ -4965,6 +5039,94 @@ export class Engine {
         await this.committer.waitForVisible(e.conflict.writeTs);
       }
     }
+  }
+
+  /**
+   * A worker's mutation committed from its outcome (STUDY-194 §4.10): its reads, documents, index entries and catalog
+   * touches; at `onVisible`, its documents into the table summaries, and into the text and vector indexes of the
+   * tables that have them. The commit's ts, or RETRY after an OCC conflict (backed off, waited for the write it lost
+   * to), for a new attempt.
+   */
+  private async commitOutcome(
+    ran: Ran<unknown>,
+    source: string | undefined,
+    failures: number,
+    maxRetries: number,
+    initialMs: number,
+    maxMs: number,
+  ): Promise<bigint | typeof RETRY> {
+    const o = ran.outcome;
+    const snapshot = ran.ts!;
+    // The next mutation's creation times start past the ones this run handed out, as `lastTx`'s cursor does.
+    if (o.creation > this.creationFloor) this.creationFloor = o.creation;
+    const writes = o.writes;
+    if (!writes) return snapshot;
+    const { docs, idx, olds } = writes;
+    // The documents as objects: parsed now when a text or vector index takes them, else when the commit is visible.
+    let written: WrittenDoc[] | null = null;
+    const writtenDocs = () =>
+      (written ??= docs.map((d, i) => {
+        const old = olds[i] === null ? null : decodeDoc(olds[i]!);
+        const next = d.json === null ? null : decodeDoc(d.json);
+        const tablet = d.table as TabletId;
+        // A table the run wrote is in the catalog until a commit after this one deletes it.
+        const table = this.catalog.anyTablet(tablet) ?? ({ id: tablet } as TableDef);
+        return { table, id: (next ?? old)!._id as string, old, next };
+      }));
+    let search: {
+      onVisible: (ts: bigint) => void;
+      searchDocs?: SearchDoc[];
+      logExtra?: Parameters<Committer["commit"]>[0]["logExtra"];
+    } | null = null;
+    if (docs.some((d) => this.hasDerivedIndexes(d.table as TabletId))) {
+      const all = writtenDocs();
+      this.checkMemoryIndexSizes(new Set(all.map((w) => w.table)));
+      const { docs: searchDocs, keys, indexed } = this.searchIndexes.commitWrites(all);
+      search = {
+        onVisible: (ts) => {
+          this.searchIndexes.apply(ts, all, indexed);
+          this.vectorIndexes.apply(ts, all);
+          this.flushFull(all);
+        },
+        ...(searchDocs.length ? { searchDocs, logExtra: keys } : {}),
+      };
+    }
+    try {
+      const pending: Parameters<Committer["commit"]>[0] = {
+        snapshot,
+        reads: o.reads,
+        docs,
+        idx,
+        source,
+        onVisible: (ts: bigint) => {
+          search?.onVisible(ts);
+          this.tableSummaries.apply(
+            ts,
+            writtenDocs().map((w) => ({ tablet: w.table.id, old: w.old, next: w.next })),
+          );
+        },
+        ...(search?.searchDocs ? { searchDocs: search.searchDocs } : {}),
+        ...(o.searchReads.length ? { searchReads: o.searchReads } : {}),
+      };
+      const logExtra = [...(search?.logExtra ?? []), ...writes.touches];
+      if (logExtra.length) pending.logExtra = logExtra;
+      return await this.committer.commit(pending);
+    } catch (e) {
+      if (!(e instanceof ConflictError)) throw e;
+      const lost = this.occError(e.conflict, source, failures);
+      if (failures >= maxRetries) throw lost;
+      this.onOccRetry?.(lost, failures + 1);
+      this.stats.retries++;
+      await longSleep(occBackoffMs(failures, initialMs, maxMs)); // UDF_EXECUTOR_OCC_MAX_BACKOFF_MS is a knob
+      // As Convex: wait for the write we lost to, so the next snapshot contains it.
+      await this.committer.waitForVisible(e.conflict.writeTs);
+      return RETRY;
+    }
+  }
+
+  /** Whether a table has text or vector indexes, whose data a commit's `onVisible` keeps up to date. */
+  private hasDerivedIndexes(tablet: TabletId): boolean {
+    return this.searchIndexes.forTablet(tablet).length > 0 || this.vectorIndexes.forTablet(tablet).length > 0;
   }
 
   /** The OCC error for `conflict`, worded as Convex's (without its documentation link). */
@@ -5092,7 +5254,7 @@ export type MutationOptions = {
 };
 
 /** A run as the engine sees it once it settled: its outcome, and the transaction while it stays in the thread. */
-type Ran<T> = { tx?: Tx; observedTime: boolean; outcome: CallOutcome; now: number } & (
+type Ran<T> = { tx?: Tx; observedTime: boolean; outcome: CallOutcome; now: number; ts?: bigint } & (
   | { ok: true; value: T }
   | { ok: false; error: unknown }
 );
@@ -5132,6 +5294,9 @@ function ranValue<T>(ran: Ran<T>): T {
   return ran.value;
 }
 
+/** `commitOutcome`'s answer for a lost OCC conflict: the mutation runs a new attempt. */
+const RETRY = Symbol("retry");
+
 /** The outcome of a call that never ran (its permit refused), or that its worker did not answer (`error`). */
 const notRun = (id: number, error: string | null = null): CallOutcome => ({
   id,
@@ -5147,6 +5312,8 @@ const notRun = (id: number, error: string | null = null): CallOutcome => ({
   documentsRead: 0,
   bytesRead: 0,
   writes: null,
+  creation: 0,
+  inThreadOnly: false,
 });
 
 /**
@@ -5426,6 +5593,12 @@ async function finishSchemaIn(
   }
   return { f, tables };
 }
+
+/** A document a mutation wrote, before and after, as the search and vector indexes take it (`Tx.writtenDocs`). */
+type WrittenDoc = { table: TableDef; id: string; old: Doc | null; next: Doc | null };
+
+/** The active schemas whose validators a worker's mutations check their writes against: the app's and each component's. */
+type WorkerSchemas = { app: SchemaJson | null; components: [string, SchemaJson][] };
 
 /** A component's schemas (`Engine.componentSchemas`). */
 type ComponentSchemas = {

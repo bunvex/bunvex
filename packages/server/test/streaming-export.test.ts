@@ -40,10 +40,12 @@ afterEach(async () => {
 async function setup(
   schema: ReturnType<typeof defineSchema> = defineSchema({ a: defineTable(v.any()), b: defineTable(v.any()) }),
   active = false,
+  opts: Partial<ConstructorParameters<typeof Engine>[2]> = {},
 ) {
   const engine = await new Engine(schema, await MemoryPersistence.open(null, { durable: false }), {
     instanceName: NAME,
     instanceSecret: SECRET,
+    ...opts,
   }).init();
   if (active)
     await engine.mutation((db) =>
@@ -454,5 +456,90 @@ describe("components (STUDY-204)", () => {
     expect(Object.keys(columns)).toEqual(PATHS);
     expect(columns.counter.map((x: any) => x.name).sort()).toEqual(["counters", "messages"]);
     expect(columns["counter/inner"]).toEqual([{ name: "messages", columns: ["_creationTime", "_id", "body"] }]);
+  });
+});
+
+// Convex reads `list_snapshot`'s snapshot with its table iterator (crates/database/src/database.rs `list_snapshot`,
+// crates/table_iteration/src/table_iterator.rs, STUDY-205): a snapshot the index retention window (4 minutes) has
+// passed is still listed, up to LIST_SNAPSHOT_MAX_AGE_SECS, the iterator kept between calls. Its tables and
+// component paths are the snapshot's too (`snapshot_table_mapping`, `snapshot_component_paths`).
+describe("list_snapshot past the index retention window", () => {
+  /** The loops wait; the test moves the windows. */
+  const manual = (documentDelayMs: number) => ({
+    retention: {
+      background: false,
+      indexDelayMs: 0,
+      documentDelayMs,
+      advanceEveryMs: 3_600_000,
+      documentEveryMs: 3_600_000,
+      checkpointEveryMs: 0,
+    },
+  });
+
+  test("lists the snapshot across pages while writes go on, deleted and new tables as they were", async () => {
+    const t = await setup(undefined, false, manual(3_600_000));
+    await t.call("m:put", { table: "a", n: 2500, doc: { k: 1 } });
+    // `c` created by one insert first: parallel inserts that each create the table lose documents (reported apart).
+    await t.call("m:put", { table: "c", n: 1, doc: { k: 2 } });
+    await t.call("m:put", { table: "c", n: 2, doc: { k: 2 } });
+    // The snapshot as read at once, before anything changes.
+    const expected = await listAll(t);
+    expect(expected.values.length).toBe(2503);
+    const snapshot = expected.snapshot;
+
+    const ids = expected.values.map((d) => d._id as string);
+    const c = expected.values.find((d) => d._table === "c")!._id as string;
+    let round = 0;
+    /** Writes after the snapshot; then the index window passes them. */
+    const writes = async () => {
+      const k = round++;
+      await t.call("m:patch", { id: ids[k * 400]!, doc: { k: 100 + k } });
+      await t.call("m:patch", { id: ids[(k * 400 + 1500) % 2500]!, doc: { k: 200 + k } });
+      await t.call("m:del", { id: ids[(k * 400 + 900) % 2500]! });
+      await t.call("m:put", { table: "a", n: 5, doc: { k: 300 + k } });
+      await t.call("m:put", { table: "d", n: 1, doc: { k: 400 + k } });
+      if (k === 0) await t.call("m:patch", { id: c, doc: { k: 500 } });
+      if (k === 1) await t.engine.deleteTables(["c"]);
+      await t.engine.retention!.advance();
+      await t.engine.retention!.deleteIndexes();
+    };
+    await writes();
+    const pages: any[] = [];
+    let r = await t.get("list_snapshot", { snapshot });
+    pages.push(r.body);
+    while (r.body.hasMore) {
+      await writes();
+      if (pages.length === 3) {
+        // A cursor that does not continue the last page (the iterator kept is for another): a new iterator, the
+        // same page as before.
+        const again = await t.get("list_snapshot", { snapshot, cursor: pages[1].cursor });
+        expect(again.body).toEqual(pages[2]);
+      }
+      r = await t.get("list_snapshot", { snapshot, cursor: r.body.cursor });
+      expect(r.status).toBe(200);
+      pages.push(r.body);
+    }
+    // The same pages: a table created since has none, the one deleted since has its documents.
+    expect(pages).toEqual(expected.pages);
+    expect(round).toBeGreaterThan(3);
+  });
+
+  test("a snapshot the document retention window passed is too old", async () => {
+    const t = await setup(undefined, false, manual(0));
+    await t.call("m:put", { table: "a", n: 2 });
+    const snap = /"snapshot":(\d+)/.exec((await t.get("list_snapshot")).text)![1]!;
+    const r = t.engine.retention!;
+    // The document window trails the index deleter's confirmed cursor: commits and passes until it is past it.
+    for (let i = 0; i < 50 && r.minDocumentTs <= BigInt(snap); i++) {
+      await t.call("m:put", { table: "b", n: 1 });
+      await r.advance();
+      await r.deleteIndexes();
+      await r.advance();
+    }
+    expect(r.minDocumentTs).toBeGreaterThan(BigInt(snap));
+    expect((await t.get("list_snapshot", { snapshot: snap })).body).toEqual({
+      code: "SnapshotTooOld",
+      message: `Snapshot value ${snap} is too far in the past.`,
+    });
   });
 });

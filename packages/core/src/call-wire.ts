@@ -65,6 +65,8 @@ export type CallWrites = {
   idx: LoggedIndexWrite[];
   /** The `_tables`/`_index` keys a schema-changing write touched (`Tx.catalogTouches`), for the write log. */
   touches: { index: string; key: Uint8Array; id: null }[];
+  /** Each written document's version before the write (`docs` order), as text; null: it is new. */
+  olds: (string | null)[];
 };
 
 /** The outcome (STUDY-194 §4.5): what the main thread's engine needs from a run. */
@@ -91,6 +93,10 @@ export type CallOutcome = {
   bytesRead: number;
   /** A mutation that returned, if it wrote. */
   writes: CallWrites | null;
+  /** The next `_creationTime` the run would have handed out (the engine starts the next transaction past it). */
+  creation: number;
+  /** The run used what only an in-thread commit takes yet (created tables, after-commit effects, a commit ts). */
+  inThreadOnly: boolean;
 };
 
 /** The messages between the main thread and a worker: a call's two, and the metadata its transactions read. */
@@ -226,6 +232,8 @@ export function encodeCallOutcome(o: CallOutcome): string {
   w.opt(o.endCursor);
   w.num(o.documentsRead);
   w.num(o.bytesRead);
+  w.num(o.creation);
+  w.num(flag(o.inThreadOnly));
   w.num(o.reads.length);
   for (const i of o.reads) {
     w.str(i.index);
@@ -256,6 +264,7 @@ export function encodeCallOutcome(o: CallOutcome): string {
       w.opt(d.json);
       w.optNum(d.prevTs);
     }
+    for (const old of writes.olds) w.opt(old);
     w.num(writes.idx.length);
     for (const e of writes.idx) {
       w.str(e.index);
@@ -304,6 +313,10 @@ export function decodeCallOutcome(s: string): CallOutcome {
   const documentsRead = r.int();
   r.at("bytesRead");
   const bytesRead = r.int();
+  r.at("creation");
+  const creation = r.float();
+  r.at("inThreadOnly");
+  const inThreadOnly = r.bool();
   r.at("reads");
   const reads: Interval[] = new Array(r.count());
   for (let i = 0; i < reads.length; i++) {
@@ -342,6 +355,9 @@ export function decodeCallOutcome(s: string): CallOutcome {
       r.item("writes.docs", i, "");
       docs[i] = { table: r.str(), id: r.str(), json: r.opt(), prevTs: r.optBig() };
     }
+    r.at("writes.olds");
+    const olds: (string | null)[] = new Array(docs.length);
+    for (let i = 0; i < olds.length; i++) olds[i] = r.opt();
     r.at("writes.idx");
     const idx: LoggedIndexWrite[] = new Array(r.count());
     for (let i = 0; i < idx.length; i++) {
@@ -354,7 +370,7 @@ export function decodeCallOutcome(s: string): CallOutcome {
       r.item("writes.touches", i, "");
       touches[i] = { index: r.str(), key: r.bytes(), id: null };
     }
-    writes = { docs, idx, touches };
+    writes = { docs, idx, touches, olds };
   }
   r.close();
   return {
@@ -371,6 +387,8 @@ export function decodeCallOutcome(s: string): CallOutcome {
     documentsRead,
     bytesRead,
     writes,
+    creation,
+    inThreadOnly,
   };
 }
 

@@ -78,33 +78,48 @@ const outcome: fc.Arbitrary<CallOutcome> = fc.record({
   documentsRead: count,
   bytesRead: count,
   writes: fc.option(
-    fc.record({
-      docs: fc.array(
-        fc.record({
-          table: id,
-          id,
-          json: fc.option(
-            value.map((v) => stringifyValue(v)),
-            { nil: null },
-          ),
-          prevTs: fc.option(ts, { nil: null }),
-        }),
-        { maxLength: 4 },
+    fc
+      .record({
+        docs: fc.array(
+          fc.record({
+            table: id,
+            id,
+            json: fc.option(
+              value.map((v) => stringifyValue(v)),
+              { nil: null },
+            ),
+            prevTs: fc.option(ts, { nil: null }),
+          }),
+          { maxLength: 4 },
+        ),
+        idx: fc.array(
+          fc.record({
+            index: id,
+            key,
+            table: fc.option(id, { nil: null }),
+            id: fc.option(id, { nil: null }),
+            docId: fc.option(id, { nil: null }),
+          }),
+          { maxLength: 6 },
+        ),
+        touches: fc.array(fc.record({ index: id, key, id: fc.constant(null) }), { maxLength: 2 }),
+      })
+      // One old version per written document, in its order.
+      .chain((w) =>
+        fc
+          .array(
+            fc.option(
+              value.map((v) => stringifyValue(v)),
+              { nil: null },
+            ),
+            { minLength: w.docs.length, maxLength: w.docs.length },
+          )
+          .map((olds) => ({ ...w, olds })),
       ),
-      idx: fc.array(
-        fc.record({
-          index: id,
-          key,
-          table: fc.option(id, { nil: null }),
-          id: fc.option(id, { nil: null }),
-          docId: fc.option(id, { nil: null }),
-        }),
-        { maxLength: 6 },
-      ),
-      touches: fc.array(fc.record({ index: id, key, id: fc.constant(null) }), { maxLength: 2 }),
-    }),
     { nil: null },
   ),
+  creation: fc.oneof(fc.double({ min: 0, max: 1e15, noNaN: true }), fc.nat()),
+  inThreadOnly: fc.boolean(),
 });
 
 describe("the call boundary's codec", () => {
@@ -205,6 +220,8 @@ describe("the call boundary's codec", () => {
     documentsRead: 1,
     bytesRead: 2,
     writes: null,
+    creation: 0,
+    inThreadOnly: false,
   };
 
   test("the error names the field and the item: a second interval's bound, a kind, the header", () => {
@@ -232,7 +249,8 @@ describe("the call boundary's codec", () => {
     expect(() => decodeCallOutcome(flags.replace("1:k1:1__0:0:", "1:k1:1__2:0:"))).toThrow(
       "A malformed call outcome: identityObserved: expected 0 or 1, got 2",
     );
-    expect(() => decodeCallOutcome(s.replace(":2:2:", ":2:99999:"))).toThrow(
+    // The reads' count, after `bytesRead`, `creation` and `inThreadOnly`.
+    expect(() => decodeCallOutcome(s.replace(":2:0:0:2:", ":2:0:0:99999:"))).toThrow(
       /A malformed call outcome: reads: 99999 items, with \d+ characters left/,
     );
   });

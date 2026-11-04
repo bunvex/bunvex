@@ -2269,8 +2269,20 @@ export class Functions {
     if (!checked)
       return this.mutationBody(this.fnLater(name, "mutation", fromClient, caller), args, undefined, deadline, false);
     // A retried attempt's console lines replace the aborted one's, as `mutationBody`'s.
-    const local: CallIn = { deadline, attempt: perAttempt((run: () => Promise<unknown>) => run()), args: checked.args };
-    return { spec: checked.spec, bodies: this.bodies, local };
+    const local: CallIn = {
+      deadline,
+      attempt: perAttempt((run: () => Promise<unknown>) => run()),
+      args: checked.args,
+      ...(checked.code ? { code: checked.code } : {}),
+    };
+    const value = checked.args;
+    return {
+      spec: checked.spec,
+      bodies: this.bodies,
+      local,
+      // Its arguments as text, made only when an execution worker runs it.
+      ...(checked.code && value ? { argsText: () => argsText(value.value) } : {}),
+    };
   }
 
   private readonly queryPermit = () => this.limits.query.acquire();
@@ -2308,7 +2320,7 @@ export class Functions {
     const internal = !fromClient || f.visibility === "internal";
     // A query an execution worker may run: the code its arguments were checked against (their text is made when a
     // worker runs it, `Call.argsText`).
-    const sources = kind === "query" && this.offloadQueries ? this.codeSources() : null;
+    const sources = this.offloadQueries ? this.codeSources() : null;
     const code = sources ? { code: { epoch: this.code.epoch, sources } } : {};
     // Without the codec (outside the tests, STUDY-194 Q7) the arguments go beside the request as they are.
     if (!this.engine.callCodec)
@@ -3999,7 +4011,7 @@ function untilAborted<T>(body: (db: Tx) => Promise<T>, deadline: Deadline | unde
   };
 }
 
-function checkDeadline(deadline: Deadline | undefined) {
+export function checkDeadline(deadline: Deadline | undefined) {
   if (deadline?.aborted) throw new MutationAbortedError();
 }
 

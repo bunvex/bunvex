@@ -652,8 +652,24 @@ describe("the local dashboard when its version cannot be had (DV-486: a warning,
     writeFileSync(join(dir, "config.json"), JSON.stringify({ version }));
   }
 
-  /** A releases URL where nothing listens: offline. */
-  const closedPort = () => `http://127.0.0.1:${freePort()}`;
+  /**
+   * A releases URL whose host drops every connection: offline (the fetch fails). It stays bound for the test: a port
+   * found free and left closed could be taken by the deployment the test starts, which then answered 404.
+   */
+  const closedPort = () => {
+    const host = Bun.listen({
+      hostname: "127.0.0.1",
+      port: 0,
+      socket: {
+        open: (s) => {
+          s.end();
+        },
+        data: () => {},
+      },
+    });
+    stops.push(() => host.stop(true));
+    return `http://127.0.0.1:${host.port}`;
+  };
 
   test("offline, a dashboard in the cache: dev warns and serves it", async () => {
     const home = tmp();

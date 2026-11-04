@@ -273,6 +273,11 @@ export async function allComponentPaths(db: Tx): Promise<Map<string | null, stri
   const rows = (await db.asSystem(() => db.query(COMPONENTS_TABLE).collect())).map((r) =>
     componentMeta(r as Record<string, unknown>),
   );
+  return componentPathsOf(rows);
+}
+
+/** The same, from the `_components` rows. */
+export function componentPathsOf(rows: ComponentMeta[]): Map<string | null, string[]> {
   const byId = new Map(rows.map((r) => [r._id, r]));
   const paths = new Map<string | null, string[]>();
   for (const r of rows) {

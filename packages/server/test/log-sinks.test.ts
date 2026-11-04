@@ -404,14 +404,17 @@ test("an S3 export's arguments, stored config and status, as Convex's binary ans
   expect(await refused({ bucket: null })).toEqual(body("invalid type: null, expected a string"));
   expect((await t.engine.query((db) => db.asSystem(() => db.query("_log_sinks").collect()))).length).toBe(0);
 
-  // Created: everything selected by default, no prefix; `pending` until the worker runs, as on Convex.
+  // Created: everything selected by default, no prefix; `pending` until the worker runs, as on Convex. The worker
+  // runs right after the commit: under load it may have made it `active` before the list (the `pending` is pinned by
+  // the test below, with the worker held back).
   const { id } = (await t.req("create_log_stream", { ...s3, bucket: "1.2.3.04" })).body;
   const listed = (await t.req("list_log_streams")).body;
+  expect(["pending", "active"]).toContain(listed[0]?.status.type);
   expect(listed).toEqual([
     {
       logStreamType: "s3Export",
       id,
-      status: { type: "pending" },
+      status: listed[0].status,
       bucket: "1.2.3.04",
       region: "us-east-1",
       accessKeyId: "AK",

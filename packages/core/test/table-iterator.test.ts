@@ -100,11 +100,14 @@ test("a snapshot the document window passed is refused", async () => {
   await e.mutation((db) => db.insert("items", { n: 1 }));
   const at = e.committer.visibleTs;
   // Nothing of `items` changes after it: it is refused before any of its documents is read.
-  await e.mutation((db) => db.insert("other", { n: 2 }));
   const r = e.retention!;
-  await r.advance();
-  await r.deleteIndexes();
-  await r.advance();
+  // The document window trails the index deleter's confirmed cursor: commits and passes until it is past `at`.
+  for (let i = 0; i < 50 && r.minDocumentTs <= at; i++) {
+    await e.mutation((db) => db.insert("other", { n: i }));
+    await r.advance();
+    await r.deleteIndexes();
+    await r.advance();
+  }
   expect(r.minDocumentTs).toBeGreaterThan(at);
   const it = new TableIterator(e, at, [e.catalog.tables.get("items")!], 3);
   const pages = it.pages(e.catalog.tables.get("items")!);

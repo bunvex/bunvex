@@ -8,7 +8,7 @@
 // value an in-process caller gets, and what a mutation's commit still takes from its transaction
 // (after-commit callbacks, the search indexes' derived data, created tables, commit timestamps). PR 2b and PR 3 move
 // those into the outcome as each kind of call leaves the thread.
-import { toJsonValue, type Value } from "@bunvex/values";
+import { hasCommitTs, toJsonValue, type Value } from "@bunvex/values";
 import {
   type CallKind,
   type CallOutcome,
@@ -26,7 +26,7 @@ import {
   type SessionRequestId,
   type SessionRequestOutcome,
 } from "./session-requests.ts";
-import type { Tx } from "./tx.ts";
+import { encodeDoc, type Tx } from "./tx.ts";
 
 /** How a transaction begins: everything a host needs to build it. */
 export type TxStart = {
@@ -168,8 +168,22 @@ export function outcomeOf(
     bytesRead: tx.usage.bytesRead,
     writes:
       kind === "mutation" && status === "ok" && tx.hasWrites
-        ? { ...tx.toWrites(), touches: tx.catalogTouches() }
+        ? {
+            ...tx.toWrites(),
+            touches: tx.catalogTouches(),
+            olds: tx.writtenDocs().map((w) => (w.old ? encodeDoc(w.old) : null)),
+          }
         : null,
+    creation: kind === "mutation" ? tx.creationCursor : 0,
+    // What the main thread's commit can only take from the transaction itself yet (STUDY-194 §11.2).
+    inThreadOnly:
+      kind === "mutation" &&
+      status === "ok" &&
+      (tx.createdTables.size > 0 ||
+        tx.afterCommitCallbacks.length > 0 ||
+        tx.hasCommitTs ||
+        tx.onCommitVisible !== null ||
+        hasCommitTs(run.ok ? run.value : null)),
   };
 }
 
@@ -302,7 +316,7 @@ export class CallRunner {
     else if (run.ok && session && "replayed" in (run.value as object)) {
       status = "replayed";
       result = JSON.stringify((run.value as { replayed: SessionRequestOutcome }).replayed);
-    } else if (run.ok && kind === "query") result = resultText(run.value);
+    } else if (run.ok) result = resultText(run.value);
     // The report stays a value in the thread; `run` makes it the outcome's text when the outcome crosses.
     return {
       outcome: outcomeOf(request.id, kind, run, status, result, run.ok ? null : bodies.encodeError(run.error)),
