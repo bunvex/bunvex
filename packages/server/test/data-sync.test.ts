@@ -18,6 +18,7 @@ import {
 } from "../src/data-sync.ts";
 import { Functions, mutation } from "../src/functions.ts";
 import { createServer } from "../src/server.ts";
+import { addComponents } from "./component-fixture.ts";
 
 const SECRET = "c1".repeat(32);
 const NAME = "data-sync-test";
@@ -281,7 +282,11 @@ test("a cursor behind the retention window is DataSyncCursorExpired", async () =
   const { cursor } = await untilUpToDate(t);
   await t.call("m:put", { table: "a", n: 1 });
   const real = t.engine.retention;
-  (t.engine as { retention: unknown }).retention = { minDocumentTs: t.engine.committer.visibleTs + 1n };
+  // The document window past the cursor; reads at the newest snapshot (the components' paths) stay in the index one.
+  (t.engine as { retention: unknown }).retention = {
+    minDocumentTs: t.engine.committer.visibleTs + 1n,
+    check: () => {},
+  };
   const r = await t.sync({ cursor });
   (t.engine as { retention: unknown }).retention = real;
   expect(r.body.code).toBe("DataSyncCursorExpired");
@@ -347,4 +352,41 @@ test("a by-id page out of the index retention window walks the log instead, from
   } finally {
     Object.assign(r, before);
   }
+});
+
+test("components (STUDY-204): every component's tables, each value and truncate with its path", async () => {
+  const t = await setup();
+  await t.call("m:put", { table: "a", n: 1 });
+  const ids = await addComponents(t.engine, { rootMessage: false });
+  const { pages, cursor } = await untilUpToDate(t);
+  // Each table truncated once, on the page it enters (in its tablet's walk order across pages).
+  const truncates = pages
+    .flatMap((p) => p.truncates)
+    .sort((x: any, y: any) => (x.component + "\0" + x.table < y.component + "\0" + y.table ? -1 : 1));
+  expect(truncates).toEqual([
+    { component: "", table: "a" },
+    { component: "", table: "b" },
+    { component: "counter", table: "counters" },
+    { component: "counter", table: "messages" },
+    { component: "counter/inner", table: "messages" },
+    { component: "second", table: "messages" },
+  ]);
+  const values = pages.flatMap((p) => p.values);
+  expect(values.map((v: any) => [v.component, v.table]).sort()).toEqual(
+    [
+      ["", "a"],
+      ["counter", "counters"],
+      ["counter", "messages"],
+      ["counter/inner", "messages"],
+      ["second", "messages"],
+    ].sort(),
+  );
+  // Then the log: a component's change with its path; a selection by component.
+  await t.engine.mutation((db) => db.inComponent(ids.inner, () => db.insert("messages", { body: "later" })));
+  const next = await t.sync({ cursor });
+  expect(next.body.values.map((v: any) => [v.component, v.table, v.value.body])).toEqual([
+    ["counter/inner", "messages", "later"],
+  ]);
+  const only = await untilUpToDate(t, undefined, { selection: { _other: "excluded", second: { _other: "included" } } });
+  expect([...new Set(only.pages.flatMap((p) => p.values).map((v: any) => v.component))]).toEqual(["second"]);
 });

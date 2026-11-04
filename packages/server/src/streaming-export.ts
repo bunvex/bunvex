@@ -6,8 +6,10 @@
 
 import type { DashboardShape } from "@bunvex/core";
 import {
+  allComponentPaths,
   compareInternalIds,
   type Engine,
+  formatComponentPath,
   hasRetention,
   internalIdBytes,
   internalIdOf,
@@ -133,9 +135,19 @@ function fieldsOf(o: Record<string, Value>, f: Format): string {
     .join(",");
 }
 
-/** A streamed document: `_component`, `_table`, `_ts` (and `_deleted`) first, then its fields in key order. */
-function docJson(table: string, tsNs: bigint, deleted: boolean | null, doc: Record<string, Value>, f: Format) {
-  const head = `"_component":"","_table":${JSON.stringify(table)},"_ts":${tsNs}${deleted === null ? "" : `,"_deleted":${deleted}`}`;
+/**
+ * A streamed document: `_component` (its component's path, `""` the root's), `_table`, `_ts` (and `_deleted`)
+ * first, then its fields in key order.
+ */
+function docJson(
+  component: string,
+  table: string,
+  tsNs: bigint,
+  deleted: boolean | null,
+  doc: Record<string, Value>,
+  f: Format,
+) {
+  const head = `"_component":${JSON.stringify(component)},"_table":${JSON.stringify(table)},"_ts":${tsNs}${deleted === null ? "" : `,"_deleted":${deleted}`}`;
   const body = fieldsOf(doc, f);
   return `{${head}${body ? `,${body}` : ""}}`;
 }
@@ -197,9 +209,9 @@ export function checkSelection(raw: unknown): Selection {
   return s;
 }
 
-/** Whether the selection takes `table` of the root component, and which of its columns. */
-export function tableSelection(s: Selection, table: string): Columns | null {
-  const comp = s[""] ?? s._other;
+/** Whether the selection takes `table` of component `component` (`""` the root's), and which of its columns. */
+export function tableSelection(s: Selection, component: string, table: string): Columns | null {
+  const comp = s[component] ?? s._other;
   if (comp === "excluded") return null;
   if (comp === "included") return { _other: "included" } as Columns;
   const t = ((comp as Tables)[table] ?? (comp as Tables)._other) as Columns | Inclusion;
@@ -222,12 +234,33 @@ export function pickColumns(doc: Record<string, Value>, cols: Columns): Record<s
 
 type Deps = { engine: Engine };
 
-/** The user tables a stream reads: active and hidden (an import's), not system ones, by tablet. */
-export function streamedTables(engine: Engine): TableDef[] {
-  const c = engine.catalog;
-  return [...c.tables.values(), ...c.hidden.values()]
-    .filter((t) => !t.name.startsWith("_"))
-    .sort((a, b) => compareInternalIds(a.id, b.id));
+/** A streamed table and its component's path (`""` the root's). */
+export type StreamedTable = { t: TableDef; component: string };
+
+/**
+ * Every component's path at `at` (Convex's `component_ids_to_paths`), by its `_components` id, the root's under
+ * null as `""`: a namespace not there (a component whose chain is broken) is not streamed.
+ */
+export async function componentPathsAt(engine: Engine, at?: bigint): Promise<Map<string | null, string>> {
+  const paths = await engine.query((db) => allComponentPaths(db), undefined, undefined, undefined, at);
+  return new Map([...paths].map(([id, path]) => [id, formatComponentPath(path)]));
+}
+
+/**
+ * The user tables a stream reads in every namespace with a component path: active and hidden (an import's), not
+ * system ones, by tablet (Convex's `legacy_streaming_export_table_filter` over the whole table mapping).
+ */
+export function streamedTables(engine: Engine, paths: Map<string | null, string>): StreamedTable[] {
+  const out: StreamedTable[] = [];
+  const add = (c: { tables: Map<string, TableDef>; hidden: Map<TabletId, TableDef> }, component: string) => {
+    for (const t of [...c.tables.values(), ...c.hidden.values()])
+      if (!t.name.startsWith("_")) out.push({ t, component });
+  };
+  for (const [id, component] of paths) {
+    const c = id === null ? engine.catalog : engine.catalog.components.get(id);
+    if (c) add(c, component);
+  }
+  return out.sort((a, b) => compareInternalIds(a.t.id, b.t.id));
 }
 
 /** `list_snapshot`: one table's documents at `snapshot`, by id, a page at a time. */
@@ -258,15 +291,23 @@ export async function listSnapshot(deps: Deps, args: Record<string, unknown>): P
       );
     }
   }
-  const tables = streamedTables(engine)
-    .map((t) => ({ t, cols: tableSelection(selection, t.name) }))
+  // The components as of the snapshot, as Convex's `snapshot_component_paths(snapshot)`.
+  let paths: Map<string | null, string>;
+  try {
+    paths = await componentPathsAt(engine, snapshotNs);
+  } catch (e) {
+    if (e instanceof OutOfRetentionError) throw tooOld(snapshotNs);
+    throw e;
+  }
+  const tables = streamedTables(engine, paths)
+    .map(({ t, component }) => ({ t, component, cols: tableSelection(selection, component, t.name) }))
     .filter((x) => x.cols !== null && (cursor === null || compareInternalIds(x.t.id, cursor.tablet) >= 0));
   const out = (values: string[], next: string | null) => {
     checkFormat();
     return `{"values":[${values.join(",")}],"snapshot":${snapshotNs},"cursor":${next === null ? "null" : JSON.stringify(next)},"hasMore":${next !== null}}`;
   };
   if (tables.length === 0) return out([], null);
-  const { t, cols } = tables[0]!;
+  const { t, component, cols } = tables[0]!;
   const after = cursor !== null && cursor.tablet === t.id ? cursor.id : null;
   let page: Record<string, Value>[];
   try {
@@ -298,7 +339,7 @@ export async function listSnapshot(deps: Deps, args: Record<string, unknown>): P
     : null;
   const values = page.map((d, i) => {
     const v = versions?.[i];
-    return docJson(t.name, v ? v.ts : snapshotNs, null, pickColumns(d, cols!), f);
+    return docJson(component, t.name, v ? v.ts : snapshotNs, null, pickColumns(d, cols!), f);
   });
   if (page.length >= SNAPSHOT_LIST_LIMIT)
     return out(values, JSON.stringify({ tablet: t.id, id: page[page.length - 1]!._id }));
@@ -320,6 +361,8 @@ export async function documentDeltas(deps: Deps, args: Record<string, unknown>):
   const store = engine.persistence;
   if (!hasRetention(store)) throw new Error("this persistence has no document log");
   const upper = engine.committer.visibleTs;
+  // Each table's component as of the upper bound (Convex's `component_paths` at `upper_bound`).
+  const paths = await componentPathsAt(engine, upper);
   const values: string[] = [];
   let rowsRead = 0;
   let after = cursorNs;
@@ -339,17 +382,21 @@ export async function documentDeltas(deps: Deps, args: Record<string, unknown>):
       commit.sort((a, b) => compareInternalIds(a.table, b.table) || compareInternalIds(a.id, b.id));
       for (const r of commit) {
         rowsRead++;
-        const t = engine.catalog.byTablet(r.table);
+        const t = engine.catalog.anyTablet(r.table);
         if (!t || t.name.startsWith("_") || engine.catalog.deleting.has(r.table)) continue;
-        const cols = tableSelection(selection, t.name);
+        // A table of a namespace with no component path is orphaned, not streamed (as Convex's).
+        const component = paths.get(t.namespace ?? null);
+        if (component === undefined) continue;
+        const cols = tableSelection(selection, component, t.name);
         if (!cols) continue;
         // The log keys a document by its internal id; apps know it by its id.
-        if (r.deleted) values.push(docJson(t.name, ts, true, { _id: encodeId(t.number, internalIdBytes(r.id)) }, f));
+        if (r.deleted)
+          values.push(docJson(component, t.name, ts, true, { _id: encodeId(t.number, internalIdBytes(r.id)) }, f));
         else {
           const version = await store.get(r.table, r.id, ts);
           if (version === null) continue;
           const doc = fromJsonValue(JSON.parse(version.json) as JSONValue) as Record<string, Value>;
-          values.push(docJson(t.name, ts, false, pickColumns(doc, cols), f));
+          values.push(docJson(component, t.name, ts, false, pickColumns(doc, cols), f));
         }
       }
       if (rowsRead >= DOCUMENT_DELTAS_LIMIT || values.length >= DOCUMENT_DELTAS_LIMIT) newCursor = ts;
@@ -370,13 +417,19 @@ export async function documentDeltas(deps: Deps, args: Record<string, unknown>):
 
 // ---------------------------------------------------------------- shapes: json_schemas, column names
 
-/** Each streamed user table's reduced shape now (computed from its documents, as `/api/shapes2`). */
+/**
+ * Each active user table's reduced shape in namespace `id` (null: the root's) now (computed from its documents, as
+ * `/api/shapes2`), its ids named in its namespace.
+ */
 async function shapes(
   engine: Engine,
   at = engine.committer.visibleTs,
+  id: string | null = null,
 ): Promise<{ name: string; shape: DashboardShape }[]> {
   const out: { name: string; shape: DashboardShape }[] = [];
-  const active = [...engine.catalog.tables.values()].filter((t) => !t.name.startsWith("_"));
+  const catalog = id === null ? engine.catalog : engine.catalog.components.get(id);
+  if (!catalog) return out;
+  const active = [...catalog.tables.values()].filter((t) => !t.name.startsWith("_"));
   for (const t of active.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
     const b = new UnionBuilder();
     let last: string | null = null;
@@ -398,7 +451,7 @@ async function shapes(
       if (page.length < 1000) break;
       last = page[page.length - 1]!._id as string;
     }
-    out.push({ name: t.name, shape: reduceShape(b.build(), (n) => engine.catalog.publicNameOf(n)) });
+    out.push({ name: t.name, shape: reduceShape(b.build(), (n) => catalog.publicNameOf(n)) });
   }
   return out;
 }
@@ -587,11 +640,14 @@ function schemaFromActive(active: SchemaJson | null, table: string, f: Format): 
   return out;
 }
 
-/** The active schema at `at`, as stored (STUDY-134), or null. */
-async function activeSchemaAt(engine: Engine, at: bigint): Promise<SchemaJson | null> {
+/** Namespace `id`'s (null: the root's) active schema at `at`, as stored (STUDY-134), or null. */
+async function activeSchemaAt(engine: Engine, at: bigint, id: string | null = null): Promise<SchemaJson | null> {
   const text = await engine.query(
     async (db) => {
-      const rows = (await db.asSystem(() => db.query(SCHEMAS_TABLE).collect())) as Record<string, unknown>[];
+      const rows = (await db.inComponent(id, () => db.asSystem(() => db.query(SCHEMAS_TABLE).collect()))) as Record<
+        string,
+        unknown
+      >[];
       return (rows.find((r) => schemaStateOf(r) === "active")?.schema as string | undefined) ?? null;
     },
     undefined,
@@ -603,43 +659,82 @@ async function activeSchemaAt(engine: Engine, at: bigint): Promise<SchemaJson | 
 }
 
 /**
- * `json_schemas`: each active user table's JSON Schema, from its inferred shape, or from the active schema when
- * the shape is not an object.
+ * `json_schemas`: each active user table's JSON Schema, from its inferred shape, or from its namespace's active
+ * schema when the shape is not an object; every component's (Convex's `all_component_paths`, the root's first),
+ * under its path with `byComponent`, else in one map, a component's table replacing a same-named one before it.
  */
 export async function jsonSchemas(deps: Deps, q: URLSearchParams): Promise<unknown> {
   const { delta, byComponent } = jsonSchemasArgs(q);
   const f = parseFormat(q.get("format"));
   const at = deps.engine.committer.visibleTs;
-  let active: SchemaJson | null | undefined;
   const out: Record<string, unknown> = {};
-  for (const { name, shape } of await shapes(deps.engine, at)) {
-    let schema: Record<string, unknown>;
-    if (shape.type === "Never") schema = objectSchema(systemFields(name));
-    else if (shape.type === "Object") schema = shapeSchema(shape, f) as Record<string, unknown>;
-    else {
-      if (active === undefined) active = await activeSchemaAt(deps.engine, at);
-      schema = schemaFromActive(active, name, f);
+  for (const [id, component] of await namespacesInOrder(deps.engine, at)) {
+    let into = out;
+    if (byComponent) {
+      into = {};
+      out[component] = into;
     }
-    if (delta)
-      Object.assign(schema.properties as object, {
-        _table: { type: "string" },
-        _component: { type: "string" },
-        _ts: { type: "integer" },
-        _deleted: { type: "boolean" },
-      });
-    schema.$schema = "http://json-schema.org/draft-07/schema#";
-    out[name] = schema;
+    let active: SchemaJson | null | undefined;
+    for (const { name, shape } of await shapes(deps.engine, at, id)) {
+      let schema: Record<string, unknown>;
+      if (shape.type === "Never") schema = objectSchema(systemFields(name));
+      else if (shape.type === "Object") schema = shapeSchema(shape, f) as Record<string, unknown>;
+      else {
+        if (active === undefined) active = await activeSchemaAt(deps.engine, at, id);
+        schema = schemaFromActive(active, name, f);
+      }
+      if (delta)
+        Object.assign(schema.properties as object, {
+          _table: { type: "string" },
+          _component: { type: "string" },
+          _ts: { type: "integer" },
+          _deleted: { type: "boolean" },
+        });
+      schema.$schema = "http://json-schema.org/draft-07/schema#";
+      into[name] = schema;
+    }
   }
-  return byComponent ? { "": out } : out;
+  return out;
 }
 
-/** `get_table_column_names`: each user table's top-level fields. */
+/**
+ * Every namespace with a component path at `at`, in Convex's `ComponentId` order: the root's first, then each
+ * component by its id's internal bytes.
+ */
+async function namespacesInOrder(engine: Engine, at: bigint): Promise<[string | null, string][]> {
+  return [...(await componentPathsAt(engine, at))].sort(([a], [b]) =>
+    a === null ? -1 : b === null ? 1 : compareInternalIds(internalIdOf(a), internalIdOf(b)),
+  );
+}
+
+/**
+ * `get_table_column_names`: each user table's top-level fields, by component path (Convex's
+ * `BTreeMap<ComponentPath, _>`: in path order, a component without tables absent).
+ */
 export async function tableColumnNames(deps: Deps): Promise<unknown> {
-  const tables = (await shapes(deps.engine)).map(({ name, shape }) => ({
-    name,
-    columns: shape.type === "Object" ? shape.fields.map((x) => x.fieldName).sort(byteOrder) : ["_creationTime", "_id"],
-  }));
-  return { byComponent: { "": tables } };
+  const at = deps.engine.committer.visibleTs;
+  const byPath: [string, { name: string; columns: string[] }[]][] = [];
+  for (const [id, component] of await namespacesInOrder(deps.engine, at)) {
+    const tables = (await shapes(deps.engine, at, id)).map(({ name, shape }) => ({
+      name,
+      columns:
+        shape.type === "Object" ? shape.fields.map((x) => x.fieldName).sort(byteOrder) : ["_creationTime", "_id"],
+    }));
+    if (tables.length) byPath.push([component, tables]);
+  }
+  byPath.sort(([a], [b]) => comparePathStrings(a, b));
+  return { byComponent: Object.fromEntries(byPath) };
+}
+
+/** Component paths as `a/b` strings in Convex's `ComponentPath` order: name by name, the root's (`""`) first. */
+export function comparePathStrings(a: string, b: string): number {
+  const x = a === "" ? [] : a.split("/");
+  const y = b === "" ? [] : b.split("/");
+  for (let i = 0; i < Math.min(x.length, y.length); i++) {
+    const c = byteOrder(x[i]!, y[i]!);
+    if (c) return c;
+  }
+  return x.length - y.length;
 }
 
 /**

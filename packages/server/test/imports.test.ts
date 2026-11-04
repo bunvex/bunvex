@@ -6,7 +6,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { componentRow, defineSchema, defineTable, Engine, type EngineSchema, FILE_STORAGE_TABLE } from "@bunvex/core";
+import { defineSchema, defineTable, Engine, type EngineSchema, FILE_STORAGE_TABLE } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { MemoryBlobStore } from "@bunvex/file-storage";
 import { encodeId, toExportJson, type Value, v } from "@bunvex/values";
@@ -15,6 +15,7 @@ import { Functions, mutation } from "../src/functions.ts";
 import { confirmationMessage, parseCsvCell, renderTableChanges } from "../src/import-parse.ts";
 import { createServer } from "../src/server.ts";
 import { ZipFileWriter } from "../src/zip-writer.ts";
+import { addComponents } from "./component-fixture.ts";
 
 const SECRET = "57".repeat(32);
 const NAME = "import-test";
@@ -711,44 +712,12 @@ describe("round trip", () => {
   });
 });
 
-/**
- * Components as a push leaves them (STUDY-204): `counter` and `second` under the root, `inner` under `counter`, each
- * namespace with its own `messages` (and `counter` its `counters` and a file), written in its namespace.
- */
-async function addComponents(t: Awaited<ReturnType<typeof setup>>) {
-  const { engine } = t;
-  const ids = {
-    counter: await engine.initializeComponentNamespace(),
-    second: await engine.initializeComponentNamespace(),
-    inner: await engine.initializeComponentNamespace(),
-  };
-  await engine.mutation((db) =>
-    db.asSystem(async () => {
-      const definitionId = await db.insert("_component_definitions", { path: "c" } as never);
-      const root = await db.insert(
-        "_components",
-        componentRow({ definitionId, parent: null, name: null, state: "active", httpPrefix: null }) as never,
-      );
-      const add = (id: string, parent: string, name: string) =>
-        db.importInsert(engine.catalog.table("_components")!, {
-          _id: id,
-          ...componentRow({ definitionId, parent, name, args: [], env: [], state: "active", httpPrefix: null }),
-        });
-      await add(ids.counter, root, "counter");
-      await add(ids.second, root, "second");
-      await add(ids.inner, ids.counter, "inner");
-    }),
-  );
-  await engine.mutation(async (db) => {
-    for (const [name, id] of Object.entries(ids))
-      await db.inComponent(id, async () => {
-        await db.insert("messages", { body: `in ${name}` });
-        if (name === "counter") await db.insert("counters", { name, value: 1n });
-      });
-  });
+/** The shared components, and a file in `counter`'s namespace. */
+async function addComponentsWithFile(t: Awaited<ReturnType<typeof setup>>) {
+  const ids = await addComponents(t.engine, { rootMessage: false });
   const body = new TextEncoder().encode("component file");
   const { key, sha256 } = await t.files.put(body);
-  await engine.mutation((db) =>
+  await t.engine.mutation((db) =>
     db.inComponent(ids.counter, () =>
       db.asSystem(() =>
         db.insert(FILE_STORAGE_TABLE, {
@@ -795,7 +764,7 @@ const docsIn = (t: Awaited<ReturnType<typeof setup>>, id: string | null, table: 
 describe("components (STUDY-204)", () => {
   test("export → import into an empty deployment: each component's documents, numbers and files, created unmounted", async () => {
     const src = await setup();
-    const srcIds = await addComponents(src);
+    const srcIds = await addComponentsWithFile(src);
     const zip = await exportZip(src);
 
     const dst = await setup();
@@ -882,7 +851,7 @@ describe("components (STUDY-204)", () => {
 
   test("`componentPath`: a table imported into that component's namespace; a missing one is created", async () => {
     const t = await setup();
-    const ids = await addComponents(t);
+    const ids = await addComponentsWithFile(t);
     const r = await t.importNow(
       '{"body":"imported"}\n',
       "format=jsonLines&tableName=messages&mode=append&componentPath=second",
@@ -898,7 +867,7 @@ describe("components (STUDY-204)", () => {
 
   test("replaceAll: the tables the import lacks are deleted in every namespace", async () => {
     const t = await setup();
-    const ids = await addComponents(t);
+    const ids = await addComponentsWithFile(t);
     await t.functions.runMutation("m:insert", { table: "rootOnly", doc: {} });
     await t.engine.mutation((db) => db.inComponent(ids.second, () => db.insert("extra", { n: 1 })));
     const zip = await zipOf([

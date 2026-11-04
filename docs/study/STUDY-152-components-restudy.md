@@ -251,7 +251,7 @@ each step writes its own tests and checks against these):
 | 7 | Scheduler, crons, storage, HTTP mounts, env per component (STUDY-157; search and vector indexes too) | B4–B8, A4, A16, A17 |
 | 8 | bunvex's own components (C1, C7; [STUDY-158](STUDY-158-own-components.md)) | each against its Convex package's behaviour |
 | 9 | Dashboard and CLI flags (DV-224, DV-391), with sandbox-86 | — |
-| 10 | Export, import, streaming export (DV-215; STUDY-204: export built) | — |
+| 10 | Export, import, streaming export (DV-215; built: STUDY-204) | — |
 
 Not covered by those tests, and needing oracles from the binary: env, `httpPrefix`, nesting beyond one level,
 identity, the depth limit, the pagination and Node refusals, unmount and delete, crons in a component. Steps 1–3

@@ -9,6 +9,7 @@ import { adminKeyCipherKey, issueAdminKey } from "../src/admin-keys.ts";
 import { Functions, mutation } from "../src/functions.ts";
 import { createServer } from "../src/server.ts";
 import { writeValue } from "../src/streaming-export.ts";
+import { addComponents } from "./component-fixture.ts";
 
 const SECRET = "8d".repeat(32);
 const NAME = "export-test";
@@ -365,7 +366,7 @@ test("errors, access, and exact nanosecond timestamps over POST", async () => {
   expect((await t.get("list_snapshot", { snapshot: old })).body.code).toBe("SnapshotTooOld");
   // A cursor below the document retention window.
   const realRetention = t.engine.retention;
-  (t.engine as { retention: unknown }).retention = { minDocumentTs: t.engine.committer.visibleTs };
+  (t.engine as { retention: unknown }).retention = { minDocumentTs: t.engine.committer.visibleTs, check: () => {} };
   const expired = await t.get("document_deltas", { cursor: "1000" });
   (t.engine as { retention: unknown }).retention = realRetention;
   expect(expired.status).toBe(400);
@@ -378,7 +379,7 @@ test("errors, access, and exact nanosecond timestamps over POST", async () => {
   expect((await t.get("list_snapshot", { format: "xml", snapshot: future })).body.code).toBe("SnapshotTooNew");
   expect((await t.get("list_snapshot", { format: "xml", snapshot: old })).body.code).toBe("SnapshotTooOld");
   expect((await t.get("list_snapshot", { format: "xml", cursor: "nope" })).body.code).toBe("InvalidListSnapshotCursor");
-  (t.engine as { retention: unknown }).retention = { minDocumentTs: t.engine.committer.visibleTs };
+  (t.engine as { retention: unknown }).retention = { minDocumentTs: t.engine.committer.visibleTs, check: () => {} };
   const both = await t.get("document_deltas", { cursor: "1000", format: "xml" });
   (t.engine as { retention: unknown }).retention = realRetention;
   expect(both.body.code).toBe("InvalidWindowToReadDocuments");
@@ -398,4 +399,60 @@ test("errors, access, and exact nanosecond timestamps over POST", async () => {
     }),
   );
   expect(Object.keys(JSON.parse(sel.text).values[0])).toEqual(["_component", "_table", "_ts", "_id"]);
+});
+
+describe("components (STUDY-204)", () => {
+  const PATHS = ["", "counter", "counter/inner", "second"];
+
+  test("list_snapshot and document_deltas: every component's tables, `_component` its path; selections by component", async () => {
+    const t = await setup();
+    await t.call("m:put", { table: "a", n: 1, doc: { at: "root" } });
+    const ids = await addComponents(t.engine, { rootMessage: false });
+    const all = await listAll(t);
+    const seen = all.values.map((v: any) => [v._component, v._table, v.body ?? v.name ?? v.at]).sort();
+    expect(seen).toEqual(
+      [
+        ["", "a", "root"],
+        ["counter", "counters", "counter"],
+        ["counter", "messages", "in counter"],
+        ["counter/inner", "messages", "in inner"],
+        ["second", "messages", "in second"],
+      ].sort(),
+    );
+    // A component by its path, and a table of one.
+    const counter = await listAll(t, { component: "counter" });
+    expect([...new Set(counter.values.map((v: any) => v._component))]).toEqual(["counter"]);
+    expect(counter.values.map((v: any) => v._table).sort()).toEqual(["counters", "messages"]);
+    const inner = await listAll(t, { tableName: "messages", component: "counter/inner" });
+    expect(inner.values.map((v: any) => [v._component, v.body])).toEqual([["counter/inner", "in inner"]]);
+    // The root's tables only when the root is selected.
+    const root = await listAll(t, { component: "" });
+    expect(root.values.map((v: any) => v._component)).toEqual([""]);
+
+    // After the snapshot: a change in a component carries its path.
+    await t.engine.mutation((db) => db.inComponent(ids.second, () => db.insert("messages", { body: "later" })));
+    const deltas = await t.get("document_deltas", { cursor: all.snapshot });
+    expect(deltas.body.values.map((v: any) => [v._component, v._table, v.body, v._deleted])).toEqual([
+      ["second", "messages", "later", false],
+    ]);
+    const excluded = await t.get("document_deltas", { cursor: all.snapshot, component: "counter" });
+    expect(excluded.body.values).toEqual([]);
+  });
+
+  test("json_schemas and get_table_column_names: by component path", async () => {
+    const t = await setup();
+    await addComponents(t.engine, { rootMessage: false });
+    const by = (await t.get("json_schemas", { byComponent: "true" })).body;
+    expect(Object.keys(by).sort()).toEqual(PATHS);
+    expect(Object.keys(by.counter).sort()).toEqual(["counters", "messages"]);
+    expect(Object.keys(by[""]).sort()).toEqual(["a", "b"]);
+    expect(by.counter.messages.properties.body).toEqual({ type: "string" });
+    // Without `byComponent`, one map: every component's tables in it.
+    const flat = (await t.get("json_schemas")).body;
+    expect(Object.keys(flat).sort()).toEqual(["a", "b", "counters", "messages"]);
+    const columns = (await t.get("get_table_column_names")).body.byComponent;
+    expect(Object.keys(columns)).toEqual(PATHS);
+    expect(columns.counter.map((x: any) => x.name).sort()).toEqual(["counters", "messages"]);
+    expect(columns["counter/inner"]).toEqual([{ name: "messages", columns: ["_creationTime", "_id", "body"] }]);
+  });
 });
