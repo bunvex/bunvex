@@ -15,6 +15,7 @@ import { join } from "node:path";
 import {
   type AuditLogActor,
   allComponentPaths,
+  compareInternalIds,
   type Engine,
   EXPORTS_TABLE,
   FILE_STORAGE_TABLE,
@@ -22,6 +23,7 @@ import {
   formatBytes,
   formatComponentPath,
   insertAuditLogEvents,
+  internalIdOf,
   knob,
   SYSTEM_ACTOR,
   secondsKnob,
@@ -328,7 +330,10 @@ export class ExportService {
       // reaches the root, mounted or not, under its path's prefix (`_components/a/_components/b/`).
       const paths = await this.engine.query((db) => allComponentPaths(db), undefined, undefined, undefined, at);
       const namespaces: { id: string | null; prefix: string; in: string; tables: TableDef[] }[] = [];
-      for (const [id, path] of [...paths].sort(([a], [b]) => (a === null ? -1 : b === null ? 1 : a < b ? -1 : 1))) {
+      // In Convex's `ComponentId` order: the root's first, then each component by its id's internal bytes.
+      const order = ([a]: [string | null, unknown], [b]: [string | null, unknown]) =>
+        a === null ? -1 : b === null ? 1 : compareInternalIds(internalIdOf(a), internalIdOf(b));
+      for (const [id, path] of [...paths].sort(order)) {
         const space = id === null ? catalog : catalog.components.get(id);
         if (!space) continue;
         namespaces.push({

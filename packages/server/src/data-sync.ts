@@ -24,13 +24,15 @@ import {
   type TabletId,
   type Tx,
 } from "@bunvex/core";
-import { decodeId, encodeId, fromJsonValue, type JSONValue, type Value } from "@bunvex/values";
+import { compareUtf8, decodeId, encodeId, fromJsonValue, type JSONValue, type Value } from "@bunvex/values";
 import { auditActor } from "./audit-log.ts";
 import { type BodyShape, checkJsonBody } from "./json-body.ts";
 import { queryArgs } from "./query-args.ts";
 import {
   type Columns,
   checkSelection,
+  comparePathStrings,
+  componentPathsAt,
   pickColumns,
   type Selection,
   StreamingExportError,
@@ -276,15 +278,17 @@ export function clientPrefix(req: Request): string {
 
 // ---------------------------------------------------------------- one page
 
-type Target = { t: TableDef; cols: Columns };
-export type DataSyncValue = { table: string; ts: bigint; deleted: boolean; json: string };
+/** A selected table, its component's path (`""` the root's) and its columns. */
+type Target = { t: TableDef; component: string; cols: Columns };
+export type DataSyncValue = { component: string; table: string; ts: bigint; deleted: boolean; json: string };
 export type DataSyncStatus =
   | { type: "snapshotting" }
   | { type: "stale"; snapshotTs: bigint }
   | { type: "upToDate"; snapshotTs: bigint };
 export type DataSyncPage = {
   status: DataSyncStatus;
-  truncates: string[];
+  /** By component path, then table (Convex's `BTreeSet<(ComponentPath, TableName)>`). */
+  truncates: { component: string; table: string }[];
   values: DataSyncValue[];
   cursor: DataSyncCursor;
   targets: Target[];
@@ -295,23 +299,24 @@ export type DataSyncPage = {
  * is left out, as Convex's `include_hidden: false` since cb8be0f: its rows would land in the table it replaces while
  * it is written; once active, it is a new tablet, truncated and walked anew. Streaming export keeps hidden tables.
  */
-export function dataSyncTargets(engine: Engine, selection: Selection): Target[] {
+export async function dataSyncTargets(engine: Engine, selection: Selection, at?: bigint): Promise<Target[]> {
   const out: Target[] = [];
-  const hidden = new Set(engine.catalog.hidden.values());
-  for (const t of streamedTables(engine)) {
-    if (hidden.has(t)) continue;
+  // Every namespace with a component path (Convex's `ResolvedStreamingExportSelection` over the whole mapping).
+  for (const { t, component } of streamedTables(engine, await componentPathsAt(engine, at))) {
+    const space = t.namespace === undefined ? engine.catalog : engine.catalog.components.get(t.namespace);
+    if (space?.hidden.has(t.id)) continue;
     let cols: Columns | null;
     try {
-      cols = tableSelection(selection, t.name);
+      cols = tableSelection(selection, component, t.name);
     } catch (e) {
       throw bad("InvalidDataSyncSelection", `Invalid selection: ${(e as Error).message}`);
     }
-    if (cols) out.push({ t, cols });
+    if (cols) out.push({ t, component, cols });
   }
   return out;
 }
 
-const ref = (t: TableDef): TabletRef => ({ tablet: t.id, component: "", table: t.name });
+const ref = (x: Target): TabletRef => ({ tablet: x.t.id, component: x.component, table: x.t.name });
 /** Ids in `by_id`'s order (the walk's): the id strings' byte order (ASCII). */
 const compareIds = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
@@ -323,7 +328,7 @@ function reconcile(c: DataSyncCursor, targets: Target[]): DataSyncCursor {
   const nextUnsynced = () => {
     const done = new Set(synced.map((s) => s.tablet));
     const next = targets.find((x) => !done.has(x.t.id));
-    return next ? { ...ref(next.t), currentId: null, docsSynced: 0 } : null;
+    return next ? { ...ref(next), currentId: null, docsSynced: 0 } : null;
   };
   if (current !== null && !targeted.has(current.tablet)) current = nextUnsynced();
   else if (current === null) current = nextUnsynced();
@@ -347,7 +352,7 @@ export async function dataSyncPage(
   limits: DataSyncLimits = DATA_SYNC_LIMITS,
 ): Promise<DataSyncPage> {
   const latest = engine.committer.visibleTs;
-  const targets = dataSyncTargets(engine, selection);
+  const targets = await dataSyncTargets(engine, selection, latest);
   const byTablet = new Map(targets.map((x) => [x.t.id, x]));
   if (input !== null && input.syncedTs > latest)
     throw bad("InvalidDataSyncCursor", "data sync cursor is ahead of the deployment's latest timestamp");
@@ -375,10 +380,14 @@ export async function dataSyncPage(
     if (e instanceof OutOfRetentionError) throw expired();
     throw e;
   }
-  const names = new Set<string>();
+  const names = new Map<string, { component: string; table: string }>();
   for (const t of [...c.synced, ...(c.current ? [c.current] : [])])
-    if (!trackedBefore.has(t.tablet)) names.add(t.table);
-  return { status: statusOf(c, latest), truncates: [...names].sort(), values, cursor: c, targets };
+    if (!trackedBefore.has(t.tablet))
+      names.set(`${t.component}\0${t.table}`, { component: t.component, table: t.table });
+  const truncates = [...names.values()].sort(
+    (a, b) => comparePathStrings(a.component, b.component) || compareUtf8(a.table, b.table),
+  );
+  return { status: statusOf(c, latest), truncates, values, cursor: c, targets };
 }
 
 async function byIdPage(
@@ -412,7 +421,13 @@ async function byIdPage(
   let taken = 0;
   for (const [i, d] of docs.entries()) {
     const json = writeValue(pickColumns(d, target.cols), "export");
-    values.push({ table: cur.table, ts: versions?.[i]?.ts ?? c.syncedTs, deleted: false, json });
+    values.push({
+      component: cur.component,
+      table: cur.table,
+      ts: versions?.[i]?.ts ?? c.syncedTs,
+      deleted: false,
+      json,
+    });
     bytes += json.length;
     taken++;
     if (bytes >= limits.pageBytes) break;
@@ -432,7 +447,7 @@ async function byIdPage(
     ...c,
     numDocsSynced,
     synced,
-    current: next ? { ...ref(next.t), currentId: null, docsSynced: 0 } : null,
+    current: next ? { ...ref(next), currentId: null, docsSynced: 0 } : null,
   };
 }
 
@@ -507,7 +522,7 @@ async function tsPage(
               return raw === undefined ? null : docValue(raw, target.cols);
             })();
         if (json === null) continue;
-        out.push({ table: target.t.name, ts, deleted: r.deleted, json });
+        out.push({ component: target.component, table: target.t.name, ts, deleted: r.deleted, json });
         commitBytes += json.length;
       }
       // A commit is never split; past the limits only a first commit is taken whole.
@@ -723,9 +738,10 @@ export async function dataSync(
       ? `{"type":"snapshotting"}`
       : `{"type":${JSON.stringify(page.status.type)},"snapshotTs":${page.status.snapshotTs}}`;
   const values = page.values.map(
-    (v) => `{"component":"","table":${JSON.stringify(v.table)},"ts":${v.ts},"deleted":${v.deleted},"value":${v.json}}`,
+    (v) =>
+      `{"component":${JSON.stringify(v.component)},"table":${JSON.stringify(v.table)},"ts":${v.ts},"deleted":${v.deleted},"value":${v.json}}`,
   );
-  return `{"status":${status},"truncates":[${page.truncates.map((t) => `{"component":"","table":${JSON.stringify(t)}}`).join(",")}],"values":[${values.join(",")}],"syncId":${JSON.stringify(page.cursor.syncId)},"pagination":{"hasMore":true,"nextCursor":${JSON.stringify(sealCursor(engine, page.cursor))}}}`;
+  return `{"status":${status},"truncates":[${page.truncates.map((t) => `{"component":${JSON.stringify(t.component)},"table":${JSON.stringify(t.table)}}`).join(",")}],"values":[${values.join(",")}],"syncId":${JSON.stringify(page.cursor.syncId)},"pagination":{"hasMore":true,"nextCursor":${JSON.stringify(sealCursor(engine, page.cursor))}}}`;
 }
 
 /** `POST /api/data_sync_cursor_from_deltas` `{cursor: ns, selection?}`: a sync that continues a document_deltas one. */
@@ -744,13 +760,13 @@ export async function cursorFromDeltas(
   if (typeof raw !== "string" || !/^\d+$/.test(raw))
     throw bad("InvalidDataSyncCursor", "The document_deltas cursor is not a valid timestamp");
   const ts = BigInt(raw);
-  const targets = dataSyncTargets(engine, selectionArg(body.selection));
+  const targets = await dataSyncTargets(engine, selectionArg(body.selection));
   if (ts > engine.committer.visibleTs)
     throw bad("InvalidDataSyncCursor", "document_deltas cursor is ahead of the deployment's latest timestamp");
   if (ts < (engine.retention?.minDocumentTs ?? 0n)) throw expired();
   const cursor: DataSyncCursor = {
     syncedTs: ts,
-    synced: targets.map((x) => ref(x.t)),
+    synced: targets.map(ref),
     current: null,
     syncId: `${prefix}${crypto.randomUUID()}`,
     numDocsSynced: 0,

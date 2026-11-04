@@ -5,14 +5,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  componentRow,
-  DEPLOYMENT_AUDIT_LOG_TABLE,
-  defineSchema,
-  defineTable,
-  Engine,
-  FILE_STORAGE_TABLE,
-} from "@bunvex/core";
+import { DEPLOYMENT_AUDIT_LOG_TABLE, defineSchema, defineTable, Engine, FILE_STORAGE_TABLE } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { MemoryBlobStore } from "@bunvex/file-storage";
 import { fromExportJson, v } from "@bunvex/values";
@@ -20,6 +13,7 @@ import { adminKeyCipherKey, issueAdminKey } from "../src/admin-keys.ts";
 import { EXPORT_README, ExportService } from "../src/exports.ts";
 import { Functions, mutation } from "../src/functions.ts";
 import { createServer } from "../src/server.ts";
+import { addComponents } from "./component-fixture.ts";
 
 const SECRET = "56".repeat(32);
 const NAME = "export-test";
@@ -108,45 +102,6 @@ async function unzip(bytes: ArrayBuffer) {
   const names = (await Bun.file(list).text()).trim().split("\n");
   const read = (name: string) => readFileSync(join(out, name), "utf8");
   return { names, read };
-}
-
-/**
- * Components as a push leaves them: `counter` and `second` under the root, `inner` under `counter`, each namespace
- * with its own `messages` (and `counter` its `counters`), one document each, written in its namespace; the root's
- * `messages` has one too.
- */
-async function addComponents(engine: Engine) {
-  const ids = {
-    counter: await engine.initializeComponentNamespace(),
-    second: await engine.initializeComponentNamespace(),
-    inner: await engine.initializeComponentNamespace(),
-  };
-  await engine.mutation((db) =>
-    db.asSystem(async () => {
-      const definitionId = await db.insert("_component_definitions", { path: "c" } as never);
-      const root = await db.insert(
-        "_components",
-        componentRow({ definitionId, parent: null, name: null, state: "active", httpPrefix: null }) as never,
-      );
-      const add = (id: string, parent: string, name: string) =>
-        db.importInsert(engine.catalog.table("_components")!, {
-          _id: id,
-          ...componentRow({ definitionId, parent, name, args: [], env: [], state: "active", httpPrefix: null }),
-        });
-      await add(ids.counter, root, "counter");
-      await add(ids.second, root, "second");
-      await add(ids.inner, ids.counter, "inner");
-    }),
-  );
-  await engine.mutation(async (db) => {
-    await db.insert("messages", { text: "root" });
-    for (const [name, id] of Object.entries(ids))
-      await db.inComponent(id, async () => {
-        await db.insert("messages", { body: `in ${name}` });
-        if (name === "counter") await db.insert("counters", { name, value: 1 });
-      });
-  });
-  return ids;
 }
 
 describe("snapshot export", () => {

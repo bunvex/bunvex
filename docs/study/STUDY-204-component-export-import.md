@@ -1,5 +1,5 @@
 # STUDY-204 — Components in snapshot export and import
-<!-- index: Components in snapshot export and import (STUDY-152 step 10, DV-215): the ZIP's `_components/<name>/` prefixes, import into a component path, streaming export's `_component` | study; PR 1 (export), PR 2a (hidden tables by namespace) and PR 2b (import) built; Q1 open -->
+<!-- index: Components in snapshot export and import (STUDY-152 step 10, DV-215): the ZIP's `_components/<name>/` prefixes, import into a component path, streaming export's `_component` | built: PR 1 (export), PR 2a (hidden tables by namespace), PR 2b (import), PR 3 (streaming export, data sync); Q1 open -->
 
 STUDY-152 step 10. DV-215 accepted "export has only the root; a ZIP with `_components/…` is refused on import"
 until bunvex had components (owner, 2026-10-02). Components now exist (STUDY-152 steps 1–7), and bunvex's own
@@ -185,15 +185,60 @@ Sabotage, each making a test fail:
 | `replaceAll` kept to the import's namespaces | `replaceAll` |
 | `--component` not sent | the CLI test |
 
-### PR 3: streaming export
+### PR 3: streaming export and data sync
 
-`_component` is set from the document's namespace. Selections by component, and `byComponent` schemas, are added
-too. A non-root selection stops returning nothing.
+Convex's streaming export (`crates/local_backend/src/streaming_export.rs`, `crates/database/src/database.rs`) and data
+sync (`crates/streaming_export/src/lib.rs`) cover every namespace with a component path. A table in an orphaned
+namespace is skipped (`legacy_streaming_export_table_filter`). bunvex now does the same in
+`packages/server/src/streaming-export.ts` and `data-sync.ts`:
+
+- **`list_snapshot` and `document_deltas`.**
+  - They walk the user tables of every namespace in `componentPathsAt` (`all_component_paths`, read at the snapshot,
+    or at the upper bound for deltas), by tablet.
+  - `_component` is the table's component path. The selection is looked up by that path, so `component=counter`
+    and `tableName` with `component` select inside it.
+  - A snapshot whose component paths are out of retention is `SnapshotTooOld`, as the read of its documents.
+- **`json_schemas`.**
+  - It covers every namespace, the root's first, then each component in `ComponentId` order (by its id's internal
+    bytes).
+  - Each table is described from its namespace's shapes, and when the shape is not an object, from its namespace's
+    active schema.
+  - With `byComponent`, each component path is a key, present even with no tables. Without it, everything goes in
+    one map, a later component's table replacing a same-named one, as Convex's loop over one `out` does.
+- **`get_table_column_names`.** `byComponent` maps each component path that has user tables (Convex's
+  `BTreeMap<ComponentPath, _>`, in path order) to its tables. A namespace without tables is absent, so a deployment
+  with none answers `{}`, where bunvex wrote `{"": []}`.
+- **Data sync.**
+  - Targets come from every namespace (`ResolvedStreamingExportSelection`), a hidden table left out as before.
+  - Each value carries `component`. Truncates are `{component, table}`, each page's in (path, table) order.
+  - The cursor's tablet references and the progress row's `currentComponent` carry the path.
+- **The ZIP export's namespace order** (PR 1) is now `ComponentId` order too, where PR 1 compared the encoded ids.
+
+Tests:
+
+- `streaming-export.test.ts`, "components (STUDY-204)":
+  - `list_snapshot` over the three components gives every table with its `_component`.
+  - `component=counter` gives only `counter`'s tables, `tableName=messages&component=counter/inner` only that table,
+    and `component=""` only the root's.
+  - A change in `second` after the snapshot comes in `document_deltas` with `_component: "second"`, and is left out
+    of a `counter` selection.
+  - `json_schemas?byComponent=true` has the four paths, and its flat form has every table.
+  - `get_table_column_names` lists the four paths in order.
+- `data-sync.test.ts`: a cold start truncates and walks every component's tables, each value with its path. A later
+  change in `counter/inner` carries it, and a selection of `second` streams only `second`.
+- `component-fixture.ts`: the shared components of the export, import and streaming tests.
+
+Sabotage, each making a test fail:
+
+| Sabotage | Tests that fail |
+|---|---|
+| Tables kept to the root's | the streaming and data-sync tests |
+| `_component` written `""` | the streaming test |
+| A data-sync value's `component` written `""` | the data-sync test |
 
 ## 4. Divergences
 
-None new. DV-215 narrows with PR 1 to import and streaming export, with PR 2b to streaming export only, and is
-resolved by PR 3.
+None new. DV-215 narrowed with PR 1 and PR 2b and is resolved by PR 3.
 
 ## 6. Open questions
 
