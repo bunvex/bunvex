@@ -587,6 +587,51 @@ export class Catalog {
     return out;
   }
 
+  /**
+   * `withTableStates` with each tablet applied in the namespace that holds it, the root's or a component's (an
+   * import's hidden tables, STUDY-204). A component's tables being deleted join the root's `deleting`, which the
+   * deletion worker empties, as `buildCatalog` puts them.
+   */
+  withTableStatesAcross(c: { activate?: TabletId[]; delete?: TabletId[] }): Catalog {
+    const byNamespace = new Map<string, { activate: TabletId[]; delete: TabletId[] }>();
+    const root: { activate: TabletId[]; delete: TabletId[] } = { activate: [], delete: [] };
+    const place = (tablet: TabletId, kind: "activate" | "delete") => {
+      for (const [id, ns] of this.components)
+        if (ns.byTablet(tablet)) {
+          const e = byNamespace.get(id) ?? { activate: [], delete: [] };
+          e[kind].push(tablet);
+          byNamespace.set(id, e);
+          return;
+        }
+      root[kind].push(tablet);
+    };
+    for (const t of c.activate ?? []) place(t, "activate");
+    for (const t of c.delete ?? []) place(t, "delete");
+    const out = this.withTableStates(root);
+    if (!byNamespace.size) return out;
+    out.components = new Map(this.components);
+    for (const [id, change] of byNamespace) {
+      const next = this.components.get(id)!.withTableStates(change);
+      for (const [tablet, t] of next.deleting) out.deleting.set(tablet, t);
+      next.deleting.clear();
+      out.components.set(id, next);
+    }
+    return out;
+  }
+
+  /**
+   * A copy whose namespace `namespace` (a component's id; the root's when absent) is a copy too, to change in place:
+   * the copy and that namespace's catalog.
+   */
+  withNamespaceCopy(namespace: string | undefined): { catalog: Catalog; space: Catalog } {
+    const out = this.withTableStates({});
+    if (namespace === undefined) return { catalog: out, space: out };
+    const space = (this.components.get(namespace) ?? new Catalog()).withTableStates({});
+    out.components = new Map(this.components);
+    out.components.set(namespace, space);
+    return { catalog: out, space };
+  }
+
   /** @internal (metadata codec) Index the active tables by number, as `add` and the copies do. */
   indexNumbers() {
     this.numbers.clear();

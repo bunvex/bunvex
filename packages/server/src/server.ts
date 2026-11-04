@@ -2236,7 +2236,7 @@ export function createServer(opts: ServerOptions) {
         return { format: "jsonl", table: needs("JSONL") };
     }
   };
-  /** Convex's `ImportQueryArgs` once read: its format with its table, its mode, and no components here. */
+  /** Convex's `ImportQueryArgs` once read: its format with its table, its mode, and the component to import into. */
   const importArgs = (a: {
     format: string;
     tableName?: string | null;
@@ -2244,13 +2244,13 @@ export function createServer(opts: ServerOptions) {
     componentPath?: string | null;
   }) => {
     const format = importFormat(a.format, a.tableName ?? null);
-    if (a.componentPath !== undefined && a.componentPath !== null && a.componentPath !== "")
-      throw new ImportRequestError(
-        400,
-        "ComponentsNotSupported",
-        "bunvex does not import into components yet: import into the app's own tables.",
-      );
-    return { format, mode: MODE_ARGS[a.mode ?? "requireEmpty"]! };
+    // The component to import into, as Convex's `ComponentPath::deserialize`: each name an identifier.
+    const componentPath = a.componentPath ? a.componentPath : null;
+    for (const segment of componentPath?.split("/") ?? []) {
+      const invalid = identifierError(segment);
+      if (invalid !== null) throw new ImportRequestError(400, "InvalidComponentPath", invalid);
+    }
+    return { format, mode: MODE_ARGS[a.mode ?? "requireEmpty"]!, componentPath };
   };
   importRoute = async (url: URL, req: Request): Promise<Response> => {
     if (!importService) return requestError(404, "NotFound", "Snapshot imports are not configured on this server.");
@@ -2264,9 +2264,11 @@ export function createServer(opts: ServerOptions) {
         case "/api/import": {
           const a = queryArgs(url.searchParams, IMPORT_QUERY_ARGS) as Parameters<typeof importArgs>[0];
           requireImport();
-          const { format, mode } = importArgs(a);
+          const { format, mode, componentPath } = importArgs(a);
           const upload = await importService.upload(req.body ?? new Uint8Array());
-          return json({ numWritten: await importService.importNow(format, mode, upload, auditActor(caller).memberId) });
+          return json({
+            numWritten: await importService.importNow(format, mode, upload, auditActor(caller).memberId, componentPath),
+          });
         }
         case "/api/import/start_upload":
           requireImport();
@@ -2283,10 +2285,12 @@ export function createServer(opts: ServerOptions) {
           const b = await body<{ import: Parameters<typeof importArgs>[0]; uploadToken: string; partTokens: string[] }>(
             IMPORT_FINISH_UPLOAD_ARGS,
           );
-          const { format, mode } = importArgs(b.import);
+          const { format, mode, componentPath } = importArgs(b.import);
           requireImport();
           const upload = await importService.finishUpload(b.uploadToken, b.partTokens);
-          return json({ importId: await importService.start(format, mode, upload, auditActor(caller).memberId) });
+          return json({
+            importId: await importService.start(format, mode, upload, auditActor(caller).memberId, componentPath),
+          });
         }
         case "/api/perform_import":
         case "/api/cancel_import": {

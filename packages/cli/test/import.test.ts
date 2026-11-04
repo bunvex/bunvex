@@ -152,3 +152,27 @@ test("bunvex import: the format and --table rules", async () => {
   const arr = await t.run(["data", "--format", "jsonArray", "--table", "empty"]);
   expect(arr.err.at(-1)).toBe('Added 0 documents to table "empty".');
 });
+
+test("bunvex import --component: into that component's namespace, created when missing (STUDY-204)", async () => {
+  const t = await setup();
+  writeFileSync(join(t.dir, "notes.jsonl"), '{"text":"in a component"}\n');
+  const r = await t.run(["notes.jsonl", "--table", "notes", "--component", "workflow/workpool"]);
+  expect(r.code).toBe(0);
+  expect(r.err.at(-1)).toBe('Added 1 documents to table "notes".');
+  const rows = (await t.engine.query((db) => db.asSystem(() => db.query("_components").collect()))) as Record<
+    string,
+    unknown
+  >[];
+  const workflow = rows.find((c) => c.name === "workflow")!;
+  const workpool = rows.find((c) => c.name === "workpool")!;
+  expect(workpool).toMatchObject({ parent: workflow._id, state: "unmounted" });
+  const inComponent = await t.engine.query((db) =>
+    db.inComponent(workpool._id as string, async () => (await db.query("notes").collect()).map((d) => d.text)),
+  );
+  expect(inComponent).toEqual(["in a component"]);
+  expect(t.engine.catalog.tables.has("notes")).toBe(false);
+  // A name that is no identifier is the deployment's 400.
+  const bad = await t.run(["notes.jsonl", "--table", "notes", "--component", "bad-name"]);
+  expect(bad.code).toBe(1);
+  expect(bad.err.join("\n")).toContain("bad-name");
+});

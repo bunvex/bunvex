@@ -37,6 +37,7 @@ Options:
                        - CSV files need a header; each cell becomes a (floating point) number or a string
                        - JSON files are an array of objects; JSON Lines files have an object per line
                        - ZIP files have <table>/documents.jsonl per table, as \`bunvex export\` writes them
+  --component <path>   path to the component (e.g. "workflow" or "workflow/workpool")
 ${TARGET_OPTIONS}`;
 
 /** Convex's chunk size: the deployment takes 5 MiB parts (but the last); BUNVEX_IMPORT_CHUNK_SIZE overrides it. */
@@ -103,6 +104,7 @@ export async function importCommand(args: string[], io: Io, opts: { pollMs?: num
   let path: string | undefined;
   let table: string | undefined;
   let format: Format | undefined;
+  let component: string | undefined;
   let mode: "requireEmpty" | "append" | "replace" | "replaceAll" = "requireEmpty";
   const modes: string[] = [];
   let yes = false;
@@ -126,6 +128,9 @@ export async function importCommand(args: string[], io: Io, opts: { pollMs?: num
       if (!FORMATS.includes(f as Format))
         return argumentError(io, invalidChoice("--format <format>", f, FORMATS), IMPORT_USAGE);
       format = f as Format;
+    } else if (a === "--component" || a.startsWith("--component=")) {
+      component = value("--component");
+      if (component === undefined) return argumentError(io, missingArgument("--component <path>"), IMPORT_USAGE);
     } else if (!a.startsWith("-")) positional.push(a);
     else return argumentError(io, unknownOption(a, optionsIn(IMPORT_USAGE)), IMPORT_USAGE);
   }
@@ -228,7 +233,7 @@ export async function importCommand(args: string[], io: Io, opts: { pollMs?: num
         if (start + chunkSize >= size) break;
       }
       const finished = (await adminRequest(target, "/api/import/finish_upload", {
-        import: { tableName: table, mode, format },
+        import: { tableName: table, componentPath: component, mode, format },
         uploadToken,
         partTokens,
       })) as { importId: string };

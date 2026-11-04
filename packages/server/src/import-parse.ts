@@ -9,7 +9,7 @@
 //   files; other system tables skipped.
 import { isUtf8 } from "node:buffer";
 import { knob } from "@bunvex/core";
-import { fromExportJson, isSimpleObject, type Value, validateObjectField } from "@bunvex/values";
+import { fromExportJson, identifierError, isSimpleObject, type Value, validateObjectField } from "@bunvex/values";
 import { InvalidZipError, type ZipReader } from "./zip-reader.ts";
 
 /**
@@ -69,6 +69,11 @@ export type RawRow = { json: unknown; text?: string };
 
 export type ImportTable = {
   name: string;
+  /**
+   * The component it goes into, relative to the import's `componentPath`: the names of its `_components/<name>/`
+   * prefixes, from the outermost (`[]`: the import's own namespace).
+   */
+  componentPath: string[];
   /** Rows in order; a new pass reads the file again. */
   rows: () => AsyncIterable<RawRow>;
   /** The lossless export encoding (a ZIP table whose generated schema is `"uniform"`). */
@@ -77,8 +82,8 @@ export type ImportTable = {
 
 export type ParsedImport = {
   tables: ImportTable[];
-  /** A ZIP's `_storage/<id>[.ext]` files, each read when it is imported. */
-  storageFiles: { id: string; read: () => AsyncIterable<Uint8Array> }[];
+  /** A ZIP's `_storage/<id>[.ext]` files, each read when it is imported, with its component's relative path. */
+  storageFiles: { id: string; componentPath: string[]; read: () => AsyncIterable<Uint8Array> }[];
 };
 
 const BOM = [0xef, 0xbb, 0xbf];
@@ -441,7 +446,7 @@ export function parseSingleTable(
       for (const v of json) yield { json: v };
     }
   };
-  return { tables: [{ name: format.table, rows, uniform: false }], storageFiles: [] };
+  return { tables: [{ name: format.table, componentPath: [], rows, uniform: false }], storageFiles: [] };
 }
 
 const DOCUMENTS = /^(.*\/)?([^/]+)\/documents\.jsonl$/;
@@ -455,15 +460,28 @@ function tableNameOf(name: string): string {
   return name;
 }
 
-// DV-215 (STUDY-204): a component's entries are exported, not yet imported (PR 2).
-/** A component's entries are refused: importing into a component is not built yet. */
-function refuseComponents(prefix: string | undefined, file: string) {
-  if (prefix && /(^|\/)_components\/[^/]+\/$/.test(prefix))
-    throw new ImportError(
-      "ComponentsNotSupported",
-      `${file} belongs to a component, and bunvex does not import into components yet. Import a snapshot of an app without components.`,
-    );
+// Convex's `COMPONENT_NAME_PATTERN` and `parse_component_path` (crates/application/src/snapshot_import/parse.rs).
+const COMPONENT_NAME = /^(.*\/)?_components\/([^/]+)\/$/;
+
+/**
+ * The component path an entry's prefix names, relative to the import's: each `_components/<name>/` peeled from the
+ * right; whatever is left before them (a folder the ZIP was made in) is ignored, as Convex's.
+ */
+function componentPathOf(prefix: string | undefined): string[] {
+  const names: string[] = [];
+  let rest = prefix ?? "";
+  for (let m = COMPONENT_NAME.exec(rest); m; m = COMPONENT_NAME.exec(rest)) {
+    const name = m[2]!;
+    const problem = identifierError(name);
+    if (problem !== null) throw new ImportError("InvalidComponentName", `component name '${name}' invalid: ${problem}`);
+    names.push(name);
+    rest = m[1] ?? "";
+  }
+  return names.reverse();
 }
+
+/** A table's key in a ZIP: its component's path and its name. */
+const tableKey = (path: string[], name: string) => `${path.join("/")}\0${name}`;
 
 /** A snapshot ZIP's tables (in the archive's order) and files. */
 export async function parseZip(zip: ZipReader): Promise<ParsedImport> {
@@ -475,18 +493,20 @@ export async function parseZip(zip: ZipReader): Promise<ParsedImport> {
   for (const entry of zip.entries) {
     const docs = DOCUMENTS.exec(entry.name);
     if (docs) {
-      refuseComponents(docs[1], entry.name);
+      const componentPath = componentPathOf(docs[1]);
       const name = tableNameOf(docs[2]!);
+      const key = tableKey(componentPath, name);
       // System tables other than `_tables` and `_storage` are not imported.
       if (name.startsWith("_") && name !== "_tables" && name !== "_storage") continue;
       tables.push({
         name,
+        componentPath,
         uniform: false,
         rows: async function* () {
           let n = 0;
           for await (const line of boundedLines(zip.read(entry), importMaxLineBytes(), notUtf8)) {
             n++;
-            const schemaFile = legacy.get(name);
+            const schemaFile = legacy.get(key);
             if (schemaFile !== undefined)
               throw new ImportError(
                 "InvalidGeneratedSchema",
@@ -506,8 +526,7 @@ export async function parseZip(zip: ZipReader): Promise<ParsedImport> {
     }
     const gs = GENERATED_SCHEMA.exec(entry.name);
     if (gs) {
-      refuseComponents(gs[1], entry.name);
-      const name = tableNameOf(gs[2]!);
+      const key = tableKey(componentPathOf(gs[1]), tableNameOf(gs[2]!));
       let first = "";
       for await (const line of boundedLines(zip.read(entry), importMaxLineBytes(), lineNotUtf8)) {
         first = line;
@@ -519,17 +538,15 @@ export async function parseZip(zip: ZipReader): Promise<ParsedImport> {
       } catch (e) {
         throw new ImportError("JsonInvalidRow", `Row 1 wasn't valid JSON: ${(e as Error).message}`);
       }
-      if (json === "uniform") uniform.add(name);
-      else legacy.set(name, entry.name);
+      if (json === "uniform") uniform.add(key);
+      else legacy.set(key, entry.name);
       continue;
     }
     const file = STORAGE_FILE.exec(entry.name);
-    if (file && file[2] !== "documents") {
-      refuseComponents(file[1], entry.name);
-      storageFiles.push({ id: file[2]!, read: () => zip.read(entry) });
-    }
+    if (file && file[2] !== "documents")
+      storageFiles.push({ id: file[2]!, componentPath: componentPathOf(file[1]), read: () => zip.read(entry) });
   }
-  for (const t of tables) t.uniform = uniform.has(t.name);
+  for (const t of tables) t.uniform = uniform.has(tableKey(t.componentPath, t.name));
   return { tables, storageFiles };
 }
 
@@ -558,9 +575,21 @@ export function renderTableChanges(changes: TableChange[]): string[] {
 export const CONFIRMATION_TRAILER =
   "Once the import has started, it will run in the background.\nInterrupting `bunvex import` will not cancel it.";
 
-/** The message to confirm (Convex's `info_message_for_import`). */
-export function confirmationMessage(changes: TableChange[]): string {
-  const lines = changes.length ? ["Import change summary:", ...renderTableChanges(changes)] : [];
+/**
+ * The message to confirm (Convex's `info_message_for_import`): the changes in their order, a component's under a
+ * `Component <path>` line (`component`: its path, `""` or absent for the root's), as Convex's chunks by path.
+ */
+export function confirmationMessage(changes: (TableChange & { component?: string })[]): string {
+  const rows: string[] = [];
+  for (let i = 0; i < changes.length; ) {
+    const component = changes[i]!.component ?? "";
+    let j = i;
+    while (j < changes.length && (changes[j]!.component ?? "") === component) j++;
+    if (component !== "") rows.push(`Component ${component}`);
+    rows.push(...renderTableChanges(changes.slice(i, j)));
+    i = j;
+  }
+  const lines = changes.length ? ["Import change summary:", ...rows] : [];
   lines.push(CONFIRMATION_TRAILER);
   return lines.join("\n");
 }

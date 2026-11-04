@@ -171,7 +171,8 @@ test("a snapshot import records snapshot_import in the transaction that finishes
     table_count: 1n,
     table_count_deleted: 0n,
     table_names: [{ component: null, table_names: ["people"] }],
-    table_names_deleted: [{ component: null, table_names: [] }],
+    // Nothing deleted: no group at all, as Convex's `audit_log_table_names` folds an empty set into an empty map.
+    table_names_deleted: [],
   });
   expect(e[0]!.member_id).toBeNull();
   // Keys in order, as a Convex object's; over HTTP, int64 as decimal strings (clean JSON).

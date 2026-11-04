@@ -270,3 +270,59 @@ test("replaceWithEmptyTables: a system table emptied in one commit, same number 
   expect(again.catalog.table(SCHEDULED_JOBS_TABLE).id).toBe(after.id);
   await again.close();
 });
+
+// A component's hidden tables (STUDY-204, an import into a component): created, replaced, deleted and dropped in the
+// component's own namespace; the root's table of the same name is never touched.
+test("a component's hidden table replaces the table of its name in that namespace only", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "bunvex-hidden-"));
+  dirs.push(dir);
+  const open = async () => new Engine(schema, new SqlitePersistence(join(dir, "db.sqlite"), { durable: true })).init();
+  let e = await open();
+  const comp = await e.initializeComponentNamespace();
+  const inComp = <T>(f: (db: import("../src/tx.ts").Tx) => Promise<T>) =>
+    e.mutation((db) => db.inComponent(comp, () => f(db)));
+  const compNames = (table: string) =>
+    e.query((db) => db.inComponent(comp, async () => (await db.query(table).collect()).map((d) => d.n)));
+  await e.mutation((db) => db.insert("items", { n: "root" }));
+  await e.mutation((db) => db.insert("other", { n: "root other" }));
+  await inComp((db) => db.insert("items", { n: "old" }));
+  await inComp((db) => db.insert("other", { n: "doomed" }));
+  const rootItems = e.catalog.tables.get("items")!;
+  const compItems = e.catalog.components.get(comp)!.tables.get("items")!;
+
+  const hidden = await e.createHiddenTable("items", {
+    namespace: comp,
+    number: compItems.number,
+    copyIndexesOf: "items",
+  });
+  expect(hidden.namespace).toBe(comp);
+  expect(hidden.number).toBe(compItems.number);
+  expect(e.catalog.components.get(comp)!.hidden.has(hidden.id)).toBe(true);
+  expect(e.catalog.hidden.size).toBe(0);
+  await sys(e, (db) => db.importInsert(hidden, { n: "new" }));
+  // Hidden across a restart, in its namespace.
+  await e.close();
+  e = await open();
+  expect(e.catalog.components.get(comp)!.hidden.has(hidden.id)).toBe(true);
+
+  await e.activateTables([hidden.id], [{ name: "other", namespace: comp }]);
+  expect(await compNames("items")).toEqual(["new"]);
+  expect(e.catalog.components.get(comp)!.tables.get("items")!.id).toBe(hidden.id);
+  expect(e.catalog.components.get(comp)!.tables.has("other")).toBe(false);
+  // The root's tables of the same names are untouched.
+  expect(await names(e)).toEqual(["root"]);
+  expect(e.catalog.tables.get("items")!.id).toBe(rootItems.id);
+  expect(await e.query(async (db) => (await db.query("other").collect()).map((d) => d.n))).toEqual(["root other"]);
+  // The replaced and deleted tables are the root's deletion worker's to empty.
+  await deleted(e);
+  expect(e.catalog.deleting.size).toBe(0);
+
+  // A stale hidden table in a component is dropped too.
+  const left = await e.createHiddenTable("items", { namespace: comp, copyIndexesOf: "items" });
+  const day = 24 * 60 * 60 * 1000;
+  expect(await e.dropStaleHiddenTables(14 * day, Date.now() + 15 * day)).toBe(1);
+  expect(e.catalog.components.get(comp)!.hidden.has(left.id)).toBe(false);
+  await deleted(e);
+  expect(await compNames("items")).toEqual(["new"]);
+  await e.close();
+});

@@ -6,7 +6,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { defineSchema, defineTable, Engine, type EngineSchema } from "@bunvex/core";
+import { componentRow, defineSchema, defineTable, Engine, type EngineSchema, FILE_STORAGE_TABLE } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { MemoryBlobStore } from "@bunvex/file-storage";
 import { encodeId, toExportJson, type Value, v } from "@bunvex/values";
@@ -240,9 +240,11 @@ describe("formats and values", () => {
       message: "ZIP import cannot have table name",
     });
     expect((await t.importNow("[]", "format=jsonArray&tableName=bad-name")).body.code).toBe("ImportInvalidName");
-    expect((await t.importNow("[]", "format=jsonArray&tableName=x&componentPath=c")).body.code).toBe(
-      "ComponentsNotSupported",
-    );
+    // A component path whose name is no identifier (Convex's `ComponentPath::deserialize`).
+    expect((await t.importNow("[]", "format=jsonArray&tableName=x&componentPath=a/bad-name")).body).toEqual({
+      code: "InvalidComponentPath",
+      message: expect.stringContaining("bad-name"),
+    });
   });
 });
 
@@ -706,6 +708,222 @@ describe("round trip", () => {
     const [dstFile] = (await dst.engine.query((db) => db.asSystem(() => db.query("_file_storage").collect()))) as Doc[];
     expect({ ...dstFile!, storageKey: null }).toEqual({ ...srcFile!, storageKey: null });
     expect(await new Response(await dst.files.get(dstFile!.storageKey as string)).text()).toBe("hello");
+  });
+});
+
+/**
+ * Components as a push leaves them (STUDY-204): `counter` and `second` under the root, `inner` under `counter`, each
+ * namespace with its own `messages` (and `counter` its `counters` and a file), written in its namespace.
+ */
+async function addComponents(t: Awaited<ReturnType<typeof setup>>) {
+  const { engine } = t;
+  const ids = {
+    counter: await engine.initializeComponentNamespace(),
+    second: await engine.initializeComponentNamespace(),
+    inner: await engine.initializeComponentNamespace(),
+  };
+  await engine.mutation((db) =>
+    db.asSystem(async () => {
+      const definitionId = await db.insert("_component_definitions", { path: "c" } as never);
+      const root = await db.insert(
+        "_components",
+        componentRow({ definitionId, parent: null, name: null, state: "active", httpPrefix: null }) as never,
+      );
+      const add = (id: string, parent: string, name: string) =>
+        db.importInsert(engine.catalog.table("_components")!, {
+          _id: id,
+          ...componentRow({ definitionId, parent, name, args: [], env: [], state: "active", httpPrefix: null }),
+        });
+      await add(ids.counter, root, "counter");
+      await add(ids.second, root, "second");
+      await add(ids.inner, ids.counter, "inner");
+    }),
+  );
+  await engine.mutation(async (db) => {
+    for (const [name, id] of Object.entries(ids))
+      await db.inComponent(id, async () => {
+        await db.insert("messages", { body: `in ${name}` });
+        if (name === "counter") await db.insert("counters", { name, value: 1n });
+      });
+  });
+  const body = new TextEncoder().encode("component file");
+  const { key, sha256 } = await t.files.put(body);
+  await engine.mutation((db) =>
+    db.inComponent(ids.counter, () =>
+      db.asSystem(() =>
+        db.insert(FILE_STORAGE_TABLE, {
+          storageId: "4b5f6c1e-2a3d-4e5f-8a9b-0c1d2e3f4a5b",
+          storageKey: key,
+          sha256: sha256.slice().buffer as ArrayBuffer,
+          size: BigInt(body.length),
+          contentType: "text/plain",
+        }),
+      ),
+    ),
+  );
+  return ids;
+}
+
+/** A completed ZIP export's bytes, with its files. */
+async function exportZip(t: Awaited<ReturnType<typeof setup>>) {
+  await t.post("/api/export/request/zip?includeStorage=true");
+  let latest: Record<string, unknown> | null = null;
+  for (let i = 0; i < 400 && latest?.state !== "completed"; i++) {
+    await Bun.sleep(25);
+    latest = (
+      (await (
+        await t.post("/api/query", { path: "_system/cli/exports:getLatest", args: {}, format: "encoded_json" })
+      ).json()) as { value: Record<string, unknown> | null }
+    ).value;
+  }
+  const ts = Buffer.from((latest!.start_ts as { $integer: string }).$integer, "base64").readBigInt64LE();
+  return new Uint8Array(
+    await (await fetch(`${t.api}/api/export/zip/${ts}`, { headers: { authorization: `Bunvex ${KEY}` } })).arrayBuffer(),
+  );
+}
+
+/** Namespace `path`'s id in `t` (null for the root's). */
+const componentAt = async (t: Awaited<ReturnType<typeof setup>>, path: string[]) => {
+  const rows = (await t.engine.query((db) => db.asSystem(() => db.query("_components").collect()))) as Doc[];
+  let parent = rows.find((r) => r.parent === null)?._id ?? null;
+  for (const name of path) parent = rows.find((r) => r.parent === parent && r.name === name)?._id ?? null;
+  return parent as string | null;
+};
+const docsIn = (t: Awaited<ReturnType<typeof setup>>, id: string | null, table: string) =>
+  t.engine.query((db) => db.inComponent(id, async () => (await db.query(table).collect()) as unknown as Doc[]));
+
+describe("components (STUDY-204)", () => {
+  test("export → import into an empty deployment: each component's documents, numbers and files, created unmounted", async () => {
+    const src = await setup();
+    const srcIds = await addComponents(src);
+    const zip = await exportZip(src);
+
+    const dst = await setup();
+    const { importId } = await dst.upload(zip, { format: "zip", mode: "requireEmpty" }, 64 * 1024);
+    const waiting = await dst.waitState(importId, ["waiting_for_confirmation", "failed"]);
+    // The changes per component, the root's first (Convex's `Component <path>` lines); every namespace's `_storage`.
+    expect(waiting.state.message_to_confirm).toBe(
+      [
+        "Import change summary:",
+        "table    | create | delete       |",
+        "----------------------------------",
+        "_storage | 0      | 0 of 0 files |",
+        "Component counter",
+        "table    | create | delete       |",
+        "----------------------------------",
+        "_storage | 1      | 0 of 0 files |",
+        "counters | 1      | 0 of 0       |",
+        "messages | 1      | 0 of 0       |",
+        "Component counter/inner",
+        "table    | create | delete       |",
+        "----------------------------------",
+        "_storage | 0      | 0 of 0 files |",
+        "messages | 1      | 0 of 0       |",
+        "Component second",
+        "table    | create | delete       |",
+        "----------------------------------",
+        "_storage | 0      | 0 of 0 files |",
+        "messages | 1      | 0 of 0       |",
+        "Once the import has started, it will run in the background.",
+        "Interrupting `bunvex import` will not cancel it.",
+      ].join("\n"),
+    );
+    expect(
+      (waiting.checkpoints as { component_path: string | null; display_table_name: string }[]).map((c) => [
+        c.component_path,
+        c.display_table_name,
+      ]),
+    ).toEqual([
+      [null, "_storage"],
+      ["counter", "_storage"],
+      ["counter", "counters"],
+      ["counter", "messages"],
+      ["counter/inner", "_storage"],
+      ["counter/inner", "messages"],
+      ["second", "_storage"],
+      ["second", "messages"],
+    ]);
+    await dst.post("/api/perform_import", { importId });
+    const done = await dst.waitState(importId, ["completed", "failed"]);
+    expect(done.state).toMatchObject({ state: "completed" });
+
+    // Each component was created, unmounted, under its parent.
+    const rows = (await dst.engine.query((db) => db.asSystem(() => db.query("_components").collect()))) as Doc[];
+    const root = rows.find((r) => r.parent === null)!;
+    const byName = (n: string) => rows.find((r) => r.name === n)!;
+    expect(byName("counter")).toMatchObject({ parent: root._id, state: "unmounted" });
+    expect(byName("second")).toMatchObject({ parent: root._id, state: "unmounted" });
+    expect(byName("inner")).toMatchObject({ parent: byName("counter")._id, state: "unmounted" });
+    // The same documents and ids, in each one's namespace, at the same numbers; the root's untouched.
+    for (const [name, path] of [
+      ["counter", ["counter"]],
+      ["second", ["second"]],
+      ["inner", ["counter", "inner"]],
+    ] as const) {
+      const id = await componentAt(dst, [...path]);
+      const srcId = srcIds[name];
+      expect(await docsIn(dst, id, "messages")).toEqual(await docsIn(src, srcId, "messages"));
+      expect(dst.engine.catalog.components.get(id!)!.tables.get("messages")!.number).toBe(
+        src.engine.catalog.components.get(srcId)!.tables.get("messages")!.number,
+      );
+    }
+    const counter = await componentAt(dst, ["counter"]);
+    expect(await docsIn(dst, counter, "counters")).toEqual(await docsIn(src, srcIds.counter, "counters"));
+    expect(dst.engine.catalog.tables.has("messages")).toBe(false);
+    // The component's file: its id and UUID kept, its bytes stored again.
+    const files = (id: string | null, t: typeof src) =>
+      t.engine.query((db) => db.inComponent(id, () => db.asSystem(() => db.query(FILE_STORAGE_TABLE).collect())));
+    const [dstFile] = (await files(counter, dst)) as Doc[];
+    const [srcFile] = (await files(srcIds.counter, src)) as Doc[];
+    expect({ ...dstFile!, storageKey: null }).toEqual({ ...srcFile!, storageKey: null });
+    expect(await new Response(await dst.files.get(dstFile!.storageKey as string)).text()).toBe("component file");
+    expect(await files(null, dst)).toEqual([]);
+  });
+
+  test("`componentPath`: a table imported into that component's namespace; a missing one is created", async () => {
+    const t = await setup();
+    const ids = await addComponents(t);
+    const r = await t.importNow(
+      '{"body":"imported"}\n',
+      "format=jsonLines&tableName=messages&mode=append&componentPath=second",
+    );
+    expect(r).toEqual({ status: 200, body: { numWritten: 1 } });
+    expect((await docsIn(t, ids.second, "messages")).map((d) => d.body)).toEqual(["in second", "imported"]);
+    expect(t.engine.catalog.tables.has("messages")).toBe(false);
+    const made = await t.importNow('{"x":1}\n', "format=jsonLines&tableName=fresh&componentPath=second/made");
+    expect(made.status).toBe(200);
+    const id = await componentAt(t, ["second", "made"]);
+    expect((await docsIn(t, id, "fresh")).map((d) => d.x)).toEqual([1]);
+  });
+
+  test("replaceAll: the tables the import lacks are deleted in every namespace", async () => {
+    const t = await setup();
+    const ids = await addComponents(t);
+    await t.functions.runMutation("m:insert", { table: "rootOnly", doc: {} });
+    await t.engine.mutation((db) => db.inComponent(ids.second, () => db.insert("extra", { n: 1 })));
+    const zip = await zipOf([
+      ["_components/counter/messages/documents.jsonl", '{"body":"replaced"}\n'],
+      ["_components/counter/messages/generated_schema.jsonl", '"uniform"\n'],
+    ]);
+    const { importId } = await t.upload(zip, { format: "zip", mode: "replaceAll" }, 64 * 1024);
+    const waiting = await t.waitState(importId, ["waiting_for_confirmation", "failed"]);
+    expect(waiting.state.message_to_confirm).toContain("rootOnly | 0      | 1 of 1");
+    expect(waiting.state.message_to_confirm).toContain("Component second");
+    await t.post("/api/perform_import", { importId });
+    expect((await t.waitState(importId, ["completed", "failed"])).state).toMatchObject({ state: "completed" });
+    expect((await docsIn(t, ids.counter, "messages")).map((d) => d.body)).toEqual(["replaced"]);
+    expect(t.engine.catalog.components.get(ids.counter)!.tables.has("counters")).toBe(false);
+    expect(t.engine.catalog.components.get(ids.second)!.tables.has("extra")).toBe(false);
+    expect(t.engine.catalog.components.get(ids.second)!.tables.has("messages")).toBe(false);
+    expect(t.engine.catalog.tables.has("rootOnly")).toBe(false);
+  });
+
+  test("a component name that is no identifier is refused", async () => {
+    const t = await setup();
+    const zip = await zipOf([["_components/bad-name/t/documents.jsonl", "{}\n"]]);
+    const r = await t.importNow(zip, "format=zip");
+    expect(r.status).toBe(400);
+    expect(r.body.message).toContain("component name 'bad-name' invalid");
   });
 });
 

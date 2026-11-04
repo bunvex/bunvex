@@ -288,7 +288,8 @@ change no behaviour an app sees on its own and can start before C1 is decided.
   tablet from the root (`anyTablet`). A root table's number is the first free among the root's; the 10000-table
   cap counts every namespace, as Convex's. The index worker and retention reach a component's tables by tablet
   (a component index left backfilling is finished; its index entries are pruned); hidden-table cleanup and
-  `_system/cli/tables` keep to the root's. Nothing runs inside a component yet (steps 2–5), and export, streaming
+  `_system/cli/tables` keep to the root's (hidden-table cleanup reaches every namespace since STUDY-204 PR 2a, as
+  Convex's `cleanup_hidden_tables`). Nothing runs inside a component yet (steps 2–5), and export, streaming
   export and the dashboard stay the root's (steps 9–10).
 - **The Convex store.** A store the Convex binary wrote (an app with `messages` and a `counter` component mounted
   twice, `counter` and `second`, each with `counters` (10001) and `messages` (10002)) shows Convex's per-component

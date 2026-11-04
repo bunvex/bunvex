@@ -32,6 +32,35 @@ export async function auditComponent(db: Tx, id: string | null): Promise<AuditCo
   return { component_id: id, component: path.join("/") };
 }
 
+/** A table of an import, by its component's path (names from the root; `[]`: the root's) and its name. */
+export type ComponentTable = { path: string[]; name: string };
+
+const componentTableKey = (t: ComponentTable) => `${t.path.join("/")}\0${t.name}`;
+const byBytes = (a: string, b: string) => Buffer.compare(Buffer.from(a), Buffer.from(b));
+
+/**
+ * Convex's `audit_log_table_names` (crates/application/src/snapshot_import/audit_log.rs): the tables in order (by
+ * component path, its names in turn, then by name), the first 20, grouped by path as `{component, table_names}`, the
+ * root's `component` null. None: an empty list.
+ */
+function tableNamesByComponent(tables: ComponentTable[]): Value[] {
+  const unique = [...new Map(tables.map((t) => [componentTableKey(t), t])).values()].sort((a, b) => {
+    for (let i = 0; i < Math.min(a.path.length, b.path.length); i++) {
+      const c = byBytes(a.path[i]!, b.path[i]!);
+      if (c) return c;
+    }
+    return a.path.length - b.path.length || byBytes(a.name, b.name);
+  });
+  const groups: { component: string | null; table_names: string[] }[] = [];
+  for (const t of unique.slice(0, 20)) {
+    const component = t.path.length ? t.path.join("/") : null;
+    const last = groups[groups.length - 1];
+    if (last && last.component === component) last.table_names.push(t.name);
+    else groups.push({ component, table_names: [t.name] });
+  }
+  return groups;
+}
+
 export const auditEvents = {
   createEnvironmentVariable: (name: string) => event("create_environment_variable", { variable_name: name }),
   updateEnvironmentVariable: (name: string) => event("update_environment_variable", { variable_name: name }),
@@ -57,15 +86,15 @@ export const auditEvents = {
   setExportExpiration: (id: string, expirationTsMs: bigint) =>
     event("set_export_expiration", { id, expiration_ts_ms: expirationTsMs }),
   /** Convex keeps the first 20 table names and the full counts (snapshot_import/audit_log.rs). */
-  snapshotImport: (o: { tables: string[]; deleted: string[]; mode: string; format: Value }) =>
+  snapshotImport: (o: { tables: ComponentTable[]; deleted: ComponentTable[]; mode: string; format: Value }) =>
     event("snapshot_import", {
-      table_names: [{ component: null, table_names: o.tables.slice(0, 20) }],
-      table_count: BigInt(o.tables.length),
+      table_names: tableNamesByComponent(o.tables),
+      table_count: BigInt(new Set(o.tables.map(componentTableKey)).size),
       import_mode: o.mode,
       import_format: o.format,
       requestor: { type: "snapshotImport" },
-      table_names_deleted: [{ component: null, table_names: o.deleted.slice(0, 20) }],
-      table_count_deleted: BigInt(o.deleted.length),
+      table_names_deleted: tableNamesByComponent(o.deleted),
+      table_count_deleted: BigInt(new Set(o.deleted.map(componentTableKey)).size),
     }),
   updateCanonicalUrl: (destination: string, url: string) =>
     event("update_canonical_url", { request_destination: destination, url }),
