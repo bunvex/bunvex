@@ -3,7 +3,7 @@
 // body), which statuses are permanent, the retries and `onEmailComplete`'s three outcomes, and cancelation. Resend is
 // answered by `outboundFetch` (AD-48), where upstream stubs the global `fetch`.
 // biome-ignore-all lint/suspicious/noExplicitAny: the inline functions' ctx is untyped
-import { describe, expect, setDefaultTimeout, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, setSystemTime, test } from "bun:test";
 import type { Doc, Id } from "../src/component/_generated/dataModel.ts";
 import {
   all,
@@ -197,10 +197,20 @@ describe("the request to Resend", () => {
 
 describe("the batcher", () => {
   test("the first email goes out about a second after the batcher idles, and the batcher idles again", async () => {
+    // The deployment starts a ms before a segment ends: the case where `t.now()`'s segment is not the email's.
+    setSystemTime(new Date(1_000_000 * 125 - 1));
     const { t, seen } = withResend();
+    setSystemTime();
     const start = t.now();
     const id = await send(t);
-    expect(await getEmail(t, id)).toMatchObject({ status: "waiting", segment: Math.floor(start / 125) });
+    // `Date.now()` in `sendEmail` is its transaction's first `_creationTime`, floored (as Convex's
+    // `udf_unix_timestamp`). That can be a ms past `t.now()`: the deployment's own commits at that instant put the
+    // snapshot past it, and a transaction starts no earlier than its snapshot, rounded up to the ms.
+    const email = (await getEmail(t, id))!;
+    const sentAt = Math.floor(email._creationTime);
+    expect(sentAt - start).toBeGreaterThanOrEqual(0);
+    expect(sentAt - start).toBeLessThanOrEqual(1);
+    expect(email).toMatchObject({ status: "waiting", segment: Math.floor(sentAt / 125) });
     const runs = await all(t, "nextBatchRun");
     expect(runs).toHaveLength(1);
     await drain(t);
