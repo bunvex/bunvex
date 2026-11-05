@@ -57,9 +57,10 @@ const { values: flags } = parseArgs({
     // filling up (the defaults, 512 MiB and 100 MiB, take longer than a run to fill).
     "index-cache-mib": { type: "string", default: "32" },
     "query-cache-mib": { type: "string", default: "16" },
-    // SQLite's page cache (256 MiB, DV-550) fills with the store, ~70 minutes at the workload's write rate: this many
-    // MiB of ballast are written before the workload and read once at its start, so the cache is full before R1 and
-    // R2 judge (STUDY-174 Q6, §10.3). 0: none.
+    // SQLite's page cache (AD-46: SQLite's 2 000 KiB by default, up to 320 MiB when BUNVEX_SQLITE_CACHE_SIZE raises
+    // it) fills with the store, ~70 minutes at the workload's write rate for 256 MiB: this many MiB of ballast are
+    // written before the workload and read once at its start, so the cache is full before R1 and R2 judge (STUDY-174
+    // Q6, §10.3). 0: none.
     "page-cache-fill-mib": { type: "string", default: "320" },
     // Workload parts to leave out, comma-separated: subs, rooms, reconnects, sync-mutations, hot, httpq,
     // canary, search, scheduler, storage, crons, logtail, clients (no sync clients at all).

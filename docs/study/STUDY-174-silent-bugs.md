@@ -4,7 +4,8 @@
 - **Status:** decided (owner, 2026-10-19: §8 Q1–Q5 as recommended, §10). F4 is fixed (§10.2); the other findings of
   §3.3 are listed, not fixed. The soak nightly (Q1, §9 step 5) is `.github/workflows/soak-nightly.yml`, with every
   rule judged (R1 report-only until Q6 was decided, §10.3). Q7 (R8 on low-rate operations) is decided and done (§10.3). Q6 is
-  decided (owner, 2026-10-21): bunvex keeps its 256 MiB page cache (DV-550), with a setting for it (AD-46). The
+  decided (owner, 2026-10-21): bunvex keeps its 256 MiB page cache (DV-550), with a setting for it (AD-46);
+  revisited on 2026-11-05 (audit P1): back to Convex's 2 000 KiB, DV-550 closed, the setting kept. The
   suspects S1–S8 are confirmed or dismissed in §11: S1–S7 are bugs, each fixed in its own PR; S8 was a divergence,
   Q8, which the owner decided on 2026-10-21 (match Convex), done in #811 (§11).
 - **Why now:** [#751](https://github.com/bunvex/bunvex/pull/751) found that since 2026-10-03 every cached query result
@@ -46,7 +47,10 @@ that gap:
   (§4.6). F6 is now attributed (§4.7): a plateau, not a leak. It is SQLite's page cache, which bunvex sizes at
   256 MiB, filling as the database file grows; it levels off at that budget. §4.8 measures what SQLite's default,
   Convex's, would cost in read speed: ~20 % on reads whose working set is past 2 MiB but in memory, nothing when
-  the disk is the bottleneck. The owner decided Q6 on 2026-10-21: keep 256 MiB, as DV-550.
+  the disk is the bottleneck. The owner decided Q6 on 2026-10-21: keep 256 MiB, as DV-550. Re-measured on the same
+  VPS on 2026-11-05, on the engine's read path with the index cache and the writer thread, the gap was inside the
+  noise (+3 % / −6 %, [bench](../bench/SQLITE-READ-UNDER-WRITE-2026-11-04.md)), and the owner went back to Convex's
+  2 000 KiB (DV-550 closed).
 - **(3) Metadata differentials against Convex's binary.** A prototype in `packages/differential` compares the query
   cache's hits and misses as the function log stream shows them on both backends. It failed on the pre-#751 main
   exactly where #751 says, and passes on main now that #751 is merged (§5.3).
@@ -895,7 +899,7 @@ The owner approved every recommendation of §8 on 2026-10-19:
 | Q4 | Measure the per-connection memory first, publish it in the parity notes, assert it only if it regresses (no budget yet) | §9 step 12 |
 | Q5 | The metadata tests go in the differential nightly (`scripts/nightly.sh`), done by bunvex-9f | §9 step 7 |
 | Q7 (2026-10-20) | R8 judges the p99 only on windows of at least 100 calls, the p50 alone below that (option (a)) | done, §10.3 |
-| Q6 (2026-10-21) | Keep SQLite's 256 MiB page cache (DV-550), measured in §4.8; a setting for it (AD-46); the soak's R1 made to see the page cache, then judged | three PRs: this record, the setting, the soak (§10.3) |
+| Q6 (2026-10-21; revisited 2026-11-05) | Keep SQLite's 256 MiB page cache (DV-550), measured in §4.8 (on 2026-11-05, after a re-measurement inside the noise: back to Convex's 2 000 KiB, DV-550 closed); a setting for it (AD-46); the soak's R1 made to see the page cache, then judged | three PRs: this record, the setting, the soak (§10.3) |
 
 None of Q1–Q5 and Q7 is a divergence, so none takes a DV number; Q6 is DV-550. DV-527, reserved for F4 in case something could not match,
 is unused.

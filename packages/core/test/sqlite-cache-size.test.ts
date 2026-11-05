@@ -1,4 +1,4 @@
-// The SQLite page cache's size (AD-46, DV-550; STUDY-174 Q6): 256 MiB by default, BUNVEX_SQLITE_CACHE_SIZE in bytes
+// The SQLite page cache's size (AD-46; STUDY-174 Q6): SQLite's 2 000 KiB by default, as Convex, BUNVEX_SQLITE_CACHE_SIZE in bytes
 // otherwise, always set on the store's own connection (Bun's SQLite defaults differ by platform), and a value that
 // does not parse refused before the store's file is touched.
 import { Database } from "bun:sqlite";
@@ -30,8 +30,8 @@ const cacheSize = (p: SqlitePersistence) =>
   ((p as unknown as { db: Database }).db.query("pragma cache_size").get() as { cache_size: number }).cache_size;
 
 describe("BUNVEX_SQLITE_CACHE_SIZE", () => {
-  test("unset or empty: 256 MiB, DV-550's default", () => {
-    expect(SQLITE_CACHE_DEFAULT_BYTES).toBe(268_435_456);
+  test("unset or empty: SQLite's 2 000 KiB, as Convex (DV-550, 256 MiB, closed 2026-11-05)", () => {
+    expect(SQLITE_CACHE_DEFAULT_BYTES).toBe(2_048_000);
     expect(sqliteCacheBytes({})).toBe(SQLITE_CACHE_DEFAULT_BYTES);
     expect(sqliteCacheBytes({ BUNVEX_SQLITE_CACHE_SIZE: "" })).toBe(SQLITE_CACHE_DEFAULT_BYTES);
   });
@@ -56,7 +56,7 @@ describe("BUNVEX_SQLITE_CACHE_SIZE", () => {
     ])
       expect(() => sqliteCacheBytes({ BUNVEX_SQLITE_CACHE_SIZE: bad })).toThrow(
         `invalid value '${bad}' for the SQLite page cache (BUNVEX_SQLITE_CACHE_SIZE): a size in bytes, from 1 to ` +
-          `${SQLITE_CACHE_MAX_BYTES}; the default is 268435456 (256 MiB)`,
+          `${SQLITE_CACHE_MAX_BYTES}; the default is 2048000 (SQLite's 2 000 KiB)`,
       );
   });
 
@@ -67,7 +67,7 @@ describe("BUNVEX_SQLITE_CACHE_SIZE", () => {
     expect([-2000, 2000]).toContain((fresh.query("pragma cache_size").get() as { cache_size: number }).cache_size);
     fresh.close();
     for (const [env, want] of [
-      [undefined, -262_144],
+      [undefined, -2000],
       ["2048000", -2000],
       ["1", -1],
       ["1025", -2],

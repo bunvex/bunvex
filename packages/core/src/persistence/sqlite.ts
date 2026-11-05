@@ -121,8 +121,11 @@ const COLUMNS = {
   persistence_globals: ["key text", "json_value text"],
 };
 
-/** The page cache's default (DV-550): 256 MiB. Convex sets no `cache_size`, so it runs with SQLite's 2 000 KiB. */
-export const SQLITE_CACHE_DEFAULT_BYTES = 256 * 1024 * 1024;
+// Convex sets no `cache_size`, so it runs with SQLite's default, 2 000 KiB (`crates/sqlite/src/lib.rs:93-99`). bunvex
+// set 256 MiB until DV-550 was closed (owner, 2026-11-05): on its read path that cache measured inside the noise
+// (docs/bench/SQLITE-READ-UNDER-WRITE-2026-11-04.md).
+/** The page cache's default: SQLite's own, 2 000 KiB. */
+export const SQLITE_CACHE_DEFAULT_BYTES = 2000 * 1024;
 /** The largest cache SQLite takes: `cache_size` is a 32-bit count of KiB. */
 export const SQLITE_CACHE_MAX_BYTES = (2 ** 31 - 1) * 1024;
 /** The writer connection's page cache, at most (the prototype's, STUDY-190 §4.1): it inserts and deletes rows, and
@@ -134,7 +137,7 @@ const SQLITE_WRITER_CACHE_MAX_BYTES = 16 * 1024 * 1024;
  * INDEX_CACHE_SIZE does (an unsigned integer, `knob`), but it is bunvex's own setting, so a value that does not
  * parse fails the start, as BUNVEX_FUNCTION_SANDBOX does, instead of falling back. 0 is refused (owner, 2026-10-21): SQLite has no
  * "off" (`cache_size = 0` keeps its minimum, a few pages, the slowest setting; STUDY-174 §4.8), and "SQLite's
- * default" differs by platform (2 000 KiB on Linux, 2 000 pages on macOS). SQLite's 2 000 KiB is 2048000.
+ * default" differs by platform (2 000 KiB on Linux, 2 000 pages on macOS), so the default is set as 2 000 KiB.
  */
 export function sqliteCacheBytes(env: KnobEnv = process.env): number {
   const raw = env.BUNVEX_SQLITE_CACHE_SIZE;
@@ -143,7 +146,7 @@ export function sqliteCacheBytes(env: KnobEnv = process.env): number {
   if (n === undefined || n > SQLITE_CACHE_MAX_BYTES)
     throw new Error(
       `invalid value '${raw}' for the SQLite page cache (BUNVEX_SQLITE_CACHE_SIZE): a size in bytes, from 1 to ` +
-        `${SQLITE_CACHE_MAX_BYTES}; the default is ${SQLITE_CACHE_DEFAULT_BYTES} (256 MiB)`,
+        `${SQLITE_CACHE_MAX_BYTES}; the default is ${SQLITE_CACHE_DEFAULT_BYTES} (SQLite's 2 000 KiB)`,
     );
   return n;
 }

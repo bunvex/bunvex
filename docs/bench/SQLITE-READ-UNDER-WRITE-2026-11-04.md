@@ -106,8 +106,9 @@ when the disk is the bottleneck").
    divergence with the SIGBUS caveat.
 4. The memory used is within the noise as well (RSS medians 770–883 MB).
 
-### The choice (owner)
+### Decision (owner, 2026-11-05)
 
-- (a) Keep 256 MiB (DV-550 stays).
-- (b) Go back to Convex's default, SQLite's 2 000 KiB, and close DV-550. This bench finds no gain to keep.
-- (c) Propose `mmap_size` as a divergence. This bench finds a gain only without writes.
+(b): the default goes back to Convex's, SQLite's 2 000 KiB, and DV-550 is closed. `BUNVEX_SQLITE_CACHE_SIZE`
+(AD-46) still raises it, and mmap is not adopted. STUDY-194's c-4 numbers (§11.4,
+`bench/results/cloud/2026-11-04-s194-pr3`) were measured with the 256 MiB default. They are the "before" picture
+for reads on execution workers, which now share half of 2 000 KiB.
