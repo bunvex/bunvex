@@ -61,12 +61,53 @@ DV-550 may do nothing. Before changing anything, the owner asked for a measureme
 3. **The index cache lowers p50 (0.03 against 0.09 ms) but not throughput** on this uniform random read over
    200 000 documents, which it mostly misses. That is expected, and it is not P1's subject.
 
-## What remains to decide it
+## On the VPS DV-550 was measured on (2026-11-05)
 
-- **Run the same bench on the VPS DV-550 was measured on** (2 vCPU, Linux, the 10 GB store). That is where the
-  cache's 20 % showed. It is the only way to see whether the writer thread erased that gain, and how mmap compares
-  there. Command: `DOCS=2000000 bun bench/sqlite-read-under-write.ts` on the VPS, about 10 minutes.
-- Then the choice for the owner:
-  - (a) keep 256 MiB;
-  - (b) go back to Convex's 2 000 KiB if the VPS shows no gain under writes;
-  - (c) propose `mmap_size` as a divergence, with the SIGBUS caveat above.
+**Machine.** The test VPS: Hostinger KVM2, 2 vCPU AMD EPYC 9354P, 8 GB, Ubuntu 24.04 (kernel 6.8), a cloud SSD, Bun
+1.4.3, nothing else running. bunvex at `963d35aa` (main after #1057).
+- With `synchronous=full`, the disk caps commits at about 30 a second, so the "50" and "500" targets both mean
+  "as many as the disk allows".
+
+### Small store (200 000 documents, about 220 MB): five rounds
+
+These are the cells that matter: the reads are CPU-bound and their working set is past 2 MiB and under 256 MiB, the
+case where DV-550 found the default about 15–22 % slower. The run used the index cache on (the default), and
+`CELLS` with the three configurations in a different order in each round (ABC, CBA, BAC, CAB, BCA). It was one
+process for each of the 30 cells, each from a fresh copy of the store.
+
+| commits/s | config | reads/s, five rounds | median | p99 median, ms |
+|---|---|---|---|---|
+| 0 | 2 MiB | 4 065 · 4 298 · 4 298 · 4 298 · 4 356 | 4 298 | 0.747 |
+| 0 | 256 MiB | 4 538 · 4 421 · 4 086 · 4 381 · 4 435 | 4 421 (+3 %) | 0.602 |
+| 0 | 2 MiB + mmap 1 GiB | 4 920 · 4 031 · 4 843 · 4 956 · 3 972 | 4 843 (+13 %) | 0.557 |
+| ~31 | 2 MiB | 3 925 · 4 260 · 4 005 · 3 811 · 4 173 | 4 005 | 0.881 |
+| ~30 | 256 MiB | 4 048 · 3 749 · 3 734 · 3 861 · 3 764 | 3 764 (−6 %) | 0.833 |
+| ~31 | 2 MiB + mmap 1 GiB | 3 871 · 3 515 · 4 026 · 4 007 · 3 455 | 3 871 (−3 %) | 0.683 |
+
+A first pass of the whole matrix (one round a cell) had shown 256 MiB up to 27 % behind 2 MiB. The five rounds show
+that this was noise: a cell's spread across rounds is about 10 %.
+
+### Big store (2 000 000 documents, about 2.2 GB, in a scope of `MemoryMax=2G`)
+
+The whole matrix, one round. With the store past its memory, every read waits on the disk. The figures are 117–308
+reads a second, p99 15–49 ms, and 1–3 commits a second, with no order between the configurations: 2 MiB, 256 MiB
+and mmap each land both at the top and at the bottom. This is the case where DV-550 itself found no gap ("no gap
+when the disk is the bottleneck").
+
+### What it shows
+
+1. **The 256 MiB cache no longer buys anything measurable on bunvex's read path.** Without writes it is +3 %, and
+   under writes it is −6 %. Both are inside the noise. DV-550's 15–22 % does not reproduce. The engine now has the
+   index cache in front of SQLite, and its own work per read dominates, as on the Mac.
+2. **Under writes, P1's mechanism is real but costs little.** The reader's cache is dropped after the writer
+   thread's commits, which is why 256 MiB falls from +3 % to −6 %. But the loss is no bigger than the noise.
+3. **mmap helps only without writes** (+13 % reads, p99 −25 %). Under writes it is −3 % (noise), because the reader
+   re-reads the WAL, which mmap does not cover. On a live store, which always has writes, that is no gain worth a
+   divergence with the SIGBUS caveat.
+4. The memory used is within the noise as well (RSS medians 770–883 MB).
+
+### The choice (owner)
+
+- (a) Keep 256 MiB (DV-550 stays).
+- (b) Go back to Convex's default, SQLite's 2 000 KiB, and close DV-550. This bench finds no gain to keep.
+- (c) Propose `mmap_size` as a divergence. This bench finds a gain only without writes.
