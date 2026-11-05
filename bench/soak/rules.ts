@@ -43,7 +43,7 @@ export type RunData = {
    */
   indexCacheBudgetBytes: number;
   /**
-   * When the soak's read of its ballast (more than SQLite's 256 MiB page cache, DV-550) finished, in seconds from the
+   * When the soak's read of its ballast (more than SQLite's page cache, even one raised to 256 MiB, AD-46) finished, in seconds from the
    * start: the page cache is full from then on, so memory is judged no earlier (STUDY-174 Q6, §10.3). `null`: a fill
    * was asked for and did not finish (memory is then not judged); absent: no fill (`--page-cache-fill-mib 0`).
    */
