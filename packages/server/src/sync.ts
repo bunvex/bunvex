@@ -110,6 +110,8 @@ export type WsHeartbeatOptions = { pingIntervalMs: number; clientTimeoutMs: numb
  * transition while this many are waiting in its socket's send buffer behind the frame being written.
  */
 export const SYNC_MAX_SEND_TRANSITION_COUNT = 2;
+/** A connection's query set, at most (AD-50, STUDY-207): 0 for no cap, as Convex. */
+export const MAX_QUERIES_PER_CONNECTION = 4096;
 
 /**
  * Splaying (Convex's `SUBSCRIPTION_INVALIDATION_DELAY_THRESHOLD`, crates/common/src/knobs.rs): a commit that
@@ -252,6 +254,11 @@ export type SyncDeps = {
   splay?: SplayOptions;
   /** Backpressure: `SYNC_MAX_SEND_TRANSITION_COUNT` (the environment, else Convex's 2). */
   maxSendTransitions?: number;
+  /**
+   * The most queries one connection may hold: `BUNVEX_MAX_QUERIES_PER_CONNECTION` (the environment, else 4096);
+   * 0 for no cap. A `ModifyQuerySet` that would take it past this closes the connection with `BadRequest`.
+   */
+  maxQueriesPerConnection?: number;
   /**
    * How long a session waits to run again the queries that found an index unavailable (STUDY-79), in ms
    * (default: Convex's SEARCH_INDEXES_UNAVAILABLE_RETRY_DELAY, 3 s).
@@ -453,6 +460,8 @@ export class SyncHub {
   readonly splay: SplayOptions;
   /** Transitions a session may have waiting to be sent before it computes another (STUDY-64 §1.3). */
   readonly maxSendTransitions: number;
+  /** A connection's query set, at most (AD-50); 0 for no cap. */
+  readonly maxQueriesPerConnection: number;
   /** Writable for tests. */
   unavailableRetryMs: number;
   /** What made each key run again, for the inspector (STUDY-131 AD-25). */
@@ -476,6 +485,8 @@ export class SyncHub {
     this.splay = deps.splay ?? splayOptions();
     this.maxSendTransitions =
       deps.maxSendTransitions ?? knob("SYNC_MAX_SEND_TRANSITION_COUNT", SYNC_MAX_SEND_TRANSITION_COUNT);
+    this.maxQueriesPerConnection =
+      deps.maxQueriesPerConnection ?? knob("BUNVEX_MAX_QUERIES_PER_CONNECTION", MAX_QUERIES_PER_CONNECTION, "uint");
     this.unavailableRetryMs = deps.unavailableRetryMs ?? secondsKnob("SEARCH_INDEXES_UNAVAILABLE_RETRY_DELAY", 3);
     this.inspector = new SyncInspector(deps.invalidationHistory ?? invalidationHistoryFromEnv());
     if (deps.rooms) this.rooms = deps.rooms;
@@ -1469,6 +1480,15 @@ export class SyncSession {
           );
         if (m.newVersion <= m.baseVersion)
           return this.internalError(new Error(`query set version ${m.newVersion} does not follow ${m.baseVersion}`));
+        const cap = this.hub.maxQueriesPerConnection;
+        if (cap > 0) {
+          // AD-50 (STUDY-207): the set this frame would leave, counted before any of it is applied.
+          const held = this.querySetAfter(m.modifications);
+          if (held > cap)
+            return this.badRequest(
+              `Too many queries on this connection: ${held}, past BUNVEX_MAX_QUERIES_PER_CONNECTION (${cap})`,
+            );
+        }
         this.pending.push(...m.modifications);
         this.received.querySet = m.newVersion;
         if (span) this.transitionParent = span.set("bunvex.sync.modifications", m.modifications.length);
@@ -1531,6 +1551,27 @@ export class SyncSession {
       case "RoomEvent":
         return this.roomConnection().handle(m);
     }
+  }
+
+  /** How many queries the session would hold once its pending modifications and `next` are applied. */
+  private querySetAfter(next: (v1.AddQuery | v1.RemoveQuery)[]): number {
+    const added = new Set<number>();
+    const removed = new Set<number>();
+    let n = this.queries.size;
+    for (const list of [this.pending, next])
+      for (const q of list) {
+        const held = (this.queries.has(q.queryId) && !removed.has(q.queryId)) || added.has(q.queryId);
+        if (q.type === "Add" && !held) {
+          n++;
+          added.add(q.queryId);
+          removed.delete(q.queryId);
+        } else if (q.type === "Remove" && held) {
+          n--;
+          removed.add(q.queryId);
+          added.delete(q.queryId);
+        }
+      }
+    return n;
   }
 
   /**

@@ -182,6 +182,11 @@ Each variable below is read by the backend in the container; add the ones you se
   `POSTGRES_MAX_CONNECTIONS` / `MYSQL_MAX_CONNECTIONS` (128), which stay the backend's total: the backend keeps a
   quarter (at least 8), and the workers share the rest, at least 2 each, so a small pool starts fewer workers, and
   one under 10 none.
+- **Queries per connection.** `BUNVEX_MAX_QUERIES_PER_CONNECTION` (default 4096) is the most queries one sync
+  connection may hold. Each `useQuery` is one, and so is each loaded page of a paginated query. A client that asks
+  for more is disconnected with "Too many queries on this connection"; raise the value if your app really needs more,
+  or set `0` for no cap (Convex has none). It bounds the memory one socket can make the backend hold, about 11 KB a
+  query.
 - **Metrics.** `DISABLE_METRICS_ENDPOINT=false` serves Prometheus metrics at `/metrics` (see the table above).
 - **Logs.** `bunvex logs` follows the functions' log lines; log streams send them, with audit and other events, to
   a webhook, Datadog, Axiom, Sentry or PostHog.
