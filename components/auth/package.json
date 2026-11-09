@@ -122,7 +122,7 @@
     "@happy-dom/global-registrator": "^21.0.4",
     "hash-wasm": "^4.12.0",
     "@bunvex/testing": "workspace:*",
-    "cookie": "1.1.1",
+    "cookie": "2.0.2",
     "jose": "^6.2.14",
     "next": "16.4.3"
   },
