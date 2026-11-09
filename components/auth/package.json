@@ -124,7 +124,7 @@
     "@bunvex/testing": "workspace:*",
     "cookie": "1.1.1",
     "jose": "^6.2.14",
-    "next": "16.4.3"
+    "next": "16.4.5"
   },
   "repository": {
     "type": "git",
