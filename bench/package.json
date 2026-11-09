@@ -15,6 +15,6 @@
     "@bunvex/server": "workspace:*",
     "@bunvex/values": "workspace:*",
     "mysql2": "^3.24.6",
-    "postgres": "^4.0.0"
+    "postgres": "^4.1.0"
   }
 }
