@@ -36,7 +36,7 @@
     "@tanstack/react-virtual": "^3.14.24",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "lucide-react": "^1.64.0",
+    "lucide-react": "^1.69.0",
     "maplibre-gl": "6.16.0",
     "monaco-editor": "^0.57.0",
     "tailwind-merge": "^3.7.0",
