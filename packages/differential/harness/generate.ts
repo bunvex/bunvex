@@ -40,12 +40,22 @@ const docB = fc.record({ x: fc.oneof(smallInt, keyValue), extra: anyValue }, { r
   Record<string, unknown>
 >;
 
+// DV-310, decided: an index range on a value ends at the value's key plus 0xFF on bunvex and at its prefix increment
+// on Convex, so an indexed string that continues a bound with a NUL ("a\0b" against `lte "a"`) is selected by Convex
+// only. The fixed test pins both sides; here a NUL string stays out of the indexed fields (`k`, `n`, `x`).
+const INDEXED = new Set(["k", "n", "x"]);
+const nulString = (v: unknown) => typeof v === "string" && v.includes("\u0000");
+
 /** Fields a patch writes: a new value, or `undefined` (the field removed). */
-const patchFields = fc.dictionary(
-  fc.constantFrom("k", "n", "x", "extra", "added"),
-  fc.oneof(keyValue, smallInt, anyValue, fc.constant(UNDEFINED as unknown as Value)),
-  { minKeys: 1, maxKeys: 3 },
-) as fc.Arbitrary<Record<string, unknown>>;
+const patchFields = fc
+  .dictionary(
+    fc.constantFrom("k", "n", "x", "extra", "added"),
+    fc.oneof(keyValue, smallInt, anyValue, fc.constant(UNDEFINED as unknown as Value)),
+    { minKeys: 1, maxKeys: 3 },
+  )
+  .filter((fields) => !Object.entries(fields).some(([f, v]) => INDEXED.has(f) && nulString(v))) as fc.Arbitrary<
+  Record<string, unknown>
+>;
 
 type Bound = { field: string; op: "eq" | "gt" | "gte" | "lt" | "lte"; value: unknown };
 

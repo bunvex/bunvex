@@ -13,23 +13,23 @@
     "test": "bun test"
   },
   "devDependencies": {
-    "@tailwindcss/vite": "^4.3.3",
+    "@tailwindcss/vite": "^4.3.4",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "@vitejs/plugin-react": "^6.1.2",
+    "@vitejs/plugin-react": "^6.2.1",
     "axe-core": "4.14.0",
     "happy-dom": "^21.0.4",
-    "playwright-core": "1.64.1",
+    "playwright-core": "1.65.0",
     "tailwindcss": "^4.3.3",
     "typescript": "^5.9.0",
-    "vite": "^8.3.5"
+    "vite": "^8.3.6"
   },
   "dependencies": {
     "@bunvex/dashboard": "workspace:*",
     "@bunvex/dashboard-source": "workspace:*",
     "@bunvex/ui": "workspace:*",
     "@tanstack/react-router": "^1.170.40",
-    "lucide-react": "^1.64.0",
+    "lucide-react": "^1.69.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   }
