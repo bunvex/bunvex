@@ -3,6 +3,7 @@
 
 - **Status:** no divergence of its own, so nothing for the owner to decide. Built (§3.4). The names and the cookie names follow C-4 (DV-577, rule 5), the proxy's
   wire names DV-307 and DV-315 (§4).
+- **Followed by [STUDY-208](STUDY-208-auth-v2-release.md)** (2026-11-12): Convex Auth 2.0.0 exports `RefreshResult` from `./ssr`, adds the client provider's `isAuthenticatedFunctionName` (the session watcher), and its Next.js example wraps the server provider in `<Suspense>` for Cache Components.
 - **Scope:** STUDY-191 §3.4 step 7, "SSR and Next.js", taken before steps 4–6 (email, OAuth, passkeys) at the
   owner's request (2026-11-03). Everything the core of [STUDY-201](STUDY-201-auth-core.md) left out: `./ssr` and
   `./ssr/nextjs`, and an example app. The client side, `AuthClient` in its `"ssr"` model, was built with the core
