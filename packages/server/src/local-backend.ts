@@ -28,6 +28,7 @@
 // Misuse is reported as clap reports Convex's (`command-line.ts`, STUDY-172). SIGINT / SIGTERM stop it.
 import { resolve } from "node:path";
 import { DEFAULT_INSTANCE_NAME, defineSchema, Engine, type Persistence, type StorageType } from "@bunvex/core";
+import { releaseKnobNotes } from "@bunvex/core/knobs";
 import { type BlobStore, blobStoreFromEnv, LocalBlobStore, s3OptionsFromEnv } from "@bunvex/file-storage";
 import { ADDRESS_SCREENS, type AddressScreen, DEFAULT_ADDRESS_SCREEN } from "./address-screen.ts";
 import { adminKeyCipherKey, issueAdminKey } from "./admin-keys.ts";
@@ -434,6 +435,9 @@ function keygenMain(args: string[], io: LocalBackendIo): number {
 /** The program: `keygen admin-key`, or the backend until SIGINT / SIGTERM. Resolves to the exit code. */
 export async function localBackendMain(args: string[], io: LocalBackendIo, version: string): Promise<number> {
   const r = parseCommand(LOCAL_BACKEND, args, fromEnv(io.env));
+  // Convex's `main` (crates/local_backend/src/main.rs): only the server logs a knob's notes; `keygen`'s stdout is
+  // for a script, and help, the version and a usage error end before any logging is set up.
+  releaseKnobNotes(r.kind === "ok");
   if (r.kind === "subcommand" && r.name === "keygen") return keygenMain(r.rest, io);
   if (r.kind === "subcommand") {
     // `help`, `help keygen`, `help keygen admin-key`.

@@ -2,7 +2,7 @@
 // the default; a value that does not parse as the knob's type is logged and gives the default, never an error;
 // a value other than the default is logged as an override; each line is logged once.
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { boolKnob, knob, secondsKnob } from "../src/knobs.ts";
+import { boolKnob, holdKnobNotes, knob, releaseKnobNotes, secondsKnob } from "../src/knobs.ts";
 
 const lines: { level: "info" | "warn"; line: string }[] = [];
 const saved = { info: console.info, warn: console.warn };
@@ -70,5 +70,23 @@ test("an override is logged as Convex's, once however often the knob is read", (
   expect(lines).toEqual([
     { level: "info", line: "Overriding K_ONCE to 5 from environment" },
     { level: "warn", line: "Invalid value x for K_BAD, falling back to 1." },
+  ]);
+});
+
+// Dropping them for good (a subcommand) is tested on the executable: packages/cli/test/local-deployment.test.ts.
+test("held notes wait for the release, then log in order; a release without a hold does nothing", () => {
+  releaseKnobNotes(false);
+  knob("K_FREE", 1, "uint", { K_FREE: "2" });
+  holdKnobNotes();
+  knob("K_HELD", 1, "uint", { K_HELD: "3" });
+  knob("K_HELD_BAD", 1, "uint", { K_HELD_BAD: "x" });
+  expect(lines).toEqual([{ level: "info", line: "Overriding K_FREE to 2 from environment" }]);
+  releaseKnobNotes(true);
+  knob("K_AFTER", 1, "uint", { K_AFTER: "4" });
+  expect(lines).toEqual([
+    { level: "info", line: "Overriding K_FREE to 2 from environment" },
+    { level: "info", line: "Overriding K_HELD to 3 from environment" },
+    { level: "warn", line: "Invalid value x for K_HELD_BAD, falling back to 1." },
+    { level: "info", line: "Overriding K_AFTER to 4 from environment" },
   ]);
 });
