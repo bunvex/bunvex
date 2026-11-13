@@ -41,8 +41,8 @@ export const invalidCode = { status: "error" as const, userError: { error: "INVA
  */
 export const acmeRefs: OauthProviderRefs = {
   providerName: "acme",
-  startSignIn: makeFunctionReference<"mutation">("auth:startSignInAcme") as never,
-  completeSignIn: makeFunctionReference<"mutation">("auth:completeSignInAcme") as never,
+  startSignIn: makeFunctionReference<"mutation">("auth:startSignInWithAcme") as never,
+  completeSignIn: makeFunctionReference<"mutation">("auth:completeSignInWithAcme") as never,
 };
 
 /** The oauth setup's storage over `storage`. */

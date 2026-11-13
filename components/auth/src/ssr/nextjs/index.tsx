@@ -3,6 +3,7 @@
 // Server Components and Server Actions read the token from its cookie; a server provider hands it to the client one.
 // The routes themselves (sign-in, refresh, sign-out) are `@bunvex/auth/ssr`'s handlers, mounted under `app/auth/`.
 import { BunvexHttpClient } from "@bunvex/client";
+import { getFunctionName } from "@bunvex/server";
 import { cookies as nextCookies } from "next/headers.js";
 import { connection, type NextRequest, NextResponse } from "next/server.js";
 import type { ReactNode } from "react";
@@ -24,7 +25,11 @@ export interface BunvexAuthNextjsConfig {
   bunvexUrl: string;
   /** The app's `refreshSession` mutation. */
   refreshSession: RefreshSessionFn;
-  /** The app's `isAuthenticated` query. */
+  /**
+   * The app's `isAuthenticated` query, used twice: the server asks the deployment with it whether the access token
+   * names a live session (instead of trusting the cookie), and the client provider subscribes to it, so a session
+   * revoked on the server signs the browser out at once instead of at its next refresh.
+   */
   isAuthenticated: IsAuthenticatedFn;
   /**
    * The session cookies' attributes, as given to `setupBunvexAuthServer`. `secure` defaults to whether
@@ -172,7 +177,12 @@ export function setupBunvexAuthNextjs(config: BunvexAuthNextjsConfig) {
     // Imported here, so a server module that only reads the token does not load the client's code.
     const { BunvexAuthNextjsProvider } = await import("./client.tsx");
     return (
-      <BunvexAuthNextjsProvider bunvexUrl={config.bunvexUrl} initialToken={initialToken}>
+      <BunvexAuthNextjsProvider
+        bunvexUrl={config.bunvexUrl}
+        initialToken={initialToken}
+        // A function reference does not survive the trip to the client (it is a proxy); its name, a string, does.
+        isAuthenticatedFunctionName={getFunctionName(config.isAuthenticated)}
+      >
         {children}
       </BunvexAuthNextjsProvider>
     );

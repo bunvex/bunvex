@@ -3,6 +3,7 @@
 // the token, the sign-in API the methods' hooks run their functions through).
 "use client";
 
+import { useBunvexAuth, useQuery } from "@bunvex/react";
 import {
   createContext,
   type ReactNode,
@@ -14,7 +15,7 @@ import {
 } from "react";
 import type { AuthSignInApi } from "../browser/ambientSignInClient.ts";
 import { type AuthClient, INITIAL_AUTH_STATE } from "../browser/sessionManager.ts";
-import type { SlimTokenBundle, TokenBundle } from "../lib/types.ts";
+import type { IsAuthenticatedFn, SlimTokenBundle, TokenBundle } from "../lib/types.ts";
 
 export type { AuthSignInApi };
 
@@ -72,6 +73,28 @@ export function useAuth(): AuthState {
   const auth = useContext(AuthInternalContext);
   if (auth === undefined) throw new Error("useAuth must be used within a <BunvexAuthProvider>.");
   return auth;
+}
+
+// v2's `SessionWatcher` (`react/client.tsx:112-147`, a48a91a5; STUDY-208 §1.10). Not exported from the package.
+/**
+ * Signs the client out when the server reports its session gone (signed out elsewhere, revoked), instead of waiting
+ * for the access token to expire: it subscribes to the app's `isAuthenticated` query once the deployment has accepted
+ * the token, and a `false` answer runs a full `signOut()` (under server rendering, the sign-out route also clears the
+ * cookies; on a session already gone, the server's sign-out does nothing). Rendered inside `BunvexProviderWithAuth` by
+ * both providers; it renders nothing.
+ */
+export function SessionWatcher({ isAuthenticated }: { isAuthenticated: IsAuthenticatedFn }) {
+  const authClient = useContext(AuthClientContext);
+  if (authClient === undefined) throw new Error("SessionWatcher must be rendered under AuthProvider.");
+  // The deployment's view, not the stored token's: before it accepts the token (or after it dropped it) the query would
+  // run without the identity and answer `false` for a live session.
+  const { isAuthenticated: accepted } = useBunvexAuth();
+  const hasLiveSession = useQuery(isAuthenticated, accepted ? {} : "skip");
+  const revoked = hasLiveSession === false;
+  useEffect(() => {
+    if (revoked) void authClient.signOut();
+  }, [revoked, authClient]);
+  return null;
 }
 
 /**

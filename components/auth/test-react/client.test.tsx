@@ -1,12 +1,18 @@
-// The React bindings of the session manager (STUDY-201 §3.4), upstream's `react/client.test.tsx` ported (10).
+// The React bindings of the session manager (STUDY-201 §3.4), upstream's `react/client.test.tsx` ported (14, at 2.0.0),
+// and the watcher outside a provider. Upstream's `SessionWatcher` cases mock `useConvexAuth` and `useQuery`; here the
+// real `BunvexProviderWithAuth` and `useQuery` run on a real `BunvexReactClient` whose deployment is stubbed
+// (`deployment.ts`).
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { BunvexProviderWithAuth, BunvexReactClient } from "@bunvex/react";
+import { makeFunctionReference } from "@bunvex/server";
 import { act, cleanup, render, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { AuthClient, type SpaAuthApi } from "../src/browser/sessionManager.ts";
 import { InMemoryStorage, JWT_STORAGE_KEY, REFRESH_TOKEN_STORAGE_KEY } from "../src/browser/storage.ts";
 import type { TokenBundle } from "../src/lib/types.ts";
-import { AuthProvider, useAuth } from "../src/react/client.tsx";
+import { AuthProvider, SessionWatcher, useAuth } from "../src/react/client.tsx";
 import { useAuthActions, useAuthToken } from "../src/react/index.tsx";
+import { stubDeployment } from "./deployment.ts";
 import { stubSignInApi } from "./signInApi.ts";
 
 const NAMESPACE = "https://happy-animal-123.bunvex.example";
@@ -169,5 +175,106 @@ describe("React bindings", () => {
     });
     expect(result.current.auth.isAuthenticated).toBe(false);
     expect(result.current.token).toBeNull();
+  });
+});
+
+describe("SessionWatcher", () => {
+  const IS_AUTHENTICATED = "auth:isAuthenticated";
+  const isAuthenticatedRef = makeFunctionReference<"query">(IS_AUTHENTICATED) as never;
+  const bunvexClients: BunvexReactClient[] = [];
+  afterEach(async () => {
+    cleanup();
+    for (const c of bunvexClients.splice(0)) await c.close();
+  });
+
+  /** A session client hydrated as signed in, with a spy on the server sign-out. */
+  function makeAuthenticatedClient() {
+    const storage = new InMemoryStorage();
+    storage.setItem(`${JWT_STORAGE_KEY}_${SUFFIX}`, "access-1");
+    storage.setItem(`${REFRESH_TOKEN_STORAGE_KEY}_${SUFFIX}`, "refresh-1");
+    const signOut = mock(async () => {});
+    const { client } = makeClient({ signOut }, storage);
+    return { client, signOut };
+  }
+
+  /** The watcher under the providers, on a real client whose deployment the test plays. */
+  async function renderWatcher(client: AuthClient) {
+    const bunvex = new BunvexReactClient(NAMESPACE);
+    bunvexClients.push(bunvex);
+    const deployment = stubDeployment(bunvex);
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <AuthProvider authClient={client} signInApi={stubSignInApi().signInApi}>
+        <BunvexProviderWithAuth client={bunvex} useAuth={useAuth}>
+          <SessionWatcher isAuthenticated={isAuthenticatedRef} />
+          {children}
+        </BunvexProviderWithAuth>
+      </AuthProvider>
+    );
+    const rendered = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(rendered.result.current.isAuthenticated).toBe(true));
+    // Signed in locally: the client hands its token to the deployment.
+    await waitFor(() => expect(deployment.setAuth).toHaveBeenCalled());
+    return { ...rendered, deployment };
+  }
+
+  test("signs out when the server reports the session is gone", async () => {
+    const { client, signOut } = makeAuthenticatedClient();
+    const { result, deployment } = await renderWatcher(client);
+    deployment.accept(true);
+    deployment.serve(IS_AUTHENTICATED, true);
+    expect(deployment.isSubscribed(IS_AUTHENTICATED)).toBe(true);
+
+    // The session is revoked on the server: the subscription's next answer is `false`, which clears the local session.
+    deployment.serve(IS_AUTHENTICATED, false);
+
+    await waitFor(() => expect(result.current.isAuthenticated).toBe(false));
+    expect(signOut).toHaveBeenCalledTimes(1);
+  });
+
+  test("stays signed in while the server reports the session live", async () => {
+    const { client, signOut } = makeAuthenticatedClient();
+    const { result, deployment } = await renderWatcher(client);
+    deployment.accept(true);
+    deployment.serve(IS_AUTHENTICATED, true);
+
+    expect(deployment.subscriptionsTo(IS_AUTHENTICATED)).toEqual([{ path: IS_AUTHENTICATED, args: {} }]);
+    expect(signOut).not.toHaveBeenCalled();
+    expect(result.current.isAuthenticated).toBe(true);
+  });
+
+  test("does not subscribe until the backend accepts the token", async () => {
+    // Signed in locally, but the deployment has not accepted the token (the handshake is pending, or the client gave
+    // up on auth). A query run now would see no identity and answer `false` with the session still live, so the
+    // watcher must not ask.
+    const { client, signOut } = makeAuthenticatedClient();
+    const { result, deployment } = await renderWatcher(client);
+    deployment.serve(IS_AUTHENTICATED, false);
+
+    expect(deployment.subscriptionsTo(IS_AUTHENTICATED)).toEqual([]);
+    expect(signOut).not.toHaveBeenCalled();
+    expect(result.current.isAuthenticated).toBe(true);
+  });
+
+  test("stops subscribing when the backend drops the token", async () => {
+    const { client, signOut } = makeAuthenticatedClient();
+    const { result, deployment } = await renderWatcher(client);
+    deployment.accept(true);
+    deployment.serve(IS_AUTHENTICATED, true);
+    expect(deployment.isSubscribed(IS_AUTHENTICATED)).toBe(true);
+
+    // The client dropped its auth (a refresh failed on the network, say): the gate closes, so the re-run without the
+    // identity is never read.
+    deployment.accept(false);
+    deployment.serve(IS_AUTHENTICATED, false);
+
+    expect(deployment.isSubscribed(IS_AUTHENTICATED)).toBe(false);
+    expect(signOut).not.toHaveBeenCalled();
+    expect(result.current.isAuthenticated).toBe(true);
+  });
+
+  test("throws outside an AuthProvider", () => {
+    expect(renderThrowing(() => SessionWatcher({ isAuthenticated: isAuthenticatedRef }))).toThrow(
+      "SessionWatcher must be rendered under AuthProvider.",
+    );
   });
 });

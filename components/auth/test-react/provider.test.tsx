@@ -1,20 +1,24 @@
 // `BunvexAuthProvider` (STUDY-201 §3.4), upstream's `react/index.test.tsx` ported (5): a real `BunvexReactClient` on a
 // made-up deployment URL (nothing authenticates or subscribes, so it never connects). Upstream checks the default
-// `oauth()` with the OAuth hook, which comes with OAuth; here, through the value it publishes.
-import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
+// `oauth()` with the OAuth hook, which comes with OAuth; here, through the value it publishes. Beyond upstream, the
+// provider's session watcher (STUDY-208 §1.10), with the deployment stubbed.
+import { afterEach, describe, expect, type Mock, mock, spyOn, test } from "bun:test";
 import { BunvexReactClient } from "@bunvex/react";
 import { makeFunctionReference } from "@bunvex/server";
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { StrictMode } from "react";
 import type { AmbientSignInClient, AuthSignInApi } from "../src/browser/ambientSignInClient.ts";
+import { InMemoryStorage, JWT_STORAGE_KEY, REFRESH_TOKEN_STORAGE_KEY } from "../src/browser/storage.ts";
 import { OAUTH_FLOW_ERROR_KEY, OAUTH_SETUP_ID } from "../src/methods/oauth/client.ts";
 import { useAuthSignInApi } from "../src/react/client.tsx";
-import { BunvexAuthProvider } from "../src/react/index.tsx";
+import { BunvexAuthProvider, useAuthToken } from "../src/react/index.tsx";
 import { useAmbientSignInValue } from "../src/react/methods.ts";
+import { stubDeployment } from "./deployment.ts";
 
 const API = {
   refreshSession: makeFunctionReference<"mutation">("auth:refreshSession"),
   signOut: makeFunctionReference<"mutation">("auth:signOut"),
+  isAuthenticated: makeFunctionReference<"query">("auth:isAuthenticated"),
 } as never;
 
 const clients: BunvexReactClient[] = [];
@@ -115,5 +119,62 @@ describe("BunvexAuthProvider ambient sign-ins", () => {
       </BunvexAuthProvider>,
     );
     expect(screen.getByText("null")).toBeDefined();
+  });
+});
+
+describe("BunvexAuthProvider session watcher", () => {
+  let fetchSpy: Mock<typeof fetch> | undefined;
+  afterEach(async () => {
+    cleanup();
+    fetchSpy?.mockRestore();
+    fetchSpy = undefined;
+    for (const c of clients.splice(0)) await c.close();
+  });
+
+  test("a session revoked on the server signs the client out", async () => {
+    const client = makeClient();
+    const deployment = stubDeployment(client);
+    // The sign-out goes over HTTP: the deployment answers `null`.
+    fetchSpy = spyOn(globalThis, "fetch").mockImplementation(
+      (async () =>
+        new Response(JSON.stringify({ status: "success", value: null, logLines: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })) as unknown as typeof fetch,
+    );
+    const storage = new InMemoryStorage();
+    const suffix = "httpshappyanimal123bunvexexample";
+    storage.setItem(`${JWT_STORAGE_KEY}_${suffix}`, "access-1");
+    storage.setItem(`${REFRESH_TOKEN_STORAGE_KEY}_${suffix}`, "refresh-1");
+    // Assigned while rendering, so not narrowed to its initial value.
+    let token = null as string | null;
+    function Probe() {
+      token = useAuthToken();
+      return null;
+    }
+    await act(async () => {
+      render(
+        <BunvexAuthProvider client={client} api={API} storage={storage}>
+          <Probe />
+        </BunvexAuthProvider>,
+      );
+    });
+    await waitFor(() => expect(deployment.setAuth).toHaveBeenCalled());
+    expect(token).toBe("access-1");
+    deployment.accept(true);
+    expect(deployment.subscriptionsTo("auth:isAuthenticated")).toEqual([{ path: "auth:isAuthenticated", args: {} }]);
+    deployment.serve("auth:isAuthenticated", true);
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    await act(async () => {
+      deployment.serve("auth:isAuthenticated", false);
+      await waitFor(() => expect(token).toBeNull());
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const [, init] = fetchSpy.mock.calls[0]!;
+    expect(JSON.parse(init!.body as string)).toMatchObject({
+      path: "auth:signOut",
+      args: [{ refreshToken: "refresh-1" }],
+    });
   });
 });

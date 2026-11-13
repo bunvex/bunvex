@@ -76,7 +76,7 @@ describe("OAuth client with no page URL", () => {
     expect(readFlow(storage)).toEqual({
       providerName: "acme",
       state: "state-1",
-      completeSignIn: "auth:completeSignInAcme",
+      completeSignIn: "auth:completeSignInWithAcme",
     });
   });
 });
