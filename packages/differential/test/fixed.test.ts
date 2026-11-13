@@ -5,7 +5,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { ORACLE_BIN, startAll, startBunvex, startConvex } from "../harness/backends.ts";
 import { LIMIT_CASES } from "../harness/generate.ts";
-import { compare, type Program } from "../harness/runner.ts";
+import { compare, type Program, run } from "../harness/runner.ts";
 
 const ready = existsSync(ORACLE_BIN);
 if (!ready) console.warn(`differential: skipped, no Convex backend at ${ORACLE_BIN}`);
@@ -282,6 +282,39 @@ const PROGRAMS: Record<string, Program> = {
     { kind: "read", read: { table: "b" } },
   ],
 };
+
+// DV-310 (decided, #256): Convex ends an index range on a value at its key's prefix increment, so a string that
+// continues the value with a NUL ("a\0b" after "a") is inside `eq "a"` and `lte "a"` and outside `gt "a"`; bunvex
+// selects what the comparison selects. Pinned on both sides, so a change on either is seen (the generated programs
+// keep NUL strings out of indexed fields for this reason).
+describe.skipIf(!ready)("a decided divergence: a NUL after an index range's value (DV-310)", () => {
+  const program: Program = [
+    {
+      kind: "apply",
+      ops: [
+        { kind: "insert", table: "a", doc: { k: "a" }, as: "r1" },
+        { kind: "insert", table: "a", doc: { k: "a\u0000b" }, as: "r2" },
+      ],
+    },
+    ...(["eq", "lte", "gt"] as const).map((op) => ({
+      kind: "read" as const,
+      read: { table: "a", index: "by_k", range: [{ field: "k", op, value: "a" }] },
+    })),
+  ];
+  const keys = (r: Awaited<ReturnType<typeof run>>) =>
+    r.steps.slice(1).map((s) => ((s.answer.body as { value: { k: string }[] }).value ?? []).map((d) => d.k));
+
+  test("Convex selects by the key's prefix, bunvex by the comparison", async () => {
+    const [oracle, bunvex] = await startAll([startConvex(), startBunvex()]);
+    try {
+      const [onConvex, onBunvex] = await Promise.all([run(oracle, program), run(bunvex, program)]);
+      expect(keys(onConvex)).toEqual([["a", "a\u0000b"], ["a", "a\u0000b"], []]);
+      expect(keys(onBunvex)).toEqual([["a"], ["a"], ["a\u0000b"]]);
+    } finally {
+      await Promise.all([oracle.stop(), bunvex.stop()]);
+    }
+  });
+});
 
 describe.skipIf(!ready)("the same program on Convex and on bunvex", () => {
   for (const [name, program] of Object.entries(PROGRAMS))
