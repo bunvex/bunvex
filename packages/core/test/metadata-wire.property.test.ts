@@ -307,6 +307,27 @@ describe("the commits", () => {
     );
   });
 
+  test("a copy keeps only its window of the log: an older ts is not proven, a newer one is; the main thread's purge still counts", () => {
+    const reads: Interval[] = [{ index: "b", lo: new Uint8Array([0]), hi: new Uint8Array([9]) }];
+    const write = (ts: bigint) => ({ ts, writes: [{ index: "a", key: new Uint8Array([1]), id: null }] });
+    const copy = new WriteLogCopy(0n, 10n);
+    const entries = Array.from({ length: 30 }, (_, i) => write(BigInt(i + 1)));
+    copy.hear(encodeCommits({ visibleTs: 30n, purgedTs: 0n, entries }));
+    // Kept: the commits above 30 - 10. Index "b" was never written, so only the window decides.
+    expect(copy.changedBetween(reads, 20n, 30n)).toBe(false);
+    expect(copy.changedBetween(reads, 19n, 30n)).toBe(true);
+    // The main thread's purge past the window wins.
+    copy.hear(encodeCommits({ visibleTs: 31n, purgedTs: 25n, entries: [write(31n)] }));
+    expect(copy.changedBetween(reads, 24n, 31n)).toBe(true);
+    expect(copy.changedBetween(reads, 25n, 31n)).toBe(false);
+    // By default the window is the write log's minimum retention, 30 s of nanosecond timestamps.
+    const s = 1_000_000_000n;
+    const byDefault = new WriteLogCopy(0n);
+    byDefault.hear(encodeCommits({ visibleTs: 40n * s, purgedTs: 0n, entries: [write(40n * s)] }));
+    expect(byDefault.changedBetween(reads, 10n * s, 40n * s)).toBe(false);
+    expect(byDefault.changedBetween(reads, 10n * s - 1n, 40n * s)).toBe(true);
+  });
+
   test("before the worker started nothing is proven; past what it heard is an error; a commit heard twice counts once", () => {
     const copy = new WriteLogCopy(10n);
     const reads: Interval[] = [{ index: "a", lo: new Uint8Array([0]), hi: new Uint8Array([9]) }];
