@@ -64,7 +64,7 @@ jobs:
           echo "REPORT_ONLY=$REPORT_ONLY" >> "$GITHUB_ENV"
           echo "report-only rules: ${REPORT_ONLY:-none}"
           set +e
-          bun bench/soak/soak.ts --minutes "$MINUTES" --out .data/soak --report-only "$REPORT_ONLY" 2>&1 | tee .data/soak/soak.log
+          bun bench/soak/soak.ts --minutes "$MINUTES" --probe --out .data/soak --report-only "$REPORT_ONLY" 2>&1 | tee .data/soak/soak.log
           code=${PIPESTATUS[0]}
           set -e
           if [ -f .data/soak/report.md ]; then cat .data/soak/report.md >> "$GITHUB_STEP_SUMMARY"; fi
