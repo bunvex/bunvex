@@ -1,5 +1,7 @@
 // The anonymous method's React hook (STUDY-201 §1.11), v2's: it runs `signInAnonymously` through the provider's sign-in
 // API and keeps the session. Unlike the password hooks it folds nothing: a failed call rejects.
+// Not exported since Convex Auth 2.0.0 hid the anonymous method until account linking (`bff2ce56`, STUDY-208 D-3): the
+// source stays, as v2's does, for its tests.
 "use client";
 
 import type { FunctionReference } from "@bunvex/server";
@@ -9,7 +11,11 @@ import { useAuthSignInApi } from "../../react/client.tsx";
 import { useStableFunctionReference } from "../../react/functionReference.ts";
 import { useAuthActions } from "../../react/index.tsx";
 
-/** The app's `signInAnonymously` mutation. */
+/**
+ * The app's `signInAnonymously` mutation.
+ *
+ * @internal Not public until the anonymous sign-in method is ready.
+ */
 export type SignInAnonymouslyMutation = FunctionReference<
   "mutation",
   "public",
@@ -17,7 +23,11 @@ export type SignInAnonymouslyMutation = FunctionReference<
   ClientView<SignInComplete>
 >;
 
-/** Sign in anonymously: `signIn()` starts a session for a new anonymous user. */
+/**
+ * Sign in anonymously: `signIn()` starts a session for a new anonymous user.
+ *
+ * @internal Not public until the anonymous sign-in method is ready.
+ */
 export function useSignInAnonymously(api: { signInAnonymously: SignInAnonymouslyMutation }) {
   const signInMutation = useStableFunctionReference(api.signInAnonymously);
   const { setSession } = useAuthActions();

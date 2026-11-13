@@ -26,8 +26,12 @@ export function registerCore(t: TestDeployment, name = "auth"): ComponentApi {
  * and the core finds the user through it, so a test signs in for real and calls as that session.
  *
  * ```ts
- * const { tokens } = await t.mutation(api.auth.signInAnonymously, {});
- * const alice = t.withIdentity(sessionIdentity(tokens));
+ * const result = await t.mutation(api.auth.signUpWithUsernamePassword, {
+ *   username: "alice",
+ *   password: "correct horse battery staple",
+ * });
+ * if (result.status !== "complete") throw new Error("sign-up failed");
+ * const alice = t.withIdentity(sessionIdentity(result.tokens));
  * ```
  */
 export function sessionIdentity(tokens: { accessToken: string }): { subject: string } {

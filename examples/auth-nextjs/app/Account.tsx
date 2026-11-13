@@ -14,8 +14,7 @@ export function Account({ preloaded }: { preloaded: Preloaded<typeof api.users.l
     <main>
       <h1>bunvex auth + Next.js</h1>
       <p>
-        Signed in as{" "}
-        <strong data-testid="user">{user ? (user.username ?? "an anonymous user") : "(signed out)"}</strong>.
+        Signed in as <strong data-testid="user">{user ? user.username : "(signed out)"}</strong>.
       </p>
       <p>
         The page holds the access token alone (<code>{token ? `${token.slice(0, 16)}…` : "none"}</code>); the refresh

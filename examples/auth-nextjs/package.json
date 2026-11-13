@@ -2,7 +2,7 @@
   "name": "bunvex-example-auth-nextjs",
   "version": "0.0.0",
   "private": true,
-  "description": "@bunvex/auth under Next.js: sign in with a username and a password, or anonymously; the refresh token in an httpOnly cookie, pages rendered signed in.",
+  "description": "@bunvex/auth under Next.js: sign in with a username and a password; the refresh token in an httpOnly cookie, pages rendered signed in.",
   "type": "module",
   "scripts": {
     "dev": "bunvex dev --start 'next dev'",

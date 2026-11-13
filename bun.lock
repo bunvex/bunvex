@@ -96,9 +96,6 @@
     "components/auth": {
       "name": "@bunvex/auth",
       "version": "0.1.0-alpha.2",
-      "bin": {
-        "auth": "./src/cli/init.ts",
-      },
       "dependencies": {
         "@bunvex/rate-limiter": "workspace:^",
       },
@@ -248,29 +245,6 @@
       },
       "devDependencies": {
         "@bunvex/cli": "workspace:*",
-        "@types/react": "^19.3.0",
-        "@types/react-dom": "^19.3.0",
-        "@vitejs/plugin-react": "^6.2.1",
-        "bunvex-examples-harness": "workspace:*",
-        "typescript": "^5.9.0",
-        "vite": "^8.3.6",
-      },
-    },
-    "examples/auth-anonymous": {
-      "name": "bunvex-example-auth-anonymous",
-      "version": "0.0.0",
-      "dependencies": {
-        "@bunvex/auth": "workspace:*",
-        "@bunvex/client": "workspace:*",
-        "@bunvex/react": "workspace:*",
-        "@bunvex/server": "workspace:*",
-        "@bunvex/values": "workspace:*",
-        "react": "^19.3.1",
-        "react-dom": "^19.3.1",
-      },
-      "devDependencies": {
-        "@bunvex/cli": "workspace:*",
-        "@bunvex/testing": "workspace:*",
         "@types/react": "^19.3.0",
         "@types/react-dom": "^19.3.0",
         "@vitejs/plugin-react": "^6.2.1",
@@ -2366,8 +2340,6 @@
     "bundle-name": ["bundle-name@4.1.1", "", { "dependencies": { "run-applescript": "^7.0.0" } }, "sha512-DdH81/zPLVS11EUgWq3tEu/xn+EzljlMYooDNdzWEnFha3R3NBMpMV1UqYIpjYHV/SgpFKMIX1Oh7o06SjM/oA=="],
 
     "bunvex-example-args-validation": ["bunvex-example-args-validation@workspace:examples/args-validation"],
-
-    "bunvex-example-auth-anonymous": ["bunvex-example-auth-anonymous@workspace:examples/auth-anonymous"],
 
     "bunvex-example-auth-nextjs": ["bunvex-example-auth-nextjs@workspace:examples/auth-nextjs"],
 

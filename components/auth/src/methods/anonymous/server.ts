@@ -1,5 +1,7 @@
 // The anonymous method's server side (STUDY-201 §1.9), v2's `setupAnonymous`: every call creates an account and a user,
 // with no way back to one.
+// Not exported since Convex Auth 2.0.0 hid the anonymous method until account linking (`bff2ce56`, STUDY-208 D-3): the
+// source stays, as v2's does, for its tests.
 import type { ComponentApi } from "../../components/anonymous/_generated/component.ts";
 import { type SignInComplete, type UserCallbacks, vSignInComplete } from "../../lib/types.ts";
 import type { AuthCore } from "../../server/setup.ts";
@@ -18,6 +20,8 @@ const PROVIDER_NAME = "anonymous";
  *   component: components.authAnonymous,
  * }).attachUserCallbacks({ createUser: internal.users.createUserAnonymous });
  * ```
+ *
+ * @internal Not public until the anonymous sign-in method is ready.
  */
 export function setupAnonymous<UsersTable extends string>(
   core: AuthCore<UsersTable>,

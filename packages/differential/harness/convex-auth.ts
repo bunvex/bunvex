@@ -25,6 +25,17 @@ const PNPM = "pnpm@10.16.0";
 /** The clone: `CONVEX_AUTH_REPO`, or `convex-auth` beside bunvex's repository. */
 const REPO = process.env.CONVEX_AUTH_REPO ?? resolve(ROOT, "../convex-auth");
 const CACHE = join(PACKAGE, ".cache", `convex-auth-${CONVEX_AUTH_PIN}`);
+/**
+ * The anonymous method, which `@bunvex/auth` no longer exports (STUDY-208 D-3, as Convex Auth 2.0.0 hides it): bunvex's
+ * copy of the app imports it from the package's sources.
+ */
+const BUNVEX_ANONYMOUS: Record<string, string> = {
+  '"@convex-dev/auth/methods/anonymous/server"': join(ROOT, "components/auth/src/methods/anonymous/server.ts"),
+  '"@convex-dev/auth/components/anonymous/convex.config.js"': join(
+    ROOT,
+    "components/auth/src/components/anonymous/bunvex.config.ts",
+  ),
+};
 
 function run(cmd: string[], cwd: string): void {
   const p = Bun.spawnSync(cmd, { cwd, stdout: "pipe", stderr: "pipe" });
@@ -93,9 +104,12 @@ export function authAppPreparer(modules: string) {
     for (const name of readdirSync(functions)) {
       if (!name.endsWith(".ts")) continue;
       const file = join(functions, name);
+      let source = readFileSync(file, "utf8");
+      for (const [specifier, path] of Object.entries(BUNVEX_ANONYMOUS))
+        source = source.replaceAll(specifier, JSON.stringify(path));
       writeFileSync(
         file,
-        readFileSync(file, "utf8")
+        source
           .replace(
             /"@convex-dev\/auth\/((?:components\/[a-z]+\/)?)convex\.config\.js"/g,
             '"@bunvex/auth/$1bunvex.config.js"',
