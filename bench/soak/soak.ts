@@ -11,6 +11,11 @@
 // `--probe` preloads ./probe.ts into the backend, which writes its memory detail to `<out>/probe.jsonl` (read by
 // ./analyze.ts). The backend's stderr is kept in `<out>/backend.stderr`.
 //
+// Latency diagnostics, never judged (./diagnostics.ts): every sample also records the machine's CPU (busy, I/O wait,
+// and steal: time another tenant of the hypervisor took), the backend's and the driver's, the backend's threads by
+// name, and the main thread's stalls, which ./loop-lag.ts (always preloaded but with `--off looplag`) writes to
+// `<out>/loop-stalls.txt`. The report compares the windows where an HTTP query's p99 was slow with the others.
+//
 // `--report-only R1,…` judges and reports those rules but leaves them out of the exit code (the nightly's R1 until
 // STUDY-174 Q6 is decided, §10.3).
 //
@@ -20,9 +25,11 @@ import { randomBytes } from "node:crypto";
 import {
   appendFileSync,
   cpSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -32,6 +39,16 @@ import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { BunvexClient, BunvexHttpClient } from "@bunvex/client";
 import { anyApi } from "@bunvex/server";
+import {
+  type HostTicks,
+  hostShares,
+  loopWindow,
+  parseProcStat,
+  slowWindows,
+  statTicks,
+  type ThreadTicks,
+  threadCores,
+} from "./diagnostics.ts";
 import {
   exitCode,
   type JobRecord,
@@ -63,7 +80,8 @@ const { values: flags } = parseArgs({
     // Q6, §10.3). 0: none.
     "page-cache-fill-mib": { type: "string", default: "320" },
     // Workload parts to leave out, comma-separated: subs, rooms, reconnects, sync-mutations, hot, httpq,
-    // canary, search, scheduler, storage, crons, logtail, clients (no sync clients at all).
+    // canary, search, scheduler, storage, crons, logtail, clients (no sync clients at all); and looplag, the
+    // backend's stall recorder (./loop-lag.ts), a diagnostic.
     off: { type: "string", default: "" },
     // The backend's memory probe (./probe.ts), and how often it forces a full GC first (0: never).
     probe: { type: "boolean", default: false },
@@ -89,6 +107,8 @@ try {
   process.exit(2);
 }
 mkdirSync(OUT, { recursive: true });
+const LOOP_OUT = join(OUT, "loop-stalls.txt");
+rmSync(LOOP_OUT, { force: true });
 
 const BENCH = resolve(import.meta.dir, "..");
 const ROOT = resolve(BENCH, "..");
@@ -125,6 +145,7 @@ const backend = Bun.spawn(
   [
     process.execPath,
     ...(flags.probe ? ["--preload", join(import.meta.dir, "probe.ts")] : []),
+    ...(on("looplag") ? ["--preload", join(import.meta.dir, "loop-lag.ts")] : []),
     BACKEND,
     "--port",
     String(port),
@@ -146,6 +167,7 @@ const backend = Bun.spawn(
       ...(flags.probe
         ? { SOAK_PROBE_OUT: join(OUT, "probe.jsonl"), SOAK_PROBE_GC_MINUTES: flags["probe-gc-minutes"]! }
         : {}),
+      ...(on("looplag") ? { SOAK_LOOP_OUT: LOOP_OUT } : {}),
     },
     stdout: "ignore",
     stderr: "pipe",
@@ -288,6 +310,36 @@ async function cpuSeconds(): Promise<number> {
     const hh = parts[parts.length - 4] ?? 0;
     return hh * 3600 + mm * 60 + ss + cc / 100;
   }
+}
+
+/** The machine's CPU ticks so far (Linux: /proc/stat; elsewhere: null). */
+function hostTicks(): HostTicks | null {
+  try {
+    return parseProcStat(readFileSync("/proc/stat", "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+/** The backend's threads and their CPU ticks so far (Linux: /proc/<pid>/task; elsewhere: null). */
+function backendThreads(): ThreadTicks | null {
+  let tids: string[];
+  try {
+    tids = readdirSync(`/proc/${backend.pid}/task`);
+  } catch {
+    return null;
+  }
+  const out: ThreadTicks = new Map();
+  for (const tid of tids) {
+    const dir = `/proc/${backend.pid}/task/${tid}`;
+    try {
+      out.set(Number(tid), {
+        comm: readFileSync(`${dir}/comm`, "utf8").trim(),
+        ticks: statTicks(readFileSync(`${dir}/stat`, "utf8")),
+      });
+    } catch {} // the thread ended between the listing and the read
+  }
+  return out;
 }
 
 /** The function log stream, tailed: per function, its calls and its runs (cache misses), past the warm-up. */
@@ -522,6 +574,11 @@ if (FAR_DAYS > 0) await http.mutation(api.jobs.far, { days: FAR_DAYS });
 const samples: Sample[] = [];
 let prev = await metrics();
 const baselineFds = await fds();
+let prevAt = { wall: Date.now(), mono: performance.now() };
+let prevHost = hostTicks();
+let prevThreads = backendThreads();
+let prevBackendCpu = await cpuSeconds();
+let prevDriverCpu = process.cpuUsage();
 const logTimer = setInterval(() => on("logtail") && void tailLogs().catch((e) => failed("log tail", e)), 1000);
 const deadline = tStart + MINUTES * 60_000;
 while (Date.now() < deadline) {
@@ -537,6 +594,29 @@ while (Date.now() < deadline) {
   for (const [op, xs] of lat)
     latency[op] = xs.length ? { p50: percentile(xs, 50), p99: percentile(xs, 99), n: xs.length } : null;
   lat.clear();
+  // The diagnostics of the window just ended (./diagnostics.ts).
+  const at = { wall: Date.now(), mono: performance.now() };
+  const seconds = (at.mono - prevAt.mono) / 1000;
+  const host = hostTicks();
+  const threads = backendThreads();
+  const backendCpu = await cpuSeconds();
+  const driverCpu = process.cpuUsage();
+  const cpu: Sample["cpu"] =
+    host && prevHost && threads && prevThreads
+      ? {
+          ...hostShares(prevHost, host),
+          backendCores: Math.round(((backendCpu - prevBackendCpu) / seconds) * 1000) / 1000,
+          driverCores:
+            Math.round(
+              ((driverCpu.user + driverCpu.system - prevDriverCpu.user - prevDriverCpu.system) / 1e6 / seconds) * 1000,
+            ) / 1000,
+          threads: threadCores(prevThreads, threads, seconds),
+        }
+      : null;
+  const loop = on("looplag")
+    ? loopWindow(existsSync(LOOP_OUT) ? readFileSync(LOOP_OUT, "utf8") : "", prevAt.wall, at.wall)
+    : null;
+  [prevAt, prevHost, prevThreads, prevBackendCpu, prevDriverCpu] = [at, host, threads, backendCpu, driverCpu];
   const s: Sample = {
     t: elapsed(),
     rssBytes: m.get("bunvex_process_resident_memory_bytes") ?? 0,
@@ -555,13 +635,15 @@ while (Date.now() < deadline) {
     latency,
     eventLoopLagSeconds: m.get("bunvex_process_event_loop_lag_seconds") ?? 0,
     backlogSeconds: m.get("bunvex_scheduled_job_backlog_seconds") ?? 0,
+    cpu,
+    loop,
   };
   samples.push(s);
   prev = m;
   const hit = s.cacheHits + s.cacheMisses ? ((100 * s.cacheHits) / (s.cacheHits + s.cacheMisses)).toFixed(1) : "-";
   const anon = s.detail?.anonBytes != null ? ` anon=${(s.detail.anonBytes / 2 ** 20).toFixed(0)}MB` : "";
   console.log(
-    `t=${Math.round(s.t)}s${anon} wal=${((s.detail?.walBytes ?? 0) / 2 ** 20).toFixed(0)}MB rss=${(s.rssBytes / 2 ** 20).toFixed(0)}MB heap=${(s.heapBytes / 2 ** 20).toFixed(0)}MB idx=${(s.indexCacheBytes / 2 ** 20).toFixed(0)}MB fds=${s.fds} hit=${hit}% sessions=${s.sessions}/${s.clients} subs=${s.subscriptions}/${s.subscriptionsOpen} members=${s.roomMembers} canary=${logTail.canaryMisses}/${logTail.canaryCalls} lag=${(s.eventLoopLagSeconds * 1000).toFixed(0)}ms backlog=${s.backlogSeconds.toFixed(1)}s errors=${unexpectedErrors}`,
+    `t=${Math.round(s.t)}s${anon} wal=${((s.detail?.walBytes ?? 0) / 2 ** 20).toFixed(0)}MB rss=${(s.rssBytes / 2 ** 20).toFixed(0)}MB heap=${(s.heapBytes / 2 ** 20).toFixed(0)}MB idx=${(s.indexCacheBytes / 2 ** 20).toFixed(0)}MB fds=${s.fds} hit=${hit}% sessions=${s.sessions}/${s.clients} subs=${s.subscriptions}/${s.subscriptionsOpen} members=${s.roomMembers} canary=${logTail.canaryMisses}/${logTail.canaryCalls} lag=${(s.eventLoopLagSeconds * 1000).toFixed(0)}ms backlog=${s.backlogSeconds.toFixed(1)}s errors=${unexpectedErrors}${cpu ? ` steal=${(100 * cpu.hostSteal).toFixed(1)}% backend=${cpu.backendCores.toFixed(2)}` : ""}${loop ? ` stalls=${loop.stalls}/${loop.maxMs}ms` : ""}`,
   );
 }
 
@@ -633,6 +715,10 @@ const md = [
   "",
   ...(REPORT_ONLY.size ? [`Report-only (judged, not in the exit code): ${[...REPORT_ONLY].join(", ")}.`, ""] : []),
   ...(errorSamples.length ? ["Errors (first 20):", "", ...errorSamples.map((e) => `- ${e}`), ""] : []),
+  ...slowWindows(
+    samples.filter((s) => s.t >= WARMUP_S),
+    "http query",
+  ),
 ].join("\n");
 writeFileSync(join(OUT, "report.md"), md);
 console.log(`\n${md}`);

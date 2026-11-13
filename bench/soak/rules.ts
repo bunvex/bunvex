@@ -2,6 +2,8 @@
 // their own (rules.test.ts) and a run's report can be re-judged from its JSON. A rule fails on a trend (a robust
 // slope projected over the run, and a level shift between the first and last thirds) and not on one noisy sample.
 
+import type { WindowCpu, WindowLoop } from "./diagnostics.ts";
+
 /** One sample of the backend and the driver, every `sampleSeconds`. */
 export type Sample = {
   /** Seconds since the workload started. */
@@ -29,6 +31,9 @@ export type Sample = {
   eventLoopLagSeconds: number;
   /** Scheduler backlog (`bunvex_scheduled_job_backlog_seconds`). */
   backlogSeconds: number;
+  /** Diagnostics, not judged (./diagnostics.ts): the window's CPU (Linux only, else null) and main-thread stalls. */
+  cpu?: WindowCpu | null;
+  loop?: WindowLoop | null;
 };
 
 export type JobRecord = { seq: number; dueAt: number; ranAt: number | null; runs: number };

@@ -1175,6 +1175,46 @@ If either fails a night, look at that limit first.
 **Not here.** The monthly 6-hour VPS soak (Q2) is §9 step 12, once this job has been green for a week; nothing in CI
 schedules anything against the VPS.
 
+### 10.4 The nightly after execution workers (2026-11-13)
+
+**R1.** Execution workers (STUDY-194) were on by default from 2026-11-04 to 2026-11-13. On one commit, `0d0af3b0`,
+the nightly failed R1 on 6 of 9 nights: slope up to 2.3 MB/min, median RSS ~810 MB. R2 stayed flat every night, so the
+growth was outside the main thread's heap.
+
+With the workers off by default (DV-574) R1 is back to its old level. On three runs on GitHub's runner, two dispatched
+and one nightly, R1 passed with slopes −0.7 to 0.1 MB/min and a median RSS of 291–300 MB. The workers' memory growth is
+left to their hardening.
+
+**R8.** The 2026-11-13 nightly failed R8 instead: the HTTP query's p99 went 11.8 → 38.3 ms. Its windows were in a
+"stalled" mode that run 41630892382 (2026-11-03, before the workers) had shown too. In both runs, about half the
+15-second windows had a query p99 above 50 ms. Query and mutation p99s moved together, with a correlation of 0.86 and
+0.71; in the other five runs it was near 0. In those runs at most 3 windows in 145 were above 50 ms.
+
+The stalls do not trend, and 2026-11-03 passed R8 by chance. A slow window fit three causes, and the soak could not tell
+them apart:
+- the machine (another tenant's CPU, the disk);
+- a GC pause;
+- the backend's main thread held by something else.
+
+The backend's lag gauge keeps only the last probe of every 500 ms. Even so, it caught two stalls of ~240 ms. SQLite's
+commits and their fsync already run on the writer thread.
+
+**The diagnostics added for it** (`bench/soak/diagnostics.ts`, never judged). Every sample now also records:
+- the machine's CPU: busy, I/O wait, and steal (time the hypervisor gave another tenant);
+- the backend's and the driver's CPU, in cores;
+- the backend's threads by name;
+- the main thread's stalls. `bench/soak/loop-lag.ts`, preloaded into the backend unless `--off looplag`, logs every
+  20 ms tick that runs at least 20 ms late.
+
+The report sets the windows where the HTTP query's p99 was above 50 ms against the others. If steal or I/O wait rises in
+the slow windows, it is the runner, and R8's bounds are the owner's call. If the main thread stalls or a GC thread is
+busy instead, it is the backend.
+
+Tests: `diagnostics.test.ts`, 10. Sabotage, each change alone, then restored:
+- steal left out of the machine's total: 2 tests fail;
+- a stall at the window's start counted in it: 2 fail;
+- a thread new in the window counted from its own ticks: 1 fails.
+
 ## 11. The suspects S1–S8, confirmed or dismissed (2026-10-20)
 
 Each suspect of §3.3 was read on both sides (bunvex on `main` at `ab13e2d2`, Convex at `72ce13c`) and given a test that
