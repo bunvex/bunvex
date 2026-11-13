@@ -5,6 +5,7 @@
   hasher (AD-49) over v2's WASM; C-3 extends DV-581, C-4 DV-577; C-9 (the `init` command's output, owner 2026-11-02) is DV-583. Built (§3.5). Decided before: STUDY-191's A-1–A-8 (DV-575–DV-577);
   the rename of `packages/auth` to `@bunvex/identity`, with `@bunvex/auth` reused for the auth components (A-2,
   confirmed by the owner on 2026-11-01, §3.2).
+- **Superseded in part by [STUDY-208](STUDY-208-auth-v2-release.md)** (2026-11-12): Convex Auth 2.0.0 changed the core's schema, lifetimes, names and callbacks, removed the `init` command (C-8, C-9, DV-583) and hid the anonymous method. This study stays the record of what was built from `db15c82e`.
 - **Scope:** STUDY-191 §3.4 step 3, "the core": the `auth` component; `authAnonymous`, `authUsername`,
   `authPassword` with the username + password method; the React client and the browser session manager;
   `getAuthUserId` and `isAuthenticated`; `setupConvexAuth` and the app wiring; the examples for username + password
