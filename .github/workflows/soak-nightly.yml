@@ -44,6 +44,7 @@ jobs:
       # The soak fills SQLite's page cache from a ballast read during its warm-up (`--page-cache-fill-mib`), so R1
       # judges a full cache; since DV-550 was closed (2026-11-05) that cache is SQLite's 2 000 KiB.
       SOAK_REPORT_ONLY: ""
+      MAX_ISOLATE_WORKERS: "4" # TEMP: worker memory soak (bunvex-73), never merged
       REPORT_ONLY_INPUT: ${{ inputs.report_only }}
     steps:
       - uses: actions/checkout@v7
@@ -88,7 +89,7 @@ jobs:
           path: .data/soak/
           if-no-files-found: ignore
       - name: Open or update an issue
-        if: failure() && steps.soak.outcome == 'failure' && github.event_name != 'pull_request'
+        if: false # TEMP: no comment on #989
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
