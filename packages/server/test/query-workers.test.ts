@@ -94,6 +94,8 @@ export const spin = query({ args: {}, handler: () => { for (;;) {} } });
 export const slow = query({ args: { n: v.number() }, handler: async (ctx, { n }) => { let c = 0; for (let i = 0; i < n; i++) c += (await ctx.db.query("items").take(1)).length; return c; } });
 export const countThenAll = query({ args: { x: v.number() }, handler: async (ctx) => [await ctx.db.query("items").count(), (await ctx.db.query("items").collect()).length] });
 export const bump = mutation({ args: { k: v.string() }, handler: async (ctx, { k }) => { const c = await ctx.db.query("counters").withIndex("by_k", (q) => q.eq("k", k)).unique(); if (c) { await ctx.db.patch(c._id, { n: c.n + 1 }); return c.n + 1; } await ctx.db.insert("counters", { k, n: 1 }); return 1; } });
+export const silent = mutation({ args: { k: v.string() }, handler: async (ctx, { k }) => { await ctx.db.insert("counters", { k, n: 1 }); } });
+export const nulled = mutation({ args: { k: v.string() }, handler: async (ctx, { k }) => { await ctx.db.insert("counters", { k, n: 1 }); return null; } });
 export const count = query({ args: { k: v.string() }, handler: async (ctx, { k }) => (await ctx.db.query("counters").withIndex("by_k", (q) => q.eq("k", k)).unique())?.n ?? 0 });
 export const stamp = mutation({ args: {}, returns: v.object({ at: v.commitTs(), id: v.id("counters") }), handler: async (ctx) => ({ at: ctx.db.vars.commitTs, id: await ctx.db.insert("counters", { k: "stamp", n: 1 }) }) });
 export const invalid = mutation({ args: {}, handler: (ctx) => ctx.db.insert("counters", { k: "bad", n: "one" }) });
@@ -484,6 +486,58 @@ describe("mutations (STUDY-194 PR 3)", () => {
     release();
     expect((await d.query("q:count", { k: "p" })).value).toBe(1);
   }, 60_000);
+});
+
+// A session mutation's value crosses from the worker as text, where an `undefined` field is no field: a run that returned
+// nothing must still read as one that ran (a replayed request is neither logged nor counted, and answers its record).
+describe("a WebSocket mutation's value from a worker", () => {
+  for (const [path, value] of [
+    ["q:silent", undefined],
+    ["q:nulled", null],
+  ] as const)
+    test(`${path} returns ${value}: the run answers it, and is logged and counted`, async () => {
+      const d = await deployment({ workers: 1 });
+      const answered = d.workers.counts.answered;
+      const direct = await d.functions.runSessionMutation(path, { k: "a" }, { sessionId: "s", requestId: 1 });
+      expect(d.workers.counts.answered).toBe(answered + 1);
+      expect(Object.keys(direct).sort()).toEqual(["ts", "value"]);
+      expect("value" in direct && direct.value).toBe(value);
+
+      const ws = new WebSocket(`ws://127.0.0.1:${d.s.server.port}/api/1.0.0/sync`);
+      const got: v1.ServerMessage[] = [];
+      let wake = () => {};
+      ws.onmessage = (m) => {
+        got.push(v1.parseServerMessage(String(m.data)));
+        wake();
+      };
+      await new Promise((r) => (ws.onopen = r));
+      const sessionId = crypto.randomUUID();
+      ws.send(
+        v1.encodeClientMessage({ type: "Connect", sessionId, connectionCount: 0, lastCloseReason: null, clientTs: 0 }),
+      );
+      ws.send(v1.encodeClientMessage({ type: "Mutation", requestId: 0, udfPath: path, args: [{ k: "b" }] }));
+      for (;;) {
+        if (got.some((x) => x.type === "MutationResponse")) break;
+        await new Promise<void>((r) => (wake = r));
+      }
+      const response = got.find((x) => x.type === "MutationResponse");
+      ws.close();
+      expect(d.workers.counts.answered).toBe(answered + 2);
+      // The protocol's JSON has no undefined: nothing returned is `null` on the wire, as Convex's.
+      expect(response).toMatchObject({ success: true, result: null });
+
+      const logged = (await (
+        await fetch(`http://127.0.0.1:${d.s.server.port}/api/stream_function_logs?cursor=0`, {
+          headers: { authorization: `Bunvex ${KEY}` },
+        })
+      ).json()) as { entries: { identifier: string; udfType: string; kind: string }[] };
+      expect(logged.entries.filter((e) => e.identifier === path).map((e) => [e.udfType, e.kind])).toEqual([
+        ["Mutation", "Completion"],
+        ["Mutation", "Completion"],
+      ]);
+      const metrics = await (await fetch(`http://127.0.0.1:${d.s.server.port}/metrics`)).text();
+      expect(metrics).toContain('bunvex_udf_executions_total{udf_type="mutation"} 2\n');
+    }, 60_000);
 });
 
 describe("failures", () => {
