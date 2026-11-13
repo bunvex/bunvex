@@ -92,6 +92,24 @@ jobs:
           INDEX_CACHE_VERIFY_PERCENT: "100"
         run: bun test --isolate packages/core packages/server packages/testing packages/sync-e2e bench
 
+  # STUDY-194 §11.5: execution workers are off by default (DV-574), so the suites again with them on: every
+  # deployment on a SQLite file runs its queries and mutations on workers, each outcome checked against an in-thread
+  # run (the root preload's differential check).
+  execution-workers-on:
+    name: tests · execution workers on
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - run: bun install --frozen-lockfile
+      - env:
+          MAX_ISOLATE_WORKERS: "2"
+        run: bun test --isolate packages/core packages/server packages/testing packages/sync-e2e bench
+
   # The example apps end to end (STUDY-90): each is deployed to a bunvex-local-backend, its functions run
   # through the public client, and its front end typechecked and built.
   examples:

@@ -47,8 +47,8 @@ function sent(p: ExecutionWorkers, text: string, timeoutMs = 1000): Promise<stri
 }
 
 describe("execution workers", () => {
-  test("MAX_ISOLATE_WORKERS: the core count by default, 0 allowed", () => {
-    expect(maxExecutionWorkers({})).toBe(navigator.hardwareConcurrency);
+  test("MAX_ISOLATE_WORKERS: none by default, a count opts in, 0 allowed", () => {
+    expect(maxExecutionWorkers({})).toBe(0);
     expect(maxExecutionWorkers({ MAX_ISOLATE_WORKERS: "3" })).toBe(3);
     expect(maxExecutionWorkers({ MAX_ISOLATE_WORKERS: "0" })).toBe(0);
   });

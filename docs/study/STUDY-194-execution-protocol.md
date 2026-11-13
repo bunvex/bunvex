@@ -627,9 +627,9 @@ The worker sends `op` messages for state only the main thread has, and waits for
   - **a client's mutation:** the permit comes first, before the attempt's transaction, and the runner checks the
     arguments under it, as Convex's d328f85 (STUDY-186 A11). The main thread resolves only the path and the caller's
     access, which need the caller's admin key. Scheduled and cron mutations keep their order.
-- **Workers are created lazily** up to `MAX_ISOLATE_WORKERS`, by default the core count (DV-574). A call goes to the
-  worker with the fewest calls in flight. A new worker is started when every worker has at least one call and the
-  cap is not reached.
+- **Workers are created lazily** up to `MAX_ISOLATE_WORKERS`: none by default since 2026-11-12, the core count before
+  (DV-574, §11.5). A call goes to the worker with the fewest calls in flight. A new worker is started when every worker
+  has at least one call and the cap is not reached.
 - A worker runs many calls at once, interleaved at their `await`s, as the main thread does today. So the worker
   count bounds CPU parallelism, not concurrency. An action waiting on `fetch` holds no thread, and an action's
   nested query never waits for a free worker: no deadlock.
@@ -1315,3 +1315,27 @@ run twice (`bench/results/cloud/2026-11-04-s194-pr3/`). Medians, req/s:
 - The gain is larger than the spike's (§11.1, about 25 %), on other droplets and a newer `main`. These droplets were
   steadier: one configuration's two medians are within 5 % of each other, where the spike's inserts spread from 605 to
   2238 req/s. The bench's tables have no text index, so nothing here ran twice.
+
+### 11.5 Off by default (2026-11-12)
+
+The owner turned the execution workers off by default: `MAX_ISOLATE_WORKERS` is 0 unless an operator sets a count
+(DV-574). Nothing is removed. A count turns on queries (2b) and mutations (PR 3) as before.
+
+- **Why.** A value was lost between a worker and the main thread. A WebSocket mutation that returned `undefined` came
+  back as `{}` (`resultText` cannot spell `undefined`), and the engine read it as a session replay: no function log
+  entry, no metrics, and `{ts}` for the client instead of the value. It was found on a live deployment, not by the
+  tests. The differential check (§10.5) compares the encoded outcomes, and both runs encoded the same text, so it
+  never saw the difference.
+- **What keeps the workers tested.** Every server suite used to run its SQLite deployments on workers because they were
+  the default. The CI now runs those suites with `MAX_ISOLATE_WORKERS=2` in a job of its own
+  (`tests · execution workers on`), and the differential check still runs there.
+- **Before they are the default again:**
+  - a generated test of the values that cross: `undefined` and `null` at the top and nested, bytes, bigints, and every
+    kind of call;
+  - the differential check extended to what the caller receives (value, log entry, metrics), not only the outcome's
+    text;
+  - the owner's decision, with those passing.
+- PR 4 (actions on workers) waits until then. Its spike is a local branch, not merged, and is measured on DO `c-4`
+  (sfo2, SQLite, 64 VUs, 2 workers):
+  - an action with about 2 ms of its own JavaScript, then a mutation: 309–315 → 437–460 req/s (+43 %);
+  - a thin action (one query, one mutation): about −5 %, from each operation's round trip.
