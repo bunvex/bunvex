@@ -9,6 +9,8 @@
 #   @bunvex/react-query), moved by hand everywhere at once;
 # - `expo`, `react-native` and Expo's packages: moved together with an Expo SDK (`bunx expo install --fix`);
 # - `fast-check`: pinned, so a property test's shrinking does not change under a seed.
+# - `cookie`: the reference @bunvex/auth's cookie parsing and serializing is compared with
+#   (components/auth/test/ssr-cookies.test.ts), pinned to the 1.1.1 Convex Auth v2 depends on, and moved with Convex Auth.
 #
 # The groups take minor and patch updates only: a major version (TypeScript 7, Changesets 3, …) comes in a PR of its
 # own, so one that breaks does not hold back the safe ones (#978 grouped four majors with ten safe updates).
@@ -35,6 +37,7 @@ updates:
       - dependency-name: react-native
       - dependency-name: "react-native-*"
       - dependency-name: fast-check
+      - dependency-name: cookie
       # Majors that need a study first (owner, 2026-11-01): TypeScript 7 is the native compiler, and the publish
       # script, rule 8, the dashboard's editor types and `bunvex typecheck` use TypeScript's JavaScript API (#1000);
       # Changesets 3 rewrites the prerelease state and leaves the private apps/local-backend unversioned (#999).

@@ -171,9 +171,10 @@ Each variable below is read by the backend in the container; add the ones you se
   and `cache_size = 0` keeps its minimum, the slowest setting. It applies to
   SQLite stores only. It is the backend's total: with execution workers, the backend's own connection keeps half
   and the workers share the other half.
-- **Execution workers.** The queries and mutations of your deployed code run on worker threads, so they use more
-  than one core; the backend's own thread still commits every mutation. `MAX_ISOLATE_WORKERS` (Convex's name;
-  default: the host's cores) caps how many start; `0` runs every function on the backend's own thread. A worker
+- **Execution workers (off by default).** With `MAX_ISOLATE_WORKERS` set to a count (Convex's name), the queries and
+  mutations of your deployed code run on up to that many worker threads, so they use more than one core; the
+  backend's own thread still commits every mutation. Unset or `0`, every function runs on the backend's own thread,
+  the default until the workers are hardened. A worker
   starts when a call finds none free, and each holds its share of the page cache
   (above) and of the index cache. On Postgres and MySQL each worker opens connections of its own, within
   `POSTGRES_MAX_CONNECTIONS` / `MYSQL_MAX_CONNECTIONS` (128), which stay the backend's total: the backend keeps a

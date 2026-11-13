@@ -233,8 +233,8 @@ export type ServerOptions = {
   functions: Functions;
   // DV-574, AD-47, STUDY-194 Q10.
   /**
-   * The most execution workers queries run on (default `MAX_ISOLATE_WORKERS`, else the core count); 0 runs every
-   * call on the main thread. Workers start only on a store they can read themselves (a SQLite file).
+   * The most execution workers queries and mutations run on (default `MAX_ISOLATE_WORKERS`, else none); 0 runs every
+   * call on the main thread. Workers start only on a store they can read themselves (a SQLite file, Postgres, MySQL).
    */
   executionWorkers?: number;
   /**

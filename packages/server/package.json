@@ -33,7 +33,7 @@
   "devDependencies": {
     "@bunvex/persistence": "workspace:*",
     "argon2id-wasm": "0.0.0-alpha.2",
-    "jose": "^6.2.14",
+    "jose": "^6.2.17",
     "typescript": "^5.9.0"
   },
   "repository": {

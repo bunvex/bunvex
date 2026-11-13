@@ -159,7 +159,9 @@ over six runs, so a seed-dependent dip below the floor is not expected.
     with the 0xFF escape sort inside it. A key whose next byte is 0xFF is the encoding of the value plus an
     escaped NUL, or of `{}` plus an empty field name.
   - Convex shares it (`End::after_prefix`).
-  - The fix bounds the range at `key + [0xFF]` instead. It is a divergence, pending the owner's decision.
+  - The fix bounds the range at `key + [0xFF]` instead. It is a divergence, decided by the owner (#256).
+  - The differential suite pins both sides (`packages/differential/test/fixed.test.ts`), and its generated
+    programs keep NUL strings out of indexed fields: the nightly of 2026-11-12 found the divergence again.
 - **Not a bug, a wrong assumption.** "No key is a proper prefix of another" failed with seed 1282129258 on
   `[{}, {"": NaN}]`. An empty field name is followed by the escape, as in Convex. The property now states
   what does hold: when one key is a proper prefix of another, the next byte is 0xFF. That is also what led
