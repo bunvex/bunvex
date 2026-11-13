@@ -1,201 +1,87 @@
-// The core's functions (STUDY-201 §1.2–§1.4), v2's at the pin: sign-up and sign-in turn a method's verified claims into
-// an account and a session; `refresh` rotates the session's refresh token, detecting a leaked one; the rest look up,
-// list and revoke. Every message, log line, default and limit is v2's; the access token's audience is bunvex's
-// (DV-576). Plain `Error`s only, as v2's core: the methods decide what a user is told.
+// The core's functions (STUDY-201 §1.2–§1.4, STUDY-208 §1.3–§1.8), v2.0.0's: sign-up and sign-in turn a method's
+// verified claims into a session; `refresh` rotates the session's refresh token, detecting a leaked one; the rest look
+// up, list and revoke. Every message, log line, default and limit is v2's; the access token's audience is bunvex's
+// (DV-576, `"bunvex-auth"` against v2's `"convex-auth"`). Plain `Error`s only, as v2's core: the methods decide what a
+// user is told. The functions that trust their caller carry v2's `_internal_dangerous_` prefix (`fd06a184`).
 import type { FunctionHandle } from "@bunvex/server";
 import { type GenericId, v } from "@bunvex/values";
-import { generateRandomToken, sha256Hex } from "../lib/crypto.ts";
+import { assertMountedAsCore } from "../lib/coreComponent.ts";
+import { sha256Hex } from "../lib/crypto.ts";
+import { type TtlConfig, validateTtlConfig, vTtlConfigFields } from "../lib/ttl.ts";
 import {
   type AuthClaims,
   type RefreshResult,
   type TokenBundle,
-  USE_USER_ID_AS_ACCOUNT_ID,
   vAuthClaims,
   vRefreshResult,
   vTokenBundle,
 } from "../lib/types.ts";
-import type { Doc, Id } from "./_generated/dataModel.ts";
-import { type MutationCtx, mutation, type QueryCtx, query } from "./_generated/server.ts";
+import type { Id } from "./_generated/dataModel.ts";
+import { type MutationCtx, mutation, query } from "./_generated/server.ts";
+import { refreshTokenInactivityExpiresAt, sessionMaxLifetimeExpiresAt } from "./expiry.ts";
+import {
+  deleteSession,
+  evictLeastRecentlyRefreshedSessions,
+  issueRefreshToken,
+  lookupRefreshTokenByHash,
+  newestIssuedToken,
+  REFRESH_GRACE_MS,
+  redeem,
+  STANDARD_ISSUED_REFRESH_TOKEN_LIMIT,
+} from "./sessions.ts";
 
-/** The access token's `aud`: what the app's provider (`bunvexAuthProvider`) expects as its application id. */
-const AUDIENCE = "bunvex";
-/** The lifetimes when the app sets none (`setupAuth`'s options, passed on every call). */
-const DEFAULT_ACCESS_TOKEN_TTL_SECONDS = 60;
-const DEFAULT_REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60;
-/** `ctx.auth.signJwt` signs nothing that lives longer: a longer access token is a misconfiguration. */
-const MAX_ACCESS_TOKEN_TTL_SECONDS = 60 * 60;
+// The access token's `aud`: what the app's provider (`bunvexAuthProvider`) expects as its application id.
+const AUDIENCE = "bunvex-auth";
 
-/**
- * How many issued tokens a session may have that nobody presented. Each refresh presenting the redeemed token adds one,
- * and presenting an issued one clears them, so the count only grows when answers are lost or refreshes race; at the
- * limit, a refresh revokes the session, unless the redeemed token was redeemed within {@link REFRESH_GRACE_MS}.
- */
-export const STANDARD_ISSUED_REFRESH_TOKEN_LIMIT = 3;
-/**
- * How long after its redemption a token may be presented again without counting toward
- * {@link STANDARD_ISSUED_REFRESH_TOKEN_LIMIT}: concurrent server-rendered requests carrying one cookie each refresh,
- * and the first to land redeems the token the others present.
- */
-export const REFRESH_GRACE_MS = 5 * 1000;
-/**
- * How long a spent or dropped token is remembered: past it, its row is pruned, and presenting it reads as an unknown
- * token, which revokes nothing and grants nothing.
- */
-export const SPENT_TOKEN_HORIZON_MS = 60 * 60 * 1000;
-
-type TokenState = Doc<"refreshTokens">["state"];
-type Ttl = { accessTokenTtlSeconds: number; refreshTokenTtlSeconds: number };
-type CreateUserHandle = FunctionHandle<"mutation", { provider: { name: string; accountId: string; profile: unknown } }>;
-type OnSignInHandle = FunctionHandle<
-  "mutation",
-  { provider: { name: string; accountId: string; profile: unknown }; userId: GenericId<string> },
-  null
->;
-
-const accountOf = (ctx: QueryCtx, provider: string, providerAccountId: string) =>
-  ctx.db
-    .query("accounts")
-    .withIndex("by_provider_account", (q) => q.eq("provider", provider).eq("providerAccountId", providerAccountId))
-    .unique();
-
-const tokenByHash = (ctx: QueryCtx, hash: string) =>
-  ctx.db
-    .query("refreshTokens")
-    .withIndex("by_hash", (q) => q.eq("hash", hash))
-    .unique();
-
-const tokensIn = (ctx: QueryCtx, sessionId: Id<"sessions">, state: TokenState) =>
-  ctx.db
-    .query("refreshTokens")
-    .withIndex("by_session_state", (q) => q.eq("sessionId", sessionId).eq("state", state))
-    .collect();
+type CallbackMethod = { name: string; profile: unknown };
+type CreateUserHandle = FunctionHandle<"mutation", { method: CallbackMethod }>;
+type OnSignInHandle = FunctionHandle<"mutation", { method: CallbackMethod; userId: GenericId<string> }, null>;
 
 /**
- * The lifetimes of a call: the app's, or the defaults, checked on every call that takes them (a misconfiguration fails
- * every sign-in and refresh, not the setup).
- */
-function ttlOf(args: { accessTokenTtlSeconds?: number; refreshTokenTtlSeconds?: number }): Ttl {
-  const accessTokenTtlSeconds = args.accessTokenTtlSeconds ?? DEFAULT_ACCESS_TOKEN_TTL_SECONDS;
-  const refreshTokenTtlSeconds = args.refreshTokenTtlSeconds ?? DEFAULT_REFRESH_TOKEN_TTL_SECONDS;
-  if (accessTokenTtlSeconds <= 0 || refreshTokenTtlSeconds <= 0) throw new Error("Token TTLs must be positive.");
-  if (accessTokenTtlSeconds > MAX_ACCESS_TOKEN_TTL_SECONDS)
-    throw new Error("Access-token TTL must be at most one hour (the deployment refuses to sign a longer-lived JWT).");
-  if (accessTokenTtlSeconds >= refreshTokenTtlSeconds)
-    throw new Error("Access-token TTL must be shorter than the refresh-token TTL.");
-  return { accessTokenTtlSeconds, refreshTokenTtlSeconds };
-}
-
-/**
- * Erase a session and every refresh token of it. Idempotent: two replays of one leaked token, or a sign-out racing
- * one, may both reach the same session. It reads all of the session's token rows: about the horizon over the refresh
- * interval at the defaults (~60), unbounded in principle.
- */
-async function deleteSession(ctx: MutationCtx, sessionId: Id<"sessions">): Promise<void> {
-  const rows = await ctx.db
-    .query("refreshTokens")
-    .withIndex("by_session_state", (q) => q.eq("sessionId", sessionId))
-    .collect();
-  for (const row of rows) await ctx.db.delete("refreshTokens", row._id);
-  // Whoever raced may have deleted it already, and `delete` throws on a missing id.
-  if ((await ctx.db.get("sessions", sessionId)) !== null) await ctx.db.delete("sessions", sessionId);
-}
-
-/**
- * Prune the session's spent and dropped tokens retired more than the horizon ago. Redeeming a token runs it, so a
- * session that keeps refreshing keeps its own rows trimmed; one that stops keeps them until it is deleted.
- */
-async function pruneRetired(ctx: MutationCtx, sessionId: Id<"sessions">, now: number): Promise<void> {
-  for (const state of ["spent", "dropped"] as const) {
-    const old = await ctx.db
-      .query("refreshTokens")
-      .withIndex("by_session_state", (q) =>
-        q
-          .eq("sessionId", sessionId)
-          .eq("state", state)
-          .lte("retiredAt", now - SPENT_TOKEN_HORIZON_MS),
-      )
-      .collect();
-    for (const row of old) await ctx.db.delete("refreshTokens", row._id);
-  }
-}
-
-/** A new issued refresh token for the session, good for the refresh lifetime: the token, and when it expires. */
-async function issueRefreshToken(ctx: MutationCtx, sessionId: Id<"sessions">, now: number, ttl: Ttl) {
-  const refreshToken = generateRandomToken();
-  const expiresAt = now + ttl.refreshTokenTtlSeconds * 1000;
-  await ctx.db.insert("refreshTokens", { hash: await sha256Hex(refreshToken), sessionId, state: "issued", expiresAt });
-  return { refreshToken, expiresAt };
-}
-
-/**
- * The access token, signed with the deployment's key, which adds `iss` (`<cloud URL>/components/<path>`), `iat` and
+ * The access token, signed with the deployment's key, which adds `iss` (`<cloud URL>/components/auth`), `iat` and
  * `exp`. Its subject is the session, not the user: the app finds the user through the session (`getSession`), so a
- * revoked session stops resolving before its tokens expire.
+ * revoked session stops resolving before its tokens expire. Its issuer is checked to be the core's mount at `auth`.
  */
-function accessToken(ctx: MutationCtx, sessionId: Id<"sessions">, ttl: Ttl): Promise<string> {
-  return ctx.auth.signJwt({ claims: { sub: sessionId, aud: AUDIENCE }, expiresInSeconds: ttl.accessTokenTtlSeconds });
+async function mintAccessToken(ctx: MutationCtx, sessionId: Id<"sessions">, ttlSeconds: number): Promise<string> {
+  const token = await ctx.auth.signJwt({ claims: { sub: sessionId, aud: AUDIENCE }, expiresInSeconds: ttlSeconds });
+  assertMountedAsCore(token);
+  return token;
 }
 
-/** A new session for the account, its first refresh token (issued, redeemed by its first refresh) and access token. */
-async function startSession(
-  ctx: MutationCtx,
-  accountId: Id<"accounts">,
-  userId: string,
-  ttl: Ttl,
-): Promise<TokenBundle> {
+/**
+ * A new session for the user, recording the component that authenticated them: room made under the cap first, then
+ * its first refresh token (issued, redeemed by its first refresh) and its access token.
+ */
+async function issueSession(ctx: MutationCtx, userId: string, component: string, ttl: TtlConfig): Promise<TokenBundle> {
   const now = Date.now();
-  const sessionId = await ctx.db.insert("sessions", { userId, accountId });
-  const { refreshToken, expiresAt } = await issueRefreshToken(ctx, sessionId, now, ttl);
+  await evictLeastRecentlyRefreshedSessions(ctx, userId);
+  const sessionId = await ctx.db.insert("sessions", { userId, component });
+  // Read back for its `_creationTime`, which its max lifetime counts from.
+  const session = (await ctx.db.get("sessions", sessionId))!;
+  const { refreshToken, expiresAt } = await issueRefreshToken(ctx, session, now, ttl);
   return {
-    accessToken: await accessToken(ctx, sessionId, ttl),
+    accessToken: await mintAccessToken(ctx, sessionId, ttl.accessTokenTtlSeconds),
     refreshToken,
     refreshTokenExpiresAt: expiresAt,
     userId,
   };
 }
 
-/** The callbacks' `provider` argument, from the claims. */
-const providerOf = (claims: AuthClaims) => ({
-  name: claims.providerName,
-  accountId: claims.providerAccountId,
-  profile: claims.profile,
-});
+/** The callbacks' `method` argument, from the claims. */
+const methodOf = (claims: AuthClaims): CallbackMethod => ({ name: claims.method, profile: claims.profile });
 
-/**
- * The account and the app's user for an identity the core has not seen: the app's `createUser` makes the user, and
- * this maps the identity to it. With `USE_USER_ID_AS_ACCOUNT_ID`, the account is keyed by that user's id.
- */
-async function createAccount(
-  ctx: MutationCtx,
-  claims: AuthClaims,
-  createUser: CreateUserHandle,
-): Promise<{ accountId: Id<"accounts">; userId: string }> {
-  // A user id is not known before `createUser` runs, and no account is ever stored with an empty identifier: only a
-  // method's own identifier can already have one.
-  if (
-    claims.providerAccountId !== USE_USER_ID_AS_ACCOUNT_ID &&
-    (await accountOf(ctx, claims.providerName, claims.providerAccountId)) !== null
-  )
-    throw new Error(
-      `Cannot create an account: an account for provider = ${JSON.stringify(claims.providerName)} and provider ` +
-        `account ID = ${JSON.stringify(claims.providerAccountId)} already exists. Sign-in methods that cannot tell a ` +
-        "first sign-in from a return visit must look the identity up (getUserIdByAccount) and call signIn instead.",
-    );
-  const userId = (await ctx.runMutation(createUser, { provider: providerOf(claims) })) as string;
-  const provider = claims.providerName;
-  const providerAccountId = claims.providerAccountId === USE_USER_ID_AS_ACCOUNT_ID ? userId : claims.providerAccountId;
-  // The check for a key only known now; for the others, the same check again.
+/** The app's user for a new identity, made by its `createUser`: its id. */
+async function createAppUser(ctx: MutationCtx, claims: AuthClaims, createUser: CreateUserHandle): Promise<string> {
+  return (await ctx.runMutation(createUser, { method: methodOf(claims) })) as string;
+}
+
+/** Record the user in `createdUserIds`, unless it is there already. */
+async function recordCreatedUserId(ctx: MutationCtx, userId: string): Promise<void> {
   const existing = await ctx.db
-    .query("accounts")
-    .withIndex("by_provider_account", (q) => q.eq("provider", provider).eq("providerAccountId", providerAccountId))
-    .first();
-  if (existing !== null)
-    throw new Error(
-      `Invariant violation: an account for provider = ${JSON.stringify(provider)} and provider account ID = ` +
-        `${JSON.stringify(providerAccountId)} already exists`,
-    );
-  const accountId = await ctx.db.insert("accounts", { provider, providerAccountId, userId });
-  return { accountId, userId };
+    .query("createdUserIds")
+    .withIndex("by_userId", (q) => q.eq("userId", userId))
+    .unique();
+  if (existing === null) await ctx.db.insert("createdUserIds", { userId });
 }
 
 /** The app's sign-in callback, when it gave one: every sign-in, the first included, runs it. */
@@ -206,82 +92,101 @@ async function notifySignIn(
   onSignIn: string | undefined,
 ): Promise<void> {
   if (onSignIn === undefined) return;
-  await ctx.runMutation(onSignIn as OnSignInHandle, {
-    provider: providerOf(claims),
-    userId: userId as GenericId<string>,
-  });
+  await ctx.runMutation(onSignIn as OnSignInHandle, { method: methodOf(claims), userId: userId as GenericId<string> });
 }
 
-const ttlArgs = {
-  accessTokenTtlSeconds: v.optional(v.number()),
-  refreshTokenTtlSeconds: v.optional(v.number()),
-};
-
 /**
- * Sign up an identity the core has not seen: the app's `createUser` makes its user, its `onSignIn` runs, and a session
- * starts. Both callbacks run inside this mutation, so an `onSignIn` that throws undoes the user just made. Methods
- * reach it through the setup's `completeSignUp`, which passes the callbacks. Throws when the identity already has an
- * account (see `signIn`).
+ * Sign up a new identity: the app's `createUser` makes its user, its `onSignIn` runs, and a session starts, recording
+ * `componentPath`, the path of the component that authenticated the user (e.g. `"authPassword"`). Both callbacks run
+ * inside this mutation, so an `onSignIn` that throws undoes the user just made. The core keeps no identities, so a
+ * repeated sign-up makes another user: the method looks the identity up in its own component first, and records the
+ * returned `userId` there in the same mutation. Methods reach it through the setup's `completeSignUp`, which passes the
+ * callbacks and the lifetimes.
+ *
+ * DANGER: it trusts `claims`, which reach the app's callbacks. App code must not call it: only this package's sign-in
+ * methods do, right after they verify the user.
  */
-export const signUp = mutation({
-  args: { claims: vAuthClaims, createUserHandle: v.string(), onSignInHandle: v.optional(v.string()), ...ttlArgs },
+export const _internal_dangerous_signUp = mutation({
+  args: {
+    claims: vAuthClaims,
+    componentPath: v.string(),
+    createUserHandle: v.string(),
+    onSignInHandle: v.optional(v.string()),
+    ...vTtlConfigFields,
+  },
   returns: vTokenBundle,
   handler: async (ctx, args): Promise<TokenBundle> => {
-    const ttl = ttlOf(args);
-    const { accountId, userId } = await createAccount(ctx, args.claims, args.createUserHandle as CreateUserHandle);
+    const ttl = validateTtlConfig(args);
+    const userId = await createAppUser(ctx, args.claims, args.createUserHandle as CreateUserHandle);
+    await recordCreatedUserId(ctx, userId);
     await notifySignIn(ctx, args.claims, userId, args.onSignInHandle);
-    return startSession(ctx, accountId, userId, ttl);
+    return await issueSession(ctx, userId, args.componentPath, ttl);
   },
 });
 
 /**
- * Sign in an identity that has an account: the app's `onSignIn` runs and a session starts. Methods reach it through
- * the setup's `completeSignIn`. Throws when the identity has no account (see `signUp`).
+ * Sign in an existing user: the app's `onSignIn` runs and a session starts, recording `componentPath`. The core does
+ * not check `userId`: a wrong one signs the caller in as that user, so a method passes only a user id it looked up
+ * once it verified the identity. Methods reach it through the setup's `completeSignIn`.
+ *
+ * DANGER: it starts a session for any `userId`. App code must not call it: only this package's sign-in methods do,
+ * right after they verify the user.
  */
-export const signIn = mutation({
-  args: { claims: vAuthClaims, onSignInHandle: v.optional(v.string()), ...ttlArgs },
+export const _internal_dangerous_signIn = mutation({
+  args: {
+    claims: vAuthClaims,
+    componentPath: v.string(),
+    userId: v.string(),
+    onSignInHandle: v.optional(v.string()),
+    ...vTtlConfigFields,
+  },
   returns: vTokenBundle,
   handler: async (ctx, args): Promise<TokenBundle> => {
-    const ttl = ttlOf(args);
-    const { claims } = args;
-    const account = await accountOf(ctx, claims.providerName, claims.providerAccountId);
-    if (account === null)
-      throw new Error(
-        `Cannot sign in: no account for provider = ${JSON.stringify(claims.providerName)} and provider account ID = ` +
-          `${JSON.stringify(claims.providerAccountId)} exists. A first sign-in for an identity must go through signUp.`,
-      );
-    await notifySignIn(ctx, claims, account.userId, args.onSignInHandle);
-    return startSession(ctx, account._id, account.userId, ttl);
+    const ttl = validateTtlConfig(args);
+    const { claims, userId } = args;
+    if (userId === "") throw new Error("Cannot sign in: no user id was given.");
+    await recordCreatedUserId(ctx, userId);
+    await notifySignIn(ctx, claims, userId, args.onSignInHandle);
+    return await issueSession(ctx, userId, args.componentPath, ttl);
   },
 });
 
 /**
- * Create the account and the app's user for an identity, as `signUp` does, but start no session and run no `onSignIn`:
- * for a method whose user must finish a step (verify an email) before the first sign-in.
+ * Make the app's user for a verified identity, as `_internal_dangerous_signUp` does, but start no session and run no
+ * `onSignIn`: for a method whose user must finish a step (verify an email) before the first sign-in. The method
+ * records the returned `userId` in its own component.
+ *
+ * DANGER: it trusts `claims`, which reach the app's `createUser`. App code must not call it: only this package's
+ * sign-in methods do, right after they verify the user.
  */
-export const signUpWithoutSession = mutation({
+export const _internal_dangerous_signUpWithoutSession = mutation({
   args: { claims: vAuthClaims, createUserHandle: v.string() },
   returns: v.object({ userId: v.string() }),
   handler: async (ctx, args): Promise<{ userId: string }> => {
-    const { userId } = await createAccount(ctx, args.claims, args.createUserHandle as CreateUserHandle);
+    const userId = await createAppUser(ctx, args.claims, args.createUserHandle as CreateUserHandle);
+    await recordCreatedUserId(ctx, userId);
     return { userId };
   },
 });
 
 /**
- * The app user of a method identity, or null when it has no account, without starting a session (a password method
- * finds the user before it checks the password). Only the app can call it.
+ * Record that a user id is in use. The core records the users it creates and signs in; call this for the others: the
+ * users the app imports or creates without the core. Any of the app's code may call it, since it only records that an
+ * id exists. Idempotent; an empty id throws.
  */
-export const getUserIdByAccount = query({
-  args: { provider: v.string(), providerAccountId: v.string() },
-  returns: v.union(v.string(), v.null()),
-  handler: async (ctx, { provider, providerAccountId }): Promise<string | null> =>
-    (await accountOf(ctx, provider, providerAccountId))?.userId ?? null,
+export const markUserIdCreated = mutation({
+  args: { userId: v.string() },
+  returns: v.null(),
+  handler: async (ctx, { userId }) => {
+    if (userId === "") throw new Error("Cannot mark an empty user ID as created.");
+    await recordCreatedUserId(ctx, userId);
+    return null;
+  },
 });
 
 /**
  * A live session's user, or null: a session is live exactly while its row exists, which sign-out, a leaked token's
- * detection, an expired token's refresh and revocation delete. Only the app can call it.
+ * detection, an expired token's refresh, the cap of sessions per user and revocation delete. Only the app can call it.
  */
 export const getSession = query({
   args: { sessionId: v.string() },
@@ -294,42 +199,32 @@ export const getSession = query({
 });
 
 /**
- * The first presentation of an issued token: its holder got it, so the session's redeemed token (at most one) becomes
- * spent and its other issued tokens, which nobody should ever present, dropped.
- */
-async function redeem(ctx: MutationCtx, token: Doc<"refreshTokens">, now: number): Promise<void> {
-  const redeemed = await tokensIn(ctx, token.sessionId, "redeemed");
-  if (redeemed.length > 1) throw new Error("Invariant violation: a session has more than one redeemed refresh token");
-  for (const row of redeemed) await ctx.db.patch("refreshTokens", row._id, { state: "spent", retiredAt: now });
-  for (const row of await tokensIn(ctx, token.sessionId, "issued"))
-    if (row._id !== token._id) await ctx.db.patch("refreshTokens", row._id, { state: "dropped", retiredAt: now });
-  await ctx.db.patch("refreshTokens", token._id, { state: "redeemed" });
-  await pruneRetired(ctx, token.sessionId, now);
-}
-
-/**
  * Exchange a refresh token for a new access token and a new issued refresh token. The token presented is:
  *
  * - issued: it is redeemed, then a token is issued;
  * - redeemed: a token is issued and it stays redeemed, so a client whose answer was lost can retry with it, however
  *   late;
  * - spent or dropped: the session's holders diverged, as with a leaked token: the session is revoked;
- * - unknown or expired: no session.
+ * - unknown, or expired (not refreshed within the inactivity timeout, or past the session's max lifetime): no session.
  *
  * Racers presenting one issued token are serialized: the first redeems it, the others find it redeemed, and each gets
  * a token of its own; within {@link REFRESH_GRACE_MS} of the redemption they do not count toward the limit.
  */
 export const refresh = mutation({
-  args: { refreshToken: v.string(), ...ttlArgs },
+  args: { refreshToken: v.string(), ...vTtlConfigFields },
   returns: vRefreshResult,
   handler: async (ctx, args): Promise<RefreshResult> => {
     // Checked first: a misconfiguration fails every call.
-    const ttl = ttlOf(args);
+    const ttl = validateTtlConfig(args);
     const now = Date.now();
-    const token = await tokenByHash(ctx, await sha256Hex(args.refreshToken));
+    const token = await lookupRefreshTokenByHash(ctx, await sha256Hex(args.refreshToken));
     // Never issued, or pruned past the horizon: revoking anything here would let anyone sign anyone out with a made-up
     // string.
     if (token === null) return { kind: "noSession" };
+    // A session's tokens are erased after its row (`deleteSession`), so a token can outlive it a moment: the session
+    // ended already, and there is nothing to refresh or revoke.
+    const session = await ctx.db.get("sessions", token.sessionId);
+    if (session === null) return { kind: "noSession" };
     if (token.state === "spent" || token.state === "dropped") {
       console.warn(
         `${
@@ -341,8 +236,13 @@ export const refresh = mutation({
       await deleteSession(ctx, token.sessionId);
       return { kind: "noSession" };
     }
-    if (token.expiresAt <= now) {
-      await deleteSession(ctx, token.sessionId);
+    // A redeemed token's session last refreshed when it issued its newest token: inactivity counts from that one.
+    const lastIssued = token.state === "redeemed" ? ((await newestIssuedToken(ctx, session._id)) ?? token) : token;
+    if (
+      refreshTokenInactivityExpiresAt(lastIssued, ttl.refreshInactivityTimeoutSeconds) <= now ||
+      sessionMaxLifetimeExpiresAt(session, ttl.sessionMaxLifetimeSeconds) <= now
+    ) {
+      await deleteSession(ctx, session._id);
       return { kind: "noSession" };
     }
     if (token.state === "issued") await redeem(ctx, token, now);
@@ -363,14 +263,12 @@ export const refresh = mutation({
         return { kind: "noSession" };
       }
     }
-    // A token row goes with its session, so the session is there. A refresh never writes it: queries reading it stay
-    // cached across refreshes.
-    const session = (await ctx.db.get("sessions", token.sessionId))!;
-    const { refreshToken, expiresAt } = await issueRefreshToken(ctx, session._id, now, ttl);
+    // A refresh never writes the session row: queries reading it stay cached across refreshes.
+    const { refreshToken, expiresAt } = await issueRefreshToken(ctx, session, now, ttl);
     return {
       kind: "rotated",
       tokens: {
-        accessToken: await accessToken(ctx, session._id, ttl),
+        accessToken: await mintAccessToken(ctx, session._id, ttl.accessTokenTtlSeconds),
         refreshToken,
         refreshTokenExpiresAt: expiresAt,
         userId: session.userId,
@@ -387,24 +285,22 @@ export const signOut = mutation({
   args: { refreshToken: v.string() },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const token = await tokenByHash(ctx, await sha256Hex(args.refreshToken));
+    const token = await lookupRefreshTokenByHash(ctx, await sha256Hex(args.refreshToken));
     if (token !== null) await deleteSession(ctx, token.sessionId);
     return null;
   },
 });
 
 /**
- * A user's sessions, newest first, with when each last refreshed (its newest issued token's creation: the sign-in or
- * the latest refresh, about once per access-token lifetime while a client is connected) and when it expires (that
- * token's expiry). Expired sessions are listed too: the query reads no clock, so it stays cached until a session or a
- * token changes; compare `expiresAt` with the time to keep the active ones. A session with no issued token (never left
- * by the token lifecycle) is left out with a warning. Only the app can call it.
+ * A user's sessions, newest first, with when each last refreshed: its newest issued token's creation, the sign-in or
+ * the latest refresh (about once per access-token lifetime while a client is connected, so a rough sign of activity of
+ * the client, not of the user). Expired sessions are listed too: the query reads no clock, so it stays cached until a
+ * session or a token changes; compare with the time and the lifetimes to keep the active ones. A session with no issued
+ * token (never left by the token lifecycle) is left out with a warning. Only the app can call it.
  */
 export const listSessions = query({
   args: { userId: v.string() },
-  returns: v.array(
-    v.object({ sessionId: v.string(), creationTime: v.number(), lastRefreshedAt: v.number(), expiresAt: v.number() }),
-  ),
+  returns: v.array(v.object({ sessionId: v.string(), creationTime: v.number(), lastRefreshedAt: v.number() })),
   handler: async (ctx, { userId }) => {
     const sessions = await ctx.db
       .query("sessions")
@@ -413,12 +309,7 @@ export const listSessions = query({
       .collect();
     const listed = [];
     for (const session of sessions) {
-      // Issued rows have no `retiredAt`: the index orders them by creation, so the last is the newest.
-      const newest = await ctx.db
-        .query("refreshTokens")
-        .withIndex("by_session_state", (q) => q.eq("sessionId", session._id).eq("state", "issued"))
-        .order("desc")
-        .first();
+      const newest = await newestIssuedToken(ctx, session._id);
       if (newest === null) {
         console.warn(
           `Session ${session._id} has no issued refresh token, which should be impossible. Leaving it out of the ` +
@@ -430,7 +321,6 @@ export const listSessions = query({
         sessionId: session._id,
         creationTime: session._creationTime,
         lastRefreshedAt: newest._creationTime,
-        expiresAt: newest.expiresAt,
       });
     }
     return listed;
@@ -438,10 +328,10 @@ export const listSessions = query({
 });
 
 /**
- * Revoke sessions, erasing their refresh tokens, so their holders can no longer refresh; returns the ids that were
- * sessions and were revoked (a malformed, already revoked or repeated id is skipped). It checks no authorization: any
- * user's sessions are revoked. The caller decides which may be, e.g. revoking a user's other sessions only once the
- * user proved they hold the current one. Only the app can call it.
+ * Revoke sessions, so their holders can no longer refresh (their refresh tokens are erased right after); returns the
+ * ids that were sessions and were revoked (a malformed, already revoked or repeated id is skipped). It checks no
+ * authorization: any user's sessions are revoked. The caller decides which may be, e.g. revoking a user's other
+ * sessions only once the user proved they hold the current one. Only the app can call it.
  */
 export const revokeSessions = mutation({
   args: { sessionIds: v.array(v.string()) },

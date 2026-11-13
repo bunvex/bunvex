@@ -16,6 +16,8 @@ function message(userError: { error: string; [detail: string]: unknown }): strin
       return "That username is taken.";
     case "USERNAME_TOO_SHORT":
       return "Pick a username.";
+    case "USERNAME_TOO_LONG":
+      return `A username has at most ${userError.maximumLength} characters.`;
     case "USERNAME_HAS_SURROUNDING_WHITESPACE":
       return "A username can't start or end with a space.";
     case "USERNAME_HAS_INVALID_CHARACTERS":

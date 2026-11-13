@@ -1,7 +1,7 @@
-// The contracts that cross a module boundary of `@bunvex/auth` (STUDY-201 §1.2), as v2's `lib/types.ts`: what the core's
-// session functions take and return, and the app's user callbacks. Declared once, used by the core, the methods, the
-// server helpers and the clients alike, so they never drift. It imports nothing else of the package, so the server and
-// the browser halves can both use it.
+// The contracts that cross a module boundary of `@bunvex/auth` (STUDY-201 §1.2, STUDY-208 §1.6), as v2.0.0's
+// `lib/types.ts`: what the core's session functions take and return, and the app's user callbacks. Declared once, used
+// by the core, the methods, the server helpers and the clients alike, so they never drift. It imports nothing else of
+// the package, so the server and the browser halves can both use it.
 import type { FunctionReference, FunctionReference_future } from "@bunvex/server";
 import { type GenericId, type Infer, type Validator, v } from "@bunvex/values";
 
@@ -108,40 +108,32 @@ export type IsAuthenticatedFn = FunctionReference<"query", "public", Record<stri
 export type AuthApi = { refreshSession: RefreshSessionFn; signOut: SignOutFn };
 
 /**
- * The identity a sign-in method vouches for once it authenticated someone: what the core turns into an account and a
- * session. Methods never call the core themselves; they produce these claims.
+ * The identity a sign-in method vouches for once it authenticated someone: what the core hands the app's callbacks.
+ * Methods never call the core themselves; they produce these claims.
  */
 export const vAuthClaims = v.object({
-  /** The name the method registers with the core, e.g. `password`. */
-  providerName: v.string(),
-  /** The method's stable identifier for the account (e.g. a provider's user id). */
-  providerAccountId: v.string(),
+  /** The name the method registers with the core, e.g. `usernamePassword`. */
+  method: v.string(),
   /** Whatever the method learned about the user. */
   profile: v.any(),
 });
 
-/** A method's verified identity: its name, its account identifier and a profile. */
+/** A method's verified identity: its name and a profile. */
 export type AuthClaims = Infer<typeof vAuthClaims>;
 
 /**
- * The `providerAccountId` of a sign-up whose method has no identifier of its own: the core keys the new account by the
- * app user id `createUser` returns, and later sign-ins name that user id.
- */
-export const USE_USER_ID_AS_ACCOUNT_ID = "";
-
-/**
- * The app's mutation that creates its user for an identity the core has not seen, and returns the user's id. It runs
- * once per account, right before the sign-in callback, so it owns only what is true at creation. The core keeps the
- * id as an opaque string; `UsersTable` names the app's table for its type.
+ * The app's mutation that creates its user for a new identity, and returns the user's id. It runs once per user,
+ * right before the sign-in callback, so it owns only what is true at creation. The core keeps the id as an opaque
+ * string; `UsersTable` names the app's table for its type.
  */
 export type CreateUserFn<
-  ProviderName extends string,
+  MethodName extends string,
   Profile,
   UsersTable extends string = string,
 > = FunctionReference_future<
   "mutation",
   "internal",
-  { provider: { name: ProviderName; accountId: string; profile: Profile } },
+  { method: { name: MethodName; profile: Profile } },
   GenericId<UsersTable>
 >;
 
@@ -151,13 +143,13 @@ export type CreateUserFn<
  * does not keep). It returns `null`; throwing refuses the sign-in, and on a first one undoes the user just created.
  */
 export type OnSignInFn<
-  ProviderName extends string,
+  MethodName extends string,
   Profile,
   UsersTable extends string = string,
 > = FunctionReference_future<
   "mutation",
   "internal",
-  { provider: { name: ProviderName; accountId: string; profile: Profile }; userId: GenericId<UsersTable> },
+  { method: { name: MethodName; profile: Profile }; userId: GenericId<UsersTable> },
   null
 >;
 
@@ -165,32 +157,40 @@ export type OnSignInFn<
  * A method's user callbacks, as its `attachUserCallbacks` takes them: `createUser` is required (something must make
  * the user), `onSignIn` is optional.
  */
-export type UserCallbacks<Provider extends string, Profile, UsersTable extends string = string> = {
-  createUser: CreateUserFn<Provider, Profile, UsersTable>;
-  onSignIn?: OnSignInFn<Provider, Profile, UsersTable>;
+export type UserCallbacks<Method extends string, Profile, UsersTable extends string = string> = {
+  createUser: CreateUserFn<Method, Profile, UsersTable>;
+  onSignIn?: OnSignInFn<Method, Profile, UsersTable>;
 };
 
 /** What a method's handlers find on `ctx.bunvexAuth`: how a method turns an identity it verified into a session. */
 export type BoundAuthHelpers<Profile> = {
   /**
-   * A session for an identity the method has just established: the core records the account, the app's `createUser`
-   * makes the user, its `onSignIn` runs, and the client's tokens come back. Throws when the identity already has an
-   * account; a method that cannot tell a first visit from a return one calls `resolveUserId` first.
+   * A session for a new identity the method has just verified: the app's `createUser` makes the user, its `onSignIn`
+   * runs, and the client's tokens come back. The core keeps no identities, so the method looks the identity up in its
+   * own component first (and calls `completeSignIn` for a known one), and records the returned `userId` there in the
+   * same mutation.
    */
-  completeSignUp(args: { providerAccountId: string; profile: Profile }): Promise<TokenBundle>;
+  completeSignUp(args: {
+    profile: Profile;
+    /** The component that authenticated the user, e.g. `components.authPassword`: the session records its path. */
+    authenticatedBy: object;
+  }): Promise<TokenBundle>;
   /**
-   * A session for an existing account the method authenticated its own way: the core finds its user, the app's
-   * `onSignIn` runs, and the client's tokens come back. Throws when the identity has no account: reaching this is the
-   * method's claim that it does, so a miss is a bug, not a failed sign-in.
+   * A session for a known user the method authenticated its own way and looked up: the app's `onSignIn` runs, and the
+   * client's tokens come back. The core does not check `userId`: a wrong one signs the caller in as that user.
    */
-  completeSignIn(args: { providerAccountId: string; profile: Profile }): Promise<TokenBundle>;
+  completeSignIn(args: {
+    userId: string;
+    profile: Profile;
+    /** The component that authenticated the user, e.g. `components.authPassword`: the session records its path. */
+    authenticatedBy: object;
+  }): Promise<TokenBundle>;
   /**
-   * The account and the app's user for a verified identity, without a session, for a user who must finish a step (an
-   * email check) first: as `completeSignUp`, but no `onSignIn`. The method signs them in later with `completeSignIn`.
+   * The app's user for a verified identity, without a session, for a user who must finish a step (an email check)
+   * first: as `completeSignUp`, but no `onSignIn`. The method records the returned `userId` in its own component and
+   * signs the user in later with `completeSignIn`.
    */
-  signUpWithoutSession(args: { providerAccountId: string; profile: Profile }): Promise<{ userId: string }>;
-  /** The app user of one of this method's account identifiers, or null. */
-  resolveUserId(providerAccountId: string): Promise<string | null>;
+  signUpWithoutSession(args: { profile: Profile }): Promise<{ userId: string }>;
   /**
    * Revoke the signed-in user's sessions but the current one (the token's subject); returns how many active ones were
    * revoked (expired ones are deleted, not counted), 0 when not signed in. Call it only once the user proved they hold

@@ -8,7 +8,9 @@
  * @module
  */
 
+import type * as expiry from "../expiry.js";
 import type * as public_ from "../public.js";
+import type * as sessions from "../sessions.js";
 
 import type {
   ApiFromModules,
@@ -18,7 +20,9 @@ import type {
 import { anyApi, componentsGeneric } from "@bunvex/server";
 
 const fullApi: ApiFromModules<{
+  expiry: typeof expiry;
   public: typeof public_;
+  sessions: typeof sessions;
 }> = anyApi as any;
 
 /**

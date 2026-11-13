@@ -1,4 +1,4 @@
-// Built-in auth (STUDY-201 4d) on Convex's backend (the oracle) with Convex Auth v2 at the pin (`@convex-dev/auth`, built
+// Built-in auth (STUDY-201 4d, STUDY-208) on Convex's backend (the oracle) with Convex Auth 2.0.0 at the pin (`@convex-dev/auth`, built
 // from the reference clone by harness/convex-auth.ts) and on bunvex's with `@bunvex/auth`: the same app (auth-app/) makes
 // the same calls on both, signed-in ones with the access tokens each issued, verified by each deployment against its
 // own JWKS through `auth.config.ts`. It compares, normalized (ids by their first appearance, tokens, hashes and times by
@@ -8,7 +8,8 @@
 // - the caller's user (`getAuthUserId`) and `isAuthenticated`, live and after the session is gone;
 // - the access token: its header's fields, its claims (`aud` is bunvex's, DV-576), its lifetime, `iss` under
 //   `/components/auth` and `sub` the session;
-// - every row of the core's, the method components' and the app's tables at the end;
+// - every row of the core's, the method components' and the app's tables at the end, once the scheduled erasure of the
+//   deleted sessions' refresh tokens has run;
 // - a password hash Convex's side stored verifies with bunvex's verifier.
 // Local only: skipped, with a note, without Convex's backend or a convex-auth clone to build the pin from.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -90,6 +91,19 @@ async function rows(b: Backend, table: string, component: string): Promise<Recor
   return [...page.page].sort((x, y) => (x._creationTime as number) - (y._creationTime as number));
 }
 
+/**
+ * Once the scheduled erasure of every deleted session's refresh tokens has run (2.0.0, `437831bd`): no token left whose
+ * session is gone.
+ */
+async function tokensErased(b: Backend): Promise<void> {
+  for (const deadline = Date.now() + 30_000; Date.now() < deadline; await Bun.sleep(100)) {
+    const sessions = new Set((await rows(b, "sessions", "auth")).map((s) => s._id));
+    const tokens = await rows(b, "refreshTokens", "auth");
+    if (tokens.every((t) => sessions.has(t.sessionId))) return;
+  }
+  throw new Error(`${b.name}: refresh tokens of deleted sessions still there after 30 s`);
+}
+
 /** The whole scenario on one backend: what each step answered, and every table at the end. */
 async function scenario(b: Backend) {
   const steps: Record<string, unknown> = {};
@@ -109,6 +123,12 @@ async function scenario(b: Backend) {
   step("signUp: the username taken", await up("ALICE", PASSWORD));
   step("signIn: no such user", await signIn("nobody", PASSWORD));
   step("signIn: a wrong password", await signIn("alice", "wrong horse battery staple"));
+  // 2.0.0: the password component's floor is 8 (`ea359653`); the method still asks 10 of a new password.
+  step("signUp dave", await up("dave", PASSWORD));
+  step("signIn: a wrong password of 9 characters", await signIn("dave", "wrongpass"));
+  // 2.0.0: usernames are capped at 100 code points (`d3aa3b56`).
+  step("signUp: a username of 101 characters", await up("u".repeat(101), PASSWORD));
+  step("signIn: a username of 101 characters", await signIn("u".repeat(101), PASSWORD));
   const again = step("signIn alice (case-insensitive)", await signIn("Alice", PASSWORD)) as { tokens: Bundle };
 
   const token = alice.tokens.accessToken;
@@ -171,8 +191,9 @@ async function scenario(b: Backend) {
   step("signOut", await m("auth:signOut", { refreshToken: anon.tokens.refreshToken }));
   step("me, signed out", await q("auth:me", {}, anon.tokens.accessToken));
 
+  await tokensErased(b);
   const tables = {
-    accounts: await rows(b, "accounts", "auth"),
+    createdUserIds: await rows(b, "createdUserIds", "auth"),
     sessions: await rows(b, "sessions", "auth"),
     refreshTokens: await rows(b, "refreshTokens", "auth"),
     passwords: await rows(b, "passwords", "authPassword"),
@@ -254,7 +275,7 @@ function idsOf(tables: Record<string, unknown>): Set<string> {
   return ids;
 }
 
-describe.skipIf(!ready)("built-in auth, Convex Auth v2 at the pin vs @bunvex/auth", () => {
+describe.skipIf(!ready)("built-in auth, Convex Auth 2.0.0 at the pin vs @bunvex/auth", () => {
   let c: Awaited<ReturnType<typeof scenario>>;
   let x: Awaited<ReturnType<typeof scenario>>;
   beforeAll(async () => {
@@ -277,8 +298,8 @@ describe.skipIf(!ready)("built-in auth, Convex Auth v2 at the pin vs @bunvex/aut
     expect(Object.keys(x.header).sort()).toEqual(Object.keys(c.header).sort());
     expect(x.header.alg).toBe(c.header.alg);
     expect(Object.keys(x.claims).sort()).toEqual(Object.keys(c.claims).sort());
-    expect(c.claims.aud).toBe("convex");
-    expect(x.claims.aud).toBe("bunvex"); // DV-576
+    expect(c.claims.aud).toBe("convex-auth");
+    expect(x.claims.aud).toBe("bunvex-auth"); // DV-576
     for (const claims of [c.claims, x.claims]) {
       expect(claims.exp - claims.iat).toBe(60);
       expect(claims.iss).toMatch(/\/components\/auth$/);

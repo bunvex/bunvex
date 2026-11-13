@@ -1,6 +1,7 @@
-// The username + password method's server side (STUDY-201 §1.9), v2's `setupUsernamePassword`: sign up, sign in and
-// change the password, over the password and username components. An account is a (username, password) pair, keyed in
-// the core by the user's id; the username component maps a username to that id.
+// The username + password method's server side (STUDY-201 §1.9, STUDY-208 §1.11), v2.0.0's `setupUsernamePassword`:
+// sign up, sign in and change the password, over the password and username components. The username component maps a
+// username to the user's id, and the password component keeps the user's password by that id; the sessions record the
+// password component as the one that authenticated the user.
 import { type Infer, v } from "@bunvex/values";
 import type { ComponentApi } from "../../components/password/_generated/component.ts";
 import {
@@ -10,12 +11,13 @@ import {
 } from "../../components/password/validation.ts";
 import type { ComponentApi as UsernameComponentApi } from "../../components/username/_generated/component.ts";
 import { setUsernameUserError, validateUsernameFormat } from "../../components/username/validation.ts";
-import { USE_USER_ID_AS_ACCOUNT_ID, type UserCallbacks, vSignInComplete, vSignInError } from "../../lib/types.ts";
+import { DEFAULT_MIN_PASSWORD_LENGTH } from "../../lib/password.ts";
+import { type UserCallbacks, vSignInComplete, vSignInError } from "../../lib/types.ts";
 import type { AuthCore } from "../../server/setup.ts";
 import { getAuthUserId } from "../../server/userId.ts";
 
-// The method's name, keying its accounts in the core (v2's, as is).
-const PROVIDER_NAME = "password";
+// The method's name: the app's callbacks get it as `method.name` (v2's, as is).
+const METHOD_NAME = "usernamePassword";
 
 /** What {@link setupUsernamePassword} needs: the two mounted components. */
 export type UsernamePasswordOptions = {
@@ -41,7 +43,7 @@ const changePasswordResult = v.union(
   v.object({
     success: v.literal(false),
     userError: v.union(
-      v.object({ error: v.literal("NOT_SIGNED_IN") }),
+      v.object({ error: v.literal("NOT_LOGGED_IN") }),
       v.object({ error: v.literal("INVALID_CREDENTIALS") }),
       v.object({ error: v.literal("RATE_LIMITED"), retryAfterMs: v.number() }),
       setPasswordUserError,
@@ -77,8 +79,11 @@ export function setupUsernamePassword<UsersTable extends string>(
   const { component, usernameComponent } = options;
   return {
     /** Give the app's user callbacks and get the method's functions to export. */
-    attachUserCallbacks({ createUser, onSignIn }: UserCallbacks<"password", Record<string, never>, UsersTable>) {
-      const { authMutation } = core.bindProvider({ name: PROVIDER_NAME, createUser, onSignIn });
+    attachUserCallbacks({
+      createUser,
+      onSignIn,
+    }: UserCallbacks<typeof METHOD_NAME, Record<string, never>, UsersTable>) {
+      const { authMutation } = core.bindMethod({ name: METHOD_NAME, createUser, onSignIn });
       return {
         /**
          * Create an account: a taken username or a refused password is an error; otherwise the user and a session are
@@ -92,16 +97,13 @@ export function setupUsernamePassword<UsersTable extends string>(
             // by then the account would exist).
             const usernameError = validateUsernameFormat(username);
             if (usernameError !== null) return { status: "error", userError: usernameError };
-            const userError = validateNewPassword(password);
+            const userError = validateNewPassword(password, DEFAULT_MIN_PASSWORD_LENGTH);
             if (userError !== null) return { status: "error", userError };
             if ((await ctx.runQuery(usernameComponent.public.getUserIdByUsername, { username })) !== null)
               return { status: "error", userError: { error: "USERNAME_TAKEN" } };
 
-            // The account is keyed by the user's id, which `createUser` makes in this call; sign-in passes that id.
-            const tokens = await ctx.bunvexAuth.completeSignUp({
-              providerAccountId: USE_USER_ID_AS_ACCOUNT_ID,
-              profile: {},
-            });
+            // The user `createUser` makes in this call; the username and the password are stored under its id.
+            const tokens = await ctx.bunvexAuth.completeSignUp({ profile: {}, authenticatedBy: component });
             const named = await ctx.runMutation(usernameComponent.public.setUsername, {
               userId: tokens.userId,
               username,
@@ -111,7 +113,11 @@ export function setupUsernamePassword<UsersTable extends string>(
               throw new Error(`Unexpected error when setting the username: ${named.userError.error}`, {
                 cause: named.userError,
               });
-            const set = await ctx.runMutation(component.public.setPassword, { userId: tokens.userId, password });
+            const set = await ctx.runMutation(component.public._internal_dangerous_setPassword, {
+              userId: tokens.userId,
+              password,
+              minimumLength: DEFAULT_MIN_PASSWORD_LENGTH,
+            });
             // As v2's: the message names the earlier check's result, which is null here.
             if (!set.success)
               throw new Error(`Unexpected error when setting the password: ${userError}`, { cause: userError });
@@ -132,8 +138,8 @@ export function setupUsernamePassword<UsersTable extends string>(
             if (userId === null) return { status: "error", userError: { error: "USER_NOT_FOUND" } };
             const checked = await ctx.runMutation(component.public.verifyPassword, { userId, password });
             if (!checked.success) return { status: "error", userError: checked.userError };
-            // The username found the user and the password matched: the account exists.
-            const tokens = await ctx.bunvexAuth.completeSignIn({ providerAccountId: userId, profile: {} });
+            // The username found the user and the password matched.
+            const tokens = await ctx.bunvexAuth.completeSignIn({ userId, profile: {}, authenticatedBy: component });
             return { status: "complete", tokens };
           },
         }),
@@ -150,9 +156,9 @@ export function setupUsernamePassword<UsersTable extends string>(
             { currentPassword, newPassword, signOutOtherSessions = false },
           ): Promise<ChangePasswordResult> => {
             const userId = await getAuthUserId(ctx, core.component);
-            if (userId === null) return { success: false, userError: { error: "NOT_SIGNED_IN" } };
+            if (userId === null) return { success: false, userError: { error: "NOT_LOGGED_IN" } };
             // The new password first, so a refused one costs no rate-limit attempt.
-            const newPasswordError = validateNewPassword(newPassword);
+            const newPasswordError = validateNewPassword(newPassword, DEFAULT_MIN_PASSWORD_LENGTH);
             if (newPasswordError !== null) return { success: false, userError: newPasswordError };
             const checked = await ctx.runMutation(component.public.verifyPassword, {
               userId,
@@ -163,7 +169,11 @@ export function setupUsernamePassword<UsersTable extends string>(
               // The current password's format errors read as wrong credentials, so the user does not blame the new one.
               return { success: false, userError: { error: "INVALID_CREDENTIALS" } };
             }
-            const set = await ctx.runMutation(component.public.setPassword, { userId, password: newPassword });
+            const set = await ctx.runMutation(component.public._internal_dangerous_setPassword, {
+              userId,
+              password: newPassword,
+              minimumLength: DEFAULT_MIN_PASSWORD_LENGTH,
+            });
             if (!set.success)
               throw new Error(`Unexpected error when setting the password: ${set.userError.error}`, {
                 cause: set.userError,

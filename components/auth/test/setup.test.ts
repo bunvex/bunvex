@@ -1,12 +1,15 @@
-// `setupAuth`'s method helpers and `isAuthenticated` (STUDY-201 §3.4), upstream's `server/setup.test.ts` ported: an app
-// with the core mounted (fixtures/setup-app), where the real `setupAuth` binds a test method whose mutations expose each
-// helper on `ctx.bunvexAuth`. Vitest's fake timers are the deployment's virtual clock.
+// `setupAuth`'s method helpers and `isAuthenticated` (STUDY-201 §3.4, STUDY-208 §5), upstream's `server/setup.test.ts`
+// at v2.0.0 ported: an app with the core mounted (fixtures/setup-app), where the real `setupAuth` binds a test method
+// (`bindMethod`) whose mutations expose each helper on `ctx.bunvexAuth`. Vitest's fake timers are the deployment's
+// virtual clock.
 // biome-ignore-all lint/suspicious/noExplicitAny: the app's api is untyped
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { join } from "node:path";
 import { anyApi } from "@bunvex/server";
 import { bunvexTest, type TestBunvex } from "@bunvex/testing";
+import type { ComponentApi } from "../src/component/_generated/component.ts";
 import type { TokenBundle } from "../src/lib/types.ts";
+import { setupAuth } from "../src/server/setup.ts";
 import { sessionIdentity } from "../src/test.ts";
 
 const api = (anyApi as any).testApp;
@@ -53,7 +56,7 @@ describe("ctx.bunvexAuth.revokeOtherSessions", () => {
   test("deletes expired sessions without counting them", async () => {
     const t = setup();
     await signUp(t, "alice");
-    // Past the default 30-day refresh-token lifetime.
+    // Past the default 30-day inactivity timeout.
     await t.advanceTime(DAYS_31);
     await signIn(t, "alice");
     const bundle = await signIn(t, "alice");
@@ -61,6 +64,18 @@ describe("ctx.bunvexAuth.revokeOtherSessions", () => {
     expect(await t.withIdentity(sessionIdentity(bundle)).mutation(api.revokeOtherSessions, {})).toBe(1);
     // The expired session was deleted too, so nothing is left to revoke.
     expect(await sessionIdsOf(t, bundle.userId)).toEqual([sessionIdentity(bundle).subject]);
+  });
+
+  test("counts a session as expired under an inactivity timeout lowered since it last refreshed", async () => {
+    const t = setup();
+    // Signed in under the default 30-day inactivity timeout.
+    await signUp(t, "alice");
+    // Past the lowered inactivity timeout (an hour), though days short of the default.
+    await t.advanceTime(2 * 60 * 60 * 1000);
+    await t.mutation(api.signInShortTtl, { accountId: "alice" });
+    const bundle: TokenBundle = await t.mutation(api.signInShortTtl, { accountId: "alice" });
+
+    expect(await t.withIdentity(sessionIdentity(bundle)).mutation(api.revokeOtherSessionsShortTtl, {})).toBe(1);
   });
 
   test("returns 0 when the caller is not signed in", async () => {
@@ -107,7 +122,7 @@ describe("ctx.bunvexAuth.revokeAllSessions", () => {
   test("deletes expired sessions without counting them", async () => {
     const t = setup();
     const bundle = await signUp(t, "alice");
-    // Past the default 30-day refresh-token lifetime.
+    // Past the default 30-day inactivity timeout.
     await t.advanceTime(DAYS_31);
     await signIn(t, "alice");
     expect(await t.mutation(api.revokeAllSessions, { userId: bundle.userId })).toBe(1);
@@ -143,19 +158,39 @@ describe("isAuthenticated", () => {
   });
 });
 
-describe("bindProvider", () => {
-  test("resolveUserId finds the user of one of the method's account ids, and null for another", async () => {
-    const t = setup();
-    const bundle = await signUp(t, "alice");
-    expect(await t.mutation(api.resolveUserId, { accountId: "alice" })).toBe(bundle.userId);
-    expect(await t.mutation(api.resolveUserId, { accountId: "bob" })).toBe(null);
-  });
-
+describe("bindMethod", () => {
   test("refreshSession rotates through the app's export", async () => {
     const t = setup();
     const bundle = await signUp(t, "alice");
     const result = await t.mutation(api.refreshSession, { refreshToken: bundle.refreshToken });
     expect(result.kind).toBe("rotated");
     expect(result.tokens.userId).toBe(bundle.userId);
+  });
+});
+
+describe("setupAuth", () => {
+  const component = {} as ComponentApi;
+
+  test("rejects an invalid lifetime configuration when it is set up", () => {
+    expect(() =>
+      setupAuth({ component, refreshInactivityTimeoutSeconds: 2 * 60 * 60, sessionMaxLifetimeSeconds: 60 * 60 }),
+    ).toThrow("Refresh inactivity timeout must be at most the session max lifetime.");
+  });
+
+  // Beyond upstream: every check runs at setup, with v2's messages, and the old option name is ignored.
+  test("checks every lifetime when it is set up", () => {
+    expect(() => setupAuth({ component, accessTokenTtlSeconds: Number.NaN })).toThrow(
+      "Token and session lifetimes must be finite numbers.",
+    );
+    expect(() => setupAuth({ component, sessionMaxLifetimeSeconds: 0 })).toThrow(
+      "Token and session lifetimes must be positive.",
+    );
+    expect(() => setupAuth({ component, accessTokenTtlSeconds: 2 * 60 * 60 })).toThrow(
+      "Access-token TTL must be at most one hour (the deployment refuses to sign a longer-lived JWT).",
+    );
+    expect(() => setupAuth({ component, accessTokenTtlSeconds: 600, refreshInactivityTimeoutSeconds: 600 })).toThrow(
+      "Access-token TTL must be shorter than the refresh inactivity timeout.",
+    );
+    expect(() => setupAuth({ component, refreshTokenTtlSeconds: 1 } as never)).not.toThrow();
   });
 });

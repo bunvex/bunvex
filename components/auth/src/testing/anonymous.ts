@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import type { ComponentApi } from "../components/anonymous/_generated/component.ts";
 import schema from "../components/anonymous/schema.ts";
 
-/** What `registerAnonymousProvider` needs of a test deployment: `@bunvex/testing`'s `TestBunvex` has it. */
+/** What `registerAnonymous` needs of a test deployment: `@bunvex/testing`'s `TestBunvex` has it. */
 type TestDeployment = { registerComponent(name: string, definition: string): unknown };
 
 const COMPONENT_DIR = fileURLToPath(new URL("../components/anonymous", import.meta.url));
@@ -17,8 +17,8 @@ const COMPONENT_DIR = fileURLToPath(new URL("../components/anonymous", import.me
  *
  * @internal Not public until the anonymous sign-in method is ready.
  */
-export function registerAnonymousProvider(t: TestDeployment, name = "authAnonymous"): ComponentApi {
+export function registerAnonymous(t: TestDeployment, name = "authAnonymous"): ComponentApi {
   return t.registerComponent(name, COMPONENT_DIR) as ComponentApi;
 }
 
-export default { registerAnonymousProvider, schema };
+export default { registerAnonymous, schema };

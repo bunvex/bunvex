@@ -1,10 +1,11 @@
-// The methods' server side end to end (STUDY-201 §1.9): an app with the core and the three method components mounted
-// (fixtures/app), wired as an app wires them (`setupAuth`, `setupUsernamePassword`, `setupAnonymous`). Upstream checks
-// these flows in its examples' suites, ported with the examples; these check each result arm and its order here.
+// The methods' server side end to end (STUDY-201 §1.9, STUDY-208 §1.11–§1.14): an app with the core and the three method
+// components mounted (fixtures/app), wired as an app wires them (`setupAuth`, `setupUsernamePassword`, `setupAnonymous`).
+// Upstream checks these flows in its examples' suites, ported with the examples; these check each result arm and its
+// order here, and the core mounted under another name (fixtures/misnamed-app).
 // biome-ignore-all lint/suspicious/noExplicitAny: the app's api is untyped
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { join } from "node:path";
-import { anyApi } from "@bunvex/server";
+import { anyApi, componentsGeneric } from "@bunvex/server";
 import { bunvexTest, type TestBunvex } from "@bunvex/testing";
 import { createLocalJWKSet, jwtVerify } from "jose";
 import type { TokenBundle } from "../src/lib/types.ts";
@@ -19,8 +20,8 @@ afterEach(async () => {
 // Each test pushes a deployment of its own; under a full `bun run check` a push can take past the default 5 s.
 setDefaultTimeout(60_000);
 
-function setup(): TestBunvex {
-  const t = bunvexTest({ cwd: join(import.meta.dir, "fixtures", "app") });
+function setup(fixture = "app"): TestBunvex {
+  const t = bunvexTest({ cwd: join(import.meta.dir, "fixtures", fixture) });
   open.push(t);
   return t;
 }
@@ -39,10 +40,16 @@ describe("setupUsernamePassword", () => {
   test("sign-up makes the user, runs onSignIn and returns a session the deployment signed for the core", async () => {
     const t = setup();
     const tokens = tokensOf(await signUp(t, "alice", PASSWORD));
-    expect(await rows(t, "users")).toEqual([expect.objectContaining({ _id: tokens.userId, method: "password" })]);
-    expect(await rows(t, "signIns")).toEqual([expect.objectContaining({ userId: tokens.userId, method: "password" })]);
+    expect(await rows(t, "users")).toEqual([
+      expect.objectContaining({ _id: tokens.userId, method: "usernamePassword" }),
+    ]);
+    expect(await rows(t, "signIns")).toEqual([
+      expect.objectContaining({ userId: tokens.userId, method: "usernamePassword" }),
+    ]);
     // Signed by the deployment, issued by the core's path, for bunvex's audience; its subject is the session.
-    const { payload } = await jwtVerify(tokens.accessToken, createLocalJWKSet(await t.jwks()), { audience: "bunvex" });
+    const { payload } = await jwtVerify(tokens.accessToken, createLocalJWKSet(await t.jwks()), {
+      audience: "bunvex-auth",
+    });
     expect(payload.iss).toMatch(/\/components\/auth$/);
     expect(await t.withIdentity(sessionIdentity(tokens)).query(api.auth.me, {})).toBe(tokens.userId);
   });
@@ -87,6 +94,38 @@ describe("setupUsernamePassword", () => {
     expect(await rows(t, "users")).toHaveLength(1);
   });
 
+  test("a new password needs 10 characters, though the component accepts 8", async () => {
+    const t = setup();
+    // 9 characters: the password component accepts it, the method does not.
+    expect(await signUp(t, "alice", "kY7t-vQ2m")).toEqual({
+      status: "error",
+      userError: { error: "PASSWORD_TOO_SHORT", minimumLength: 10 },
+    });
+    await signUp(t, "alice", PASSWORD);
+    // At sign-in, the component's floor: under 8 is too short, 8 or 9 is checked.
+    expect(await signIn(t, "alice", "short")).toEqual({
+      status: "error",
+      userError: { error: "PASSWORD_TOO_SHORT", minimumLength: 8 },
+    });
+    expect(await signIn(t, "alice", "kY7t-vQ2m")).toEqual({
+      status: "error",
+      userError: { error: "INVALID_CREDENTIALS" },
+    });
+  });
+
+  test("a username over 100 code points is USERNAME_TOO_LONG at sign-up and USER_NOT_FOUND at sign-in", async () => {
+    const t = setup();
+    expect(await signUp(t, `  ${"a".repeat(101)}`, "short")).toEqual({
+      status: "error",
+      userError: { error: "USERNAME_TOO_LONG", maximumLength: 100 },
+    });
+    expect(await signIn(t, "a".repeat(101), PASSWORD)).toEqual({
+      status: "error",
+      userError: { error: "USER_NOT_FOUND" },
+    });
+    tokensOf(await signUp(t, "😀".repeat(100), PASSWORD));
+  });
+
   test("sign-in's rate limit is per user: the sixth attempt in a minute is RATE_LIMITED", async () => {
     const t = setup();
     await signUp(t, "alice", PASSWORD);
@@ -101,17 +140,17 @@ describe("changePassword", () => {
   const change = (t: TestBunvex, tokens: TokenBundle | null, args: Record<string, unknown>) =>
     (tokens === null ? t : t.withIdentity(sessionIdentity(tokens))).mutation(api.auth.changePassword, args);
 
-  test("is NOT_SIGNED_IN without a live session", async () => {
+  test("is NOT_LOGGED_IN without a live session", async () => {
     const t = setup();
     expect(await change(t, null, { currentPassword: PASSWORD, newPassword: "a whole new password" })).toEqual({
       success: false,
-      userError: { error: "NOT_SIGNED_IN" },
+      userError: { error: "NOT_LOGGED_IN" },
     });
     const tokens = tokensOf(await signUp(t, "alice", PASSWORD));
     await t.mutation(api.auth.signOut, { refreshToken: tokens.refreshToken });
     expect(await change(t, tokens, { currentPassword: PASSWORD, newPassword: "a whole new password" })).toEqual({
       success: false,
-      userError: { error: "NOT_SIGNED_IN" },
+      userError: { error: "NOT_LOGGED_IN" },
     });
   });
 
@@ -176,15 +215,30 @@ describe("setupAnonymous", () => {
   });
 });
 
-describe("bindProvider", () => {
+describe("bindMethod", () => {
   test("a method name bound twice to one core throws", async () => {
     const { setupAuth } = await import("../src/server/setup.ts");
     const core = setupAuth({ component: {} as never });
     const createUser = {} as never;
-    core.bindProvider({ name: "password", createUser });
-    expect(() => core.bindProvider({ name: "password", createUser })).toThrow(
-      'A sign-in method named "password" is already bound to this auth core. Method names key the accounts table, so ' +
-        "each method must have a unique name.",
+    core.bindMethod({ name: "usernamePassword", createUser });
+    expect(() => core.bindMethod({ name: "usernamePassword", createUser })).toThrow(
+      'A sign-in method named "usernamePassword" is already bound to this auth core. The app\'s callbacks get the ' +
+        "name of the sign-in method as `method.name`, so each sign-in method must have a unique name.",
     );
+  });
+});
+
+describe("the core's mount", () => {
+  test("a core mounted under another name than `auth` fails the first sign-in, and keeps nothing", async () => {
+    const t = setup("misnamed-app");
+    await expect(signUp(t, "alice", PASSWORD)).rejects.toThrow(
+      'The auth component is mounted at "myAuth", but it must be mounted at "auth". Use `app.use(auth)` in ' +
+        "bunvex.config.ts, without a `name` option.",
+    );
+    // The whole mutation rolled back: the app's user, the username, the session.
+    expect(await rows(t, "users")).toEqual([]);
+    expect(
+      await t.query((componentsGeneric() as any).authUsername.public.getUserIdByUsername, { username: "alice" }),
+    ).toBeNull();
   });
 });

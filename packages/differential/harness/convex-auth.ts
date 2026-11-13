@@ -1,8 +1,8 @@
-// `@convex-dev/auth` at the commit bunvex follows (STUDY-201 C-1, `docs/parity/upstream.md`), for the auth differential
-// test's Convex side. The pin is unreleased (npm's 2.0.0-beta.0 predates it by 36 commits), so it is built from the
-// reference clone, as its own release does (pnpm, then `pnpm pack`), and installed once into `.cache/` with its
-// dependencies but not its peers: its `convex` is then this package's, the one the Convex CLI bundles with.
-// `package.json` declares npm's latest, 2.0.0-beta.0, for the app's imports; the test's Convex project links the pin instead.
+// `@convex-dev/auth` at the commit bunvex follows (STUDY-208, `docs/parity/upstream.md`): `f73ec439`, the 2.0.0 release,
+// for the auth differential test's Convex side. It is built from the reference clone, as its own release is (pnpm, then
+// `pnpm pack`), so the pin can be any commit, and installed once into `.cache/` with its dependencies but not its peers:
+// its `convex` is then this package's, the one the Convex CLI bundles with. `package.json` declares npm's 2.0.0 for the
+// app's imports; the test's Convex project links the pin instead.
 import {
   existsSync,
   mkdirSync,
@@ -19,7 +19,7 @@ import { join, resolve } from "node:path";
 
 const PACKAGE = resolve(import.meta.dir, "..");
 const ROOT = resolve(PACKAGE, "../..");
-export const CONVEX_AUTH_PIN = "db15c82e";
+export const CONVEX_AUTH_PIN = "f73ec439";
 /** pnpm as the repository's `packageManager` names it. */
 const PNPM = "pnpm@10.16.0";
 /** The clone: `CONVEX_AUTH_REPO`, or `convex-auth` beside bunvex's repository. */
@@ -87,6 +87,20 @@ export function convexAuthModules(): { modules: string } | { missing: string } {
 export function authAppPreparer(modules: string) {
   return (project: string, dir: "convex" | "bunvex") => {
     if (dir === "convex") {
+      // Convex Auth 2.0.0 no longer exports the anonymous method (`bff2ce56`); the app imports it from the package's
+      // built files.
+      const auth = join(modules, "@convex-dev/auth/dist");
+      rewrite(join(project, dir), (source) =>
+        source
+          .replaceAll(
+            '"@convex-dev/auth/methods/anonymous/server"',
+            JSON.stringify(join(auth, "methods/anonymous/server.js")),
+          )
+          .replaceAll(
+            '"@convex-dev/auth/components/anonymous/convex.config.js"',
+            JSON.stringify(join(auth, "components/anonymous/convex.config.js")),
+          ),
+      );
       const own = join(project, "node_modules");
       rmSync(own);
       mkdirSync(join(own, "@convex-dev"), { recursive: true });
@@ -101,25 +115,29 @@ export function authAppPreparer(modules: string) {
     }
     const functions = join(project, dir);
     renameSync(join(functions, "convex.config.ts"), join(functions, "bunvex.config.ts"));
-    for (const name of readdirSync(functions)) {
-      if (!name.endsWith(".ts")) continue;
-      const file = join(functions, name);
-      let source = readFileSync(file, "utf8");
+    rewrite(functions, (text) => {
+      let source = text;
       for (const [specifier, path] of Object.entries(BUNVEX_ANONYMOUS))
         source = source.replaceAll(specifier, JSON.stringify(path));
-      writeFileSync(
-        file,
-        source
-          .replace(
-            /"@convex-dev\/auth\/((?:components\/[a-z]+\/)?)convex\.config\.js"/g,
-            '"@bunvex/auth/$1bunvex.config.js"',
-          )
-          .replaceAll('"@convex-dev/auth/', '"@bunvex/auth/')
-          .replaceAll('"convex/server"', '"@bunvex/server"')
-          .replaceAll('"convex/values"', '"@bunvex/values"')
-          .replaceAll("setupConvexAuth", "setupAuth")
-          .replaceAll("convexAuthProvider", "bunvexAuthProvider"),
-      );
-    }
+      return source
+        .replace(
+          /"@convex-dev\/auth\/((?:components\/[a-z]+\/)?)convex\.config\.js"/g,
+          '"@bunvex/auth/$1bunvex.config.js"',
+        )
+        .replaceAll('"@convex-dev/auth/', '"@bunvex/auth/')
+        .replaceAll('"convex/server"', '"@bunvex/server"')
+        .replaceAll('"convex/values"', '"@bunvex/values"')
+        .replaceAll("setupConvexAuth", "setupAuth")
+        .replaceAll("convexAuthProvider", "bunvexAuthProvider");
+    });
   };
+}
+
+/** Rewrite every `.ts` file of the functions directory `functions`. */
+function rewrite(functions: string, edit: (source: string) => string): void {
+  for (const name of readdirSync(functions)) {
+    if (!name.endsWith(".ts")) continue;
+    const file = join(functions, name);
+    writeFileSync(file, edit(readFileSync(file, "utf8")));
+  }
 }

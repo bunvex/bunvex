@@ -1,9 +1,9 @@
-// The username component's functions (STUDY-201 §1.7), v2's: set (unique across users, case and normalization form
-// ignored), look up both ways, delete. Refusals are results with a user error, never throws.
+// The username component's functions (STUDY-201 §1.7, STUDY-208 §1.12), v2.0.0's: set (unique across users, case and
+// normalization form ignored), look up both ways, delete. Refusals are results with a user error, never throws.
 import { type Infer, v } from "@bunvex/values";
 import type { Doc } from "./_generated/dataModel.ts";
 import { mutation, type QueryCtx, query } from "./_generated/server.ts";
-import { normalizeUsername, setUsernameUserError, validateUsernameFormat } from "./validation.ts";
+import { isTooLong, normalizeUsername, setUsernameUserError, validateUsernameFormat } from "./validation.ts";
 
 const setUsernameResult = v.union(
   v.object({ success: v.literal(true), previousUsername: v.union(v.string(), v.null()) }),
@@ -51,8 +51,11 @@ export const setUsername = mutation({
 export const getUserIdByUsername = query({
   args: { username: v.string() },
   returns: v.union(v.string(), v.null()),
-  handler: async (ctx, { username }): Promise<string | null> =>
-    (await byNormalized(ctx, normalizeUsername(username)))?.userId ?? null,
+  handler: async (ctx, { username }): Promise<string | null> => {
+    // `setUsername` never stores one this long.
+    if (isTooLong(username)) return null;
+    return (await byNormalized(ctx, normalizeUsername(username)))?.userId ?? null;
+  },
 });
 
 /** A user's username, spelled as they gave it; null when they have none. */

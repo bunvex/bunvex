@@ -1,7 +1,8 @@
-// The password component's functions (STUDY-201 §1.6), v2's: set a user's password, check it. Hashes are argon2id PHC
-// strings, v2's byte for byte, computed off the JavaScript thread by the runtime (`@bunvex/server/password`, AD-49) with
-// a 16-byte salt from the mutation's seeded stream. Refusals are results with a user error, never throws, so a check's
-// rate-limit consumption commits.
+// The password component's functions (STUDY-201 §1.6, STUDY-208 §1.11), v2.0.0's: set a user's password (under v2's
+// `_internal_dangerous_` name, with the caller's minimum length), check it. Hashes are argon2id PHC strings, v2's byte
+// for byte, computed off the JavaScript thread by the runtime (`@bunvex/server/password`, AD-49) with a 16-byte salt
+// from the mutation's seeded stream. Refusals are results with a user error, never throws, so a check's rate-limit
+// consumption commits.
 import { MINUTE, RateLimiter } from "@bunvex/rate-limiter";
 import { hashPassword, verifyPassword as matchesHash } from "@bunvex/server/password";
 import { type Infer, v } from "@bunvex/values";
@@ -9,6 +10,7 @@ import { components } from "./_generated/api.ts";
 import type { Doc } from "./_generated/dataModel.ts";
 import { mutation, type QueryCtx } from "./_generated/server.ts";
 import {
+  MIN_PASSWORD_LENGTH,
   normalizePassword,
   setPasswordUserError,
   validateNewPassword,
@@ -45,12 +47,19 @@ const passwordOf = (ctx: QueryCtx, userId: string): Promise<Doc<"passwords"> | n
     .withIndex("by_userId", (q) => q.eq("userId", userId))
     .unique();
 
-/** Set a user's password: a new user's, or a new one replacing theirs. A refused password changes nothing. */
-export const setPassword = mutation({
-  args: { userId: v.string(), password: v.string() },
+/**
+ * Set a user's password: a new user's, or a new one replacing theirs. A refused password changes nothing.
+ * `minimumLength` is the new password's shortest length, which each caller sets (the password methods give
+ * `DEFAULT_MIN_PASSWORD_LENGTH`, 10). Throws when it is not between 8 and 100: the caller's mistake, not the user's.
+ *
+ * DANGER: it replaces the password of any `userId`, with no proof. App code must not call it: only this package's
+ * password methods do, for a user they just created or verified.
+ */
+export const _internal_dangerous_setPassword = mutation({
+  args: { userId: v.string(), password: v.string(), minimumLength: v.number() },
   returns: setPasswordResult,
-  handler: async (ctx, { userId, password }): Promise<SetPasswordResult> => {
-    const userError = validateNewPassword(password);
+  handler: async (ctx, { userId, password, minimumLength }): Promise<SetPasswordResult> => {
+    const userError = validateNewPassword(password, minimumLength);
     if (userError !== null) return { success: false, userError };
     const passwordHashPHC = await hashPassword(
       normalizePassword(password),
@@ -73,9 +82,10 @@ export const verifyPassword = mutation({
   handler: async (ctx, { userId, password }): Promise<VerifyPasswordResult> => {
     const status = await rateLimiter.limit(ctx, "verifyPassword", { key: userId });
     if (!status.ok) return { success: false, userError: { error: "RATE_LIMITED", retryAfterMs: status.retryAfter } };
-    // The format first: a friendlier answer (too short cannot be right), and no hashing of an outsized input. Should the
-    // rules ever change, this must still accept the passwords set before.
-    const userError = validatePasswordInputFormat(password);
+    // The format first: a friendlier answer (too short cannot be right), and no hashing of an outsized input. Checked
+    // against the component's floor, not the methods' minimum, so a password other systems set still verifies; should
+    // the rules ever change, this must still accept the passwords set before.
+    const userError = validatePasswordInputFormat(password, MIN_PASSWORD_LENGTH);
     if (userError !== null) return { success: false, userError };
     const row = await passwordOf(ctx, userId);
     if (row === null) throw new Error(`No password stored for userId ${userId}.`);

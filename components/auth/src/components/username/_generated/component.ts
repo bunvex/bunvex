@@ -26,6 +26,6 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
     deleteUsername: FunctionReference<"mutation", "internal", { userId: string }, { deleted: boolean }, Name>;
     getUserIdByUsername: FunctionReference<"query", "internal", { username: string }, string | null, Name>;
     getUsername: FunctionReference<"query", "internal", { userId: string }, string | null, Name>;
-    setUsername: FunctionReference<"mutation", "internal", { userId: string; username: string }, { previousUsername: string | null; success: true } | { success: false; userError: { error: "USERNAME_TOO_SHORT"; minimumLength: number } | { error: "USERNAME_HAS_SURROUNDING_WHITESPACE" } | { error: "USERNAME_HAS_INVALID_CHARACTERS" } | { error: "USERNAME_TAKEN" } }, Name>;
+    setUsername: FunctionReference<"mutation", "internal", { userId: string; username: string }, { previousUsername: string | null; success: true } | { success: false; userError: { error: "USERNAME_TOO_SHORT"; minimumLength: number } | { error: "USERNAME_TOO_LONG"; maximumLength: number } | { error: "USERNAME_HAS_SURROUNDING_WHITESPACE" } | { error: "USERNAME_HAS_INVALID_CHARACTERS" } | { error: "USERNAME_TAKEN" } }, Name>;
   };
 };

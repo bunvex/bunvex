@@ -1,4 +1,5 @@
-// The password component's suite (STUDY-201 §3.4), upstream's `components/password/passwordProvider.test.ts` ported.
+// The password component's suite (STUDY-201 §3.4, STUDY-208 §5), upstream's `components/password/passwordProvider.test.ts`
+// at v2.0.0 ported.
 // The component is mounted as a component named `authPassword` (fixtures/password-component, the real functions plus
 // `testing`'s row access), since the runtime's hasher answers only that component's mutations (AD-49); upstream runs it
 // as the root app. Upstream's interoperability tests call its WASM crate in the test's process; here the hashes are the
@@ -9,6 +10,7 @@ import { join } from "node:path";
 import { componentsGeneric } from "@bunvex/server";
 import { bunvexTest, type TestBunvex } from "@bunvex/testing";
 import { argon2d, argon2i, argon2id, argon2Verify, bcrypt, bcryptVerify } from "hash-wasm";
+import { MIN_PASSWORD_LENGTH } from "../src/components/password/validation.ts";
 
 const COMPONENT = join(import.meta.dir, "fixtures", "password-component");
 const PASSWORD = "correct horse battery staple"; // 28 chars, valid
@@ -30,8 +32,8 @@ function setup(): TestBunvex {
   return t;
 }
 
-const setPassword = (t: TestBunvex, password: string, userId = "alice") =>
-  t.mutation(api.setPassword, { userId, password });
+const setPassword = (t: TestBunvex, password: string, userId = "alice", minimumLength = MIN_PASSWORD_LENGTH) =>
+  t.mutation(api._internal_dangerous_setPassword, { userId, password, minimumLength });
 const verifyPassword = (t: TestBunvex, password: string, userId = "alice") =>
   t.mutation(api.verifyPassword, { userId, password });
 const storedHash = async (t: TestBunvex) =>
@@ -91,8 +93,40 @@ describe("password validation (setPassword)", () => {
     const t = setup();
     expect(await setPassword(t, "short")).toEqual({
       success: false,
+      userError: { error: "PASSWORD_TOO_SHORT", minimumLength: 8 },
+    });
+  });
+
+  // The password methods require 10 characters, but the component accepts 8.
+  test("accepts a password of 8 characters", async () => {
+    const t = setup();
+    expect(await setPassword(t, "kY7t-vQ2")).toEqual({ success: true });
+    expect(await verifyPassword(t, "kY7t-vQ2")).toEqual({ success: true });
+  });
+
+  test("rejects a password that is shorter than minimumLength", async () => {
+    const t = setup();
+    expect(await setPassword(t, "kY7t-vQ2m", "alice", 10)).toEqual({
+      success: false,
       userError: { error: "PASSWORD_TOO_SHORT", minimumLength: 10 },
     });
+  });
+
+  // A minimumLength outside of MIN_PASSWORD_LENGTH..MAX_PASSWORD_LENGTH is the caller's mistake.
+  test.each([
+    ["less than MIN_PASSWORD_LENGTH", 4],
+    ["more than MAX_PASSWORD_LENGTH", 101],
+  ])("throws when minimumLength is %s", async (_, minimumLength) => {
+    const t = setup();
+    await expect(setPassword(t, "kY7t-vQ2m", "alice", minimumLength)).rejects.toThrow(
+      `minimumLength must be between 8 and 100, but it is ${minimumLength}.`,
+    );
+    expect(await t.query(authPassword.testing.passwords, {})).toEqual([]);
+  });
+
+  test("rejects a frequent password of 8 characters", async () => {
+    const t = setup();
+    expect(await setPassword(t, "12345678")).toEqual({ success: false, userError: { error: "PASSWORD_TOO_COMMON" } });
   });
 
   test("rejects a password with leading whitespace", async () => {
@@ -126,7 +160,7 @@ describe("password validation (verifyPassword)", () => {
     await setPassword(t, PASSWORD);
     expect(await verifyPassword(t, "short")).toEqual({
       success: false,
-      userError: { error: "PASSWORD_TOO_SHORT", minimumLength: 10 },
+      userError: { error: "PASSWORD_TOO_SHORT", minimumLength: 8 },
     });
   });
 
@@ -148,7 +182,7 @@ describe("password validation (verifyPassword)", () => {
     });
   });
 
-  // A user may have a frequent password from before the rule, and must still sign in: only `setPassword` refuses one.
+  // A user may have a frequent password from before the rule, and must still sign in: only `_internal_dangerous_setPassword` refuses one.
   test("accepts one of the most frequent passwords", async () => {
     const t = setup();
     const commonPassword = "password123";

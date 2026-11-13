@@ -67,7 +67,7 @@ import { internalMutation } from "./_generated/server";
 import { v } from "@bunvex/values";
 
 export const createUser = internalMutation({
-  args: { provider: v.object({ name: v.string(), accountId: v.string(), profile: v.any() }) },
+  args: { method: v.object({ name: v.literal("usernamePassword"), profile: v.object({}) }) },
   returns: v.id("users"),
   handler: async (ctx) => await ctx.db.insert("users", {}),
 });
@@ -109,16 +109,41 @@ id, or `null`.
 
 The `auth` component keeps:
 
-- **accounts**: each sign-in method's identity (`provider`, `providerAccountId`) and the id of the app user it belongs
-  to. Your app owns its users table; the component only stores the id your `createUser` mutation returns;
-- **sessions**, each with its **refresh tokens**. A refresh token is 32 random bytes, stored only as its SHA-256. Every
-  refresh redeems the token presented and issues a new one; presenting a token that was already replaced (a leaked
-  token) revokes the whole session. A client whose refresh answer was lost can retry with the token it holds.
+- **sessions**, each recording the user's id and the component that authenticated them (`component`, e.g.
+  `"authPassword"`), with their **refresh tokens**. A refresh token is 32 random bytes, stored only as its SHA-256.
+  Every refresh redeems the token presented and issues a new one; presenting a token that was already replaced (a
+  leaked token) revokes the whole session. A client whose refresh answer was lost can retry with the token it holds.
+- **createdUserIds**: the ids of the users it created or signed in (`markUserIdCreated` adds the others).
+
+It keeps no accounts: each method's component maps its identities to your users (the username component maps a
+username to its user). Your app owns its users table; the core only stores the id your `createUser` mutation returns.
 
 Access tokens are signed by your deployment (`ctx.auth.signJwt`), with `iss` set to
-`<your deployment's URL>/components/auth`, `aud: "bunvex"` and the session as their subject: your app finds the user
-through the session, so a revoked session stops resolving to a user at once. They last 60 seconds by default (at most
-an hour); refresh tokens last 30 days.
+`<your deployment's URL>/components/auth`, `aud: "bunvex-auth"` and the session as their subject: your app finds the
+user through the session, so a revoked session stops resolving to a user at once.
+
+A session ends at the sooner of two deadlines: its **inactivity timeout** after its last refresh, and its **max
+lifetime** (30 days) after it started, however often it refreshes. The timeout is the max lifetime unless you set it,
+so by default a session lasts 30 days. Access tokens last 60 seconds (at most an hour). Set them in `setupAuth`:
+
+```ts
+const auth = setupAuth({
+  component: components.auth,
+  accessTokenTtlSeconds: 60,
+  refreshInactivityTimeoutSeconds: 7 * 24 * 60 * 60,
+  sessionMaxLifetimeSeconds: 30 * 24 * 60 * 60,
+});
+```
+
+They are checked when your functions load, so an invalid set fails `bunvex deploy`: the timeout is at most the max
+lifetime, and the access token is shorter than the timeout. A changed session lifetime applies to every session,
+those already started included; a changed access-token lifetime, to the tokens minted after it.
+
+A user has at most 100 sessions: a sign-in past that signs out the session that refreshed longest ago. A signed-out
+or revoked session ends at once; its refresh tokens are erased right after, by the component's scheduled
+`sessions:deleteSessionTokens`, in batches of 1000.
+
+Mount it as `auth`, with no `name` option: the component refuses to sign anyone in under another name.
 
 ```ts
 // bunvex/bunvex.config.ts
@@ -130,25 +155,31 @@ app.use(auth);
 export default app;
 ```
 
-Its functions are only callable from your app (`components.auth.public.*`): `signUp`, `signIn`,
-`signUpWithoutSession`, `refresh`, `signOut`, `getUserIdByAccount`, `getSession`, `listSessions` and
-`revokeSessions`.
+Its functions are only callable from your app (`components.auth.public.*`): `_internal_dangerous_signUp`,
+`_internal_dangerous_signIn` and `_internal_dangerous_signUpWithoutSession` (for the sign-in methods, which call them
+once they verified the user: your app's code must not), `markUserIdCreated` (for users you import or create without
+the core), `refresh`, `signOut`, `getSession`, `listSessions` and `revokeSessions`.
 
 ## The method components
 
 Each mounts from `@bunvex/auth/components/<name>/bunvex.config.js`; the methods call them from your app.
 
 - **`authPassword`** stores and checks passwords by user id. Hashes are argon2id (16 MiB, 3 passes, 1 lane) PHC
-  strings, computed by your deployment off the JavaScript thread. A new password is 10 to 100 characters, with no
-  leading or trailing whitespace, and not one of the 3000 most frequent passwords (any case); passwords compare in
-  their NFC form. Checks are rate limited per user: 5 attempts, then one a minute. It mounts
+  strings, computed by your deployment off the JavaScript thread. It accepts passwords of 8 to 100 characters, with no
+  leading or trailing whitespace, and refuses a new one that is among the most frequent passwords (any case); the
+  username + password method asks for 10 or more (`DEFAULT_MIN_PASSWORD_LENGTH`). Passwords compare in their NFC
+  form. Checks are rate limited per user: 5 attempts, then one a minute. Setting a password
+  (`_internal_dangerous_setPassword`) is for the password methods only. It mounts
   [`@bunvex/rate-limiter`](../rate-limiter) as `rateLimiter`.
 - **`authUsername`** gives each user at most one username, unique across users whatever its case or Unicode
-  normalization form, and kept as the user spelled it. Control, invisible and bidirectional characters, unusual spaces
-  and a leading combining mark are refused.
+  normalization form, and kept as the user spelled it. A username has 1 to 100 characters (code points, once
+  normalized). Control, invisible and bidirectional characters, unusual spaces and a leading combining mark are
+  refused.
 
-`@bunvex/auth/components/<name>/test` mounts each in a test deployment (`registerPasswordProvider`,
-`registerUsername`).
+Your `createUser` and `onSignIn` get the method's name and what it learned, as `method: { name, profile }`
+(`"usernamePassword"` for the username + password method).
+
+`@bunvex/auth/components/<name>/test` mounts each in a test deployment (`registerPassword`, `registerUsername`).
 
 ## The browser client
 

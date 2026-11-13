@@ -1,4 +1,4 @@
-// The username + password example's functions: the upstream example's suite (20 tests) and one more. Each test runs
+// The username + password example's functions: the upstream example's suite (20 tests) and two more. Each test runs
 // this app on a deployment of its own, in the test's process (`@bunvex/testing`), a user calling as their session
 // (`sessionIdentity`).
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -109,6 +109,18 @@ describe("setupUsernamePassword", () => {
     });
   });
 
+  test("rejects a username of more than 100 characters at sign-up, and finds no user at sign-in", async () => {
+    const t = setup();
+    expect(await signUp(t, "a".repeat(101), PASSWORD)).toEqual({
+      status: "error",
+      userError: { error: "USERNAME_TOO_LONG", maximumLength: 100 },
+    });
+    expect(await signIn(t, "a".repeat(101), PASSWORD)).toEqual({
+      status: "error",
+      userError: { error: "USER_NOT_FOUND" },
+    });
+  });
+
   test("stores the username in the username component", async () => {
     const t = setup();
     const up = (await signUp(t, "Alice", PASSWORD)) as Complete;
@@ -117,7 +129,8 @@ describe("setupUsernamePassword", () => {
 
   test("rejects a too-short password at sign-up without creating an account", async () => {
     const t = setup();
-    expect(await signUp(t, "alice", "short")).toEqual({
+    // 9 characters: the password component accepts it, the method does not.
+    expect(await signUp(t, "alice", "kY7t-vQ2m")).toEqual({
       status: "error",
       userError: { error: "PASSWORD_TOO_SHORT", minimumLength: 10 },
     });
@@ -185,7 +198,7 @@ describe("changePassword", () => {
   test("refuses a signed-out caller", async () => {
     const { t } = await signedUpUser();
     expect(await t.mutation(api.auth.changePassword, { currentPassword: PASSWORD, newPassword: NEW_PASSWORD })).toEqual(
-      { success: false, userError: { error: "NOT_SIGNED_IN" } },
+      { success: false, userError: { error: "NOT_LOGGED_IN" } },
     );
   });
 

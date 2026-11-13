@@ -28,7 +28,7 @@ test("sign up, then calls as the user with the access token the deployment verif
   const up = await d.http.mutation(api.auth.signUpWithUsernamePassword, { username: "Ada", password: PASSWORD });
   if (up.status !== "complete") throw new Error(`sign-up failed: ${JSON.stringify(up)}`);
   const claims = payloadOf(up.tokens.accessToken);
-  expect(claims.aud).toBe("bunvex");
+  expect(claims.aud).toBe("bunvex-auth");
   expect(claims.iss).toMatch(/\/components\/auth$/);
   const ada = as(up.tokens.accessToken);
   expect(await ada.query(api.currentUser.loggedInUser, {})).toMatchObject({ id: up.tokens.userId, username: "Ada" });

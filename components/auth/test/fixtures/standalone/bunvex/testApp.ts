@@ -3,10 +3,10 @@
 import { internalMutation, internalQuery } from "@bunvex/server";
 import { v } from "@bunvex/values";
 
-const vProvider = v.object({ name: v.string(), accountId: v.string(), profile: v.any() });
+const vMethod = v.object({ name: v.string(), profile: v.any() });
 
 export const createUser = internalMutation({
-  args: { provider: vProvider },
+  args: { method: vMethod },
   returns: v.string(),
   handler: async (ctx, args) => {
     await ctx.db.insert("callbackCalls", { kind: "createUser", args });
@@ -19,7 +19,7 @@ export const createUser = internalMutation({
 });
 
 export const onSignIn = internalMutation({
-  args: { provider: vProvider, userId: v.string() },
+  args: { method: vMethod, userId: v.string() },
   returns: v.null(),
   handler: async (ctx, args) => {
     await ctx.db.insert("callbackCalls", { kind: "onSignIn", args });
@@ -28,7 +28,7 @@ export const onSignIn = internalMutation({
 });
 
 export const onSignInThatThrows = internalMutation({
-  args: { provider: vProvider, userId: v.string() },
+  args: { method: vMethod, userId: v.string() },
   returns: v.null(),
   handler: async () => {
     throw new Error("no sign-ins for you");

@@ -5,7 +5,7 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { join } from "node:path";
 import { anyApi } from "@bunvex/server";
 import { bunvexTest, type TestBunvex } from "@bunvex/testing";
-import { validateUsernameFormat } from "../src/components/username/validation.ts";
+import { MAX_USERNAME_LENGTH, validateUsernameFormat } from "../src/components/username/validation.ts";
 
 const api = anyApi as any;
 const open: TestBunvex[] = [];
@@ -78,12 +78,46 @@ describe("setUsername", () => {
     });
   });
 
-  test("accepts a one-character username and a very long username", async () => {
+  test("accepts a one-character username and a username of the maximum length", async () => {
     const t = setup();
     expect(await setUsername(t, "user1", "a")).toEqual({ success: true, previousUsername: null });
-    const long = "b".repeat(5000);
+    // The length counts code points: an astral character counts as one.
+    const long = "😀".repeat(MAX_USERNAME_LENGTH);
     expect(await setUsername(t, "user2", long)).toEqual({ success: true, previousUsername: null });
     expect(await getUserIdByUsername(t, long)).toBe("user2");
+  });
+
+  test("rejects a username that is too long", async () => {
+    const t = setup();
+    for (const username of ["b".repeat(MAX_USERNAME_LENGTH + 1), "b".repeat(1_000_000)]) {
+      expect(await setUsername(t, "user1", username)).toEqual({
+        success: false,
+        userError: { error: "USERNAME_TOO_LONG", maximumLength: MAX_USERNAME_LENGTH },
+      });
+      expect(await getUserIdByUsername(t, username)).toBeNull();
+    }
+  });
+
+  // Beyond upstream: the maximum is checked first, and counted once normalized; the lookup of a username that long
+  // reads nothing (`setUsername` never stores one).
+  test("checks the maximum first, after normalization, and looks nothing up past it", async () => {
+    const t = setup();
+    expect(await setUsername(t, "user1", ` ${"b".repeat(MAX_USERNAME_LENGTH)}`)).toEqual({
+      success: false,
+      userError: { error: "USERNAME_TOO_LONG", maximumLength: MAX_USERNAME_LENGTH },
+    });
+    // "İ" lowercases to two code points: 50 of them are 100 once normalized.
+    expect(await setUsername(t, "user2", "İ".repeat(50))).toEqual({ success: true, previousUsername: null });
+    expect(await setUsername(t, "user3", "İ".repeat(51))).toEqual({
+      success: false,
+      userError: { error: "USERNAME_TOO_LONG", maximumLength: MAX_USERNAME_LENGTH },
+    });
+    // A row no `setUsername` would write: only the early null keeps the lookup from finding it.
+    const tooLong = "c".repeat(MAX_USERNAME_LENGTH + 1);
+    await t.run(async (ctx: any) => {
+      await ctx.db.insert("usernames", { userId: "user4", username: tooLong, usernameNormalized: tooLong });
+    });
+    expect(await getUserIdByUsername(t, tooLong)).toBeNull();
   });
 
   test("rejects a username with surrounding whitespace", async () => {
