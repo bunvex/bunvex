@@ -36,6 +36,7 @@ services:
       - DO_NOT_REQUIRE_SSL
       - INSTANCE_NAME
       - INSTANCE_SECRET
+      - MAX_ISOLATE_WORKERS # none by default (DV-574); a count runs functions on up to that many worker threads
       - MYSQL_URL
       - PERSISTENCE
       - PERSISTENCE_URL
