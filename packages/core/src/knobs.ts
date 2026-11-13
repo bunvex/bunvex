@@ -35,11 +35,37 @@ export function parseKnob(raw: string, kind: KnobKind): number | undefined {
 
 /** What was logged already: a knob read again (one per engine, say) logs once, as Convex's `LazyLock`. */
 const logged = new Set<string>();
+// Convex's `main` (crates/local_backend/src/main.rs) sets its tracing up after parsing its arguments: a subcommand's
+// is ERROR-only, on stderr ("subcommands produce machine-parseable output on stdout"), so a knob's notes never show
+// there; the server's is INFO, on stdout. bunvex reads most knobs as its modules load, before the arguments are
+// parsed, so the executable holds the notes until it knows which it runs.
+let notes: "now" | "held" | "dropped" = "now";
+const heldNotes: [line: string, log: (line: string) => void][] = [];
 const once = (line: string, log: (line: string) => void) => {
   if (logged.has(line)) return;
   logged.add(line);
-  log(line);
+  if (notes === "now") log(line);
+  else if (notes === "held") heldNotes.push([line, log]);
 };
+
+/**
+ * Holds the knobs' log lines (an override, a value that does not parse) from now on, until `releaseKnobNotes`.
+ * For a program that decides after its modules load whether its output is for a script to read.
+ */
+export function holdKnobNotes(): void {
+  if (notes === "now") notes = "held";
+}
+
+/**
+ * Ends `holdKnobNotes`: `show` logs the held lines, and any later one as it comes; otherwise none is ever logged
+ * (a command whose stdout a script reads). Nothing when the lines were not held.
+ */
+export function releaseKnobNotes(show: boolean): void {
+  if (notes !== "held") return;
+  notes = show ? "now" : "dropped";
+  const lines = heldNotes.splice(0);
+  if (show) for (const [line, log] of lines) log(line);
+}
 
 function fromEnv<T>(name: string, def: T, env: KnobEnv, read: (raw: string) => T | undefined): T {
   const raw = env[name];

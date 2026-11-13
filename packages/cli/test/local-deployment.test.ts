@@ -293,6 +293,30 @@ exec ${JSON.stringify(process.execPath)} ${JSON.stringify(ENTRY)} "$@"
     ]);
   }, 60_000);
 
+  // Convex's `main` (crates/local_backend/src/main.rs): a subcommand's tracing is ERROR-only on stderr, the server's
+  // INFO on stdout. A knob's override, logged on stdout by keygen, ended up in the admin key.
+  test("a knob in the user's shell: keygen's stdout is the key alone; the backend logs the override", async () => {
+    const dir = app();
+    process.env.WRITE_LOG_MAX_RETENTION_SECS = "30";
+    let running: Awaited<ReturnType<typeof startLocalDeployment>>;
+    try {
+      running = await startLocalDeployment(io(dir, { BUNVEX_LOCAL_BACKEND_BINARY: shim(tmp()), HOME: tmp() }).it, {
+        cloudPort: freePort(),
+      });
+    } finally {
+      delete process.env.WRITE_LOG_MAX_RETENTION_SECS;
+    }
+    stops.push(running.stop);
+    expect(running.config.adminKey).not.toMatch(/\s|Overriding/);
+    const ok = await fetch(`${running.target.url}/api/check_admin_key`, {
+      headers: { authorization: `Bunvex ${running.config.adminKey}` },
+    });
+    expect(ok.status).toBe(200);
+    expect(readFileSync(join(dir, ".bunvex/local/default/backend.log"), "utf8")).toContain(
+      "Overriding WRITE_LOG_MAX_RETENTION_SECS to 30 from environment",
+    );
+  }, 60_000);
+
   test("a TZ in the user's shell does not stop the backend: it is started in UTC (DV-537)", async () => {
     // The stand-in records the TZ it was started with, then runs the backend, which refuses any TZ but UTC.
     const rec = join(tmp(), "tz");

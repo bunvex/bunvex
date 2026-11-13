@@ -2,6 +2,10 @@
 // precompiled `convex-local-backend`. `bun build --compile` cannot follow the persistence drivers' computed
 // imports, so `@bunvex/persistence/executable` imports them and their database clients and registers them for the
 // loaders.
+//
+// First: the knobs' log lines wait until the arguments say whether this is the server, which logs them, or `keygen`,
+// whose stdout is the key a script reads.
+import "./hold-knob-notes.ts";
 import "@bunvex/persistence/executable";
 import { createProcessExecutor } from "@bunvex/sandbox";
 import { localBackendMain } from "@bunvex/server";
