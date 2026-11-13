@@ -1334,6 +1334,12 @@ The owner turned the execution workers off by default: `MAX_ISOLATE_WORKERS` is 
     kind of call;
   - the differential check extended to what the caller receives (value, log entry, metrics), not only the outcome's
     text;
+  - the Soak nightly passing with workers on: memory (R1) and no stuck worker. With 4 workers it failed R1 in 6 of
+    9 nights (up to 2.3 MB/min, median RSS about 810 MB against 291 MB without workers). Most of it was each worker's
+    copy of the whole write log (300 s), kept for its index cache: a copy now keeps 30 s, the minimum retention (an
+    entry moves to the ts of each hit, so one read within the window stays a hit). On the CI's 45-minute soak with 4
+    workers, the slope went from 2.8 to 0.7 MB/min and the median RSS from 833 to 637 MB. That is still over R1's
+    0.5 MB/min, and the rest is outside the workers' JS heaps (they stay at 15–25 MB);
   - the owner's decision, with those passing.
 - PR 4 (actions on workers) waits until then. Its spike is a local branch, not merged, and is measured on DO `c-4`
   (sfo2, SQLite, 64 VUs, 2 workers):

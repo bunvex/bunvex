@@ -7,7 +7,7 @@
 // transaction begun in-thread takes it (§4.7).
 import { Out, WireReader } from "./call-wire.ts";
 import { Catalog } from "./catalog.ts";
-import type { Interval, LogEntry } from "./committer.ts";
+import { type Interval, type LogEntry, WRITE_LOG_MIN_RETENTION_NS } from "./committer.ts";
 import type { IndexDef, TableDef } from "./schema.ts";
 import type { SearchIndexEntry, SearchIndexes, SearchIndexState } from "./search-indexes.ts";
 import { intervalSetsByIndex, WritesByIndex } from "./write-log-index.ts";
@@ -361,6 +361,12 @@ export function decodeCommits(s: string): { visibleTs: bigint; purgedTs: bigint;
 /**
  * The main thread's write log as a worker hears it, for its index cache: an entry cached at one ts is good at another
  * when no commit in between wrote into it (`Committer.changedBetween`, answered the same way from the same commits).
+ *
+ * It keeps less than the main thread's log: the commits of the last `keepNs` (the write log's minimum retention, 30 s
+ * by default), where the main thread keeps up to its maximum (300 s), for its conflicts and subscriptions. A worker
+ * needs it only for its index cache, whose entries move to the ts of each hit: one read within the window stays a
+ * hit, and one older is read again. A copy of the whole log in every worker was most of their memory under a steady
+ * write load (the soak's R1, 2026-11-13).
  */
 export class WriteLogCopy {
   visibleTs: bigint;
@@ -370,7 +376,10 @@ export class WriteLogCopy {
   private readonly byIndex = new WritesByIndex();
 
   /** From the main thread's visible ts when the worker started: nothing before it can be proven. */
-  constructor(startTs: bigint) {
+  constructor(
+    startTs: bigint,
+    private readonly keepNs: bigint = WRITE_LOG_MIN_RETENTION_NS,
+  ) {
     this.visibleTs = this.purgedTs = startTs;
   }
 
@@ -386,9 +395,13 @@ export class WriteLogCopy {
       fresh.push(e);
     }
     if (m.visibleTs > this.visibleTs) this.visibleTs = m.visibleTs;
-    if (m.purgedTs > this.purgedTs) {
-      this.purgedTs = m.purgedTs;
-      while (this.head < this.log.length && this.log[this.head]!.ts <= m.purgedTs) {
+    // What the main thread dropped, or what is older than this copy keeps: every commit above it stays.
+    const kept = this.visibleTs - this.keepNs;
+    let purgedTs = m.purgedTs;
+    if (kept > purgedTs) purgedTs = kept;
+    if (purgedTs > this.purgedTs) {
+      this.purgedTs = purgedTs;
+      while (this.head < this.log.length && this.log[this.head]!.ts <= purgedTs) {
         this.byIndex.removeOldest(this.log[this.head]!);
         this.log[this.head++] = undefined as unknown as LogEntry;
       }
