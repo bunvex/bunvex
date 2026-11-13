@@ -4865,7 +4865,10 @@ export class Engine {
       value: { value: T } | { replayed: SessionRequestOutcome };
       ts: bigint;
     };
-    return { ...r.value, ts: r.ts };
+    // Not spread: a worker's `{ value }` crossed as text, where an `undefined` value leaves no field, and a run that
+    // returned nothing must not read as a replay.
+    if ("replayed" in r.value) return { replayed: r.value.replayed, ts: r.ts };
+    return { value: r.value.value, ts: r.ts };
   }
 
   /** Delete one chunk of session requests created before `cutoffMs` (retention); how many it deleted. */
