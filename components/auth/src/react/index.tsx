@@ -12,7 +12,7 @@ import { AuthClient } from "../browser/sessionManager.ts";
 import { defaultStorage, type TokenStorage } from "../browser/storage.ts";
 import type { AuthApi } from "../lib/types.ts";
 import { oauth } from "../methods/oauth/client.ts";
-import { AuthActionsContext, AuthProvider, AuthTokenContext, useAuth } from "./client.tsx";
+import { AuthActionsContext, AuthProvider, AuthTokenContext, SessionWatcher, useAuth } from "./client.tsx";
 
 export type { TokenStorage } from "../browser/storage.ts";
 export type { AuthApi, TokenBundle } from "../lib/types.ts";
@@ -30,7 +30,14 @@ export type { AuthActionsContextType } from "./client.tsx";
  *
  * function Root({ children }: { children: React.ReactNode }) {
  *   return (
- *     <BunvexAuthProvider client={bunvex} api={{ refreshSession: api.auth.refreshSession, signOut: api.auth.signOut }}>
+ *     <BunvexAuthProvider
+ *       client={bunvex}
+ *       api={{
+ *         refreshSession: api.auth.refreshSession,
+ *         signOut: api.auth.signOut,
+ *         isAuthenticated: api.auth.isAuthenticated,
+ *       }}
+ *     >
  *       {children}
  *     </BunvexAuthProvider>
  *   );
@@ -47,7 +54,10 @@ export function BunvexAuthProvider({
 }: {
   /** Your `BunvexReactClient`. */
   client: BunvexReactClient;
-  /** Your app's `refreshSession` and `signOut` mutations. */
+  /**
+   * Your app's `refreshSession` and `signOut` mutations, and its `isAuthenticated` query. The provider subscribes to
+   * `isAuthenticated`, so a session revoked on the server signs the client out at once.
+   */
   api: AuthApi;
   /**
    * Where the tokens are kept: `localStorage` in a browser by default, memory where there is none (server rendering).
@@ -113,6 +123,7 @@ export function BunvexAuthProvider({
   return (
     <AuthProvider authClient={authClient} signInApi={signInApi}>
       <BunvexProviderWithAuth client={client} useAuth={useAuth}>
+        <SessionWatcher isAuthenticated={api.isAuthenticated} />
         {children}
       </BunvexProviderWithAuth>
     </AuthProvider>

@@ -5,7 +5,6 @@
 // on the plain backend client; only the redemption, which returns the shared sign-in result, runs on the sign-in API
 // (the auth proxy under server rendering). The OAuth providers' server side comes with OAuth itself.
 import { type FunctionReference, getFunctionName, makeFunctionReference } from "@bunvex/server";
-import { BunvexError } from "@bunvex/values";
 import type { AmbientSignInClient } from "../../browser/ambientSignInClient.ts";
 import { retryOnNetworkError } from "../../browser/retry.ts";
 import type { SignInStorage } from "../../browser/storage.ts";
@@ -41,15 +40,14 @@ export type OauthProviderRefs = {
  * - `ACCESS_DENIED`: the user cancelled at the identity provider.
  * - `EXPIRED`: the flow took too long, or its code was already redeemed.
  * - `INVALID_FLOW`: a callback arrived, but this client saved no flow (it never started it, or already finished it).
- * - `REJECTED`: the app's backend refused the sign-in by throwing a `BunvexError`; `data` is its `data`.
  * - `OTHER_ERROR`: anything else (the identity provider failing, the redemption throwing); `cause` is what was thrown,
- *   or the error the callback URL carried.
+ *   or the error the callback URL carried. When the app's backend refuses the sign-in by throwing a `BunvexError` (from
+ *   `onSignIn`, say), `cause` is that `BunvexError`, as with the other sign-in methods.
  */
 export type OauthFlowError =
   | { error: "ACCESS_DENIED" }
   | { error: "EXPIRED" }
   | { error: "INVALID_FLOW" }
-  | { error: "REJECTED"; data: unknown }
   | { error: "OTHER_ERROR"; cause: unknown };
 
 /**
@@ -117,10 +115,6 @@ function callbackFlowError(param: string): OauthFlowError {
   return { error: "OTHER_ERROR", cause: param };
 }
 
-/** A redemption that threw: the app's backend refusing (a `BunvexError`), or anything unexpected. */
-const thrownFlowError = (error: unknown): OauthFlowError =>
-  error instanceof BunvexError ? { error: "REJECTED", data: error.data } : { error: "OTHER_ERROR", cause: error };
-
 /** The page's URL, or null without one (React Native has a `window` but no `window.location`). */
 function currentHref(): string | null {
   if (typeof window === "undefined" || window.location === undefined) return null;
@@ -184,7 +178,8 @@ export function oauth(): AmbientSignInClient {
         await client.setSession(result.tokens);
         return { status: "complete" };
       } catch (error) {
-        return { status: "error", userError: thrownFlowError(error) };
+        // v2 (3ad61bd9): the app's `BunvexError` too, as `cause`.
+        return { status: "error", userError: { error: "OTHER_ERROR", cause: error } };
       }
     };
 

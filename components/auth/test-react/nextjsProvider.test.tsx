@@ -1,15 +1,17 @@
 // `BunvexAuthNextjsProvider` (STUDY-202 §1.8): upstream's `ssr/nextjs/oauth.test.tsx`, the two cases that need no
 // provider's hook, ported with the inert `oauth()` client and a stand-in provider (the third, a flow started on the
 // backend client, comes with OAuth); and the provider's own wiring: the server's token adopted, refresh and sign-out
-// posted to the app's routes. A real `BunvexReactClient` on a made-up URL, its calls stubbed, so it never connects; the
-// routes answer through a stubbed `fetch`.
+// posted to the app's routes, and the session watcher on the query the prop names (STUDY-208 §1.10). A real
+// `BunvexReactClient` on a made-up URL, its calls stubbed, so it never connects; the routes answer through a stubbed
+// `fetch`.
 import { afterEach, beforeEach, describe, expect, type Mock, spyOn, test } from "bun:test";
 import { BunvexReactClient } from "@bunvex/react";
-import { cleanup, render } from "@testing-library/react";
+import { act, cleanup, render } from "@testing-library/react";
 import { InMemoryStorage } from "../src/browser/storage.ts";
 import { makeSlimBundle } from "../src/lib/types.ts";
 import { useAuthActions, useAuthToken } from "../src/react/index.tsx";
 import { BunvexAuthNextjsProvider } from "../src/ssr/nextjs/client.tsx";
+import { stubDeployment } from "./deployment.ts";
 import { acmeRefs, bundle, NAMESPACE, seedPendingFlow, waitFor } from "./oauthFlow.ts";
 
 const slim = makeSlimBundle(bundle);
@@ -30,9 +32,9 @@ function makeClient() {
   clients.push(client);
   const mutation = spyOn(client, "mutation").mockRejectedValue(new Error("unexpected backend call"));
   spyOn(client, "action").mockRejectedValue(new Error("unexpected backend call"));
-  spyOn(client, "setAuth").mockImplementation(() => {});
-  spyOn(client, "clearAuth").mockImplementation(() => {});
-  return { client, mutation };
+  // Auth and queries: nothing is accepted or answered unless a test says so.
+  const deployment = stubDeployment(client);
+  return { client, mutation, deployment };
 }
 
 let fetchSpy: Mock<typeof fetch> | undefined;
@@ -57,7 +59,7 @@ describe("OAuth under BunvexAuthNextjsProvider", () => {
       return null;
     }
     render(
-      <BunvexAuthNextjsProvider client={client} storage={storage}>
+      <BunvexAuthNextjsProvider client={client} storage={storage} isAuthenticatedFunctionName="auth:isAuthenticated">
         <Probe />
       </BunvexAuthNextjsProvider>,
     );
@@ -68,7 +70,7 @@ describe("OAuth under BunvexAuthNextjsProvider", () => {
     const [url, init] = signIns[0]!;
     expect(url).toBe("/auth/signin?path=/api/mutation");
     expect(JSON.parse(init!.body as string)).toMatchObject({
-      path: "auth:completeSignInAcme",
+      path: "auth:completeSignInWithAcme",
       format: "encoded_json",
       args: [{ code: "code-1", state: "state-1" }],
     });
@@ -86,7 +88,7 @@ describe("OAuth under BunvexAuthNextjsProvider", () => {
     const replaceState = spyOn(window.history, "replaceState");
     try {
       render(
-        <BunvexAuthNextjsProvider client={client} storage={storage}>
+        <BunvexAuthNextjsProvider client={client} storage={storage} isAuthenticatedFunctionName="auth:isAuthenticated">
           {null}
         </BunvexAuthNextjsProvider>,
       );
@@ -111,7 +113,12 @@ describe("BunvexAuthNextjsProvider", () => {
       return null;
     }
     render(
-      <BunvexAuthNextjsProvider client={client} storage={new InMemoryStorage()} initialToken="from-the-server">
+      <BunvexAuthNextjsProvider
+        client={client}
+        storage={new InMemoryStorage()}
+        initialToken="from-the-server"
+        isAuthenticatedFunctionName="auth:isAuthenticated"
+      >
         <Probe />
       </BunvexAuthNextjsProvider>,
     );
@@ -134,6 +141,7 @@ describe("BunvexAuthNextjsProvider", () => {
         storage={new InMemoryStorage()}
         initialToken="from-the-server"
         signOutRoute="/session/out"
+        isAuthenticatedFunctionName="auth:isAuthenticated"
       >
         <Probe />
       </BunvexAuthNextjsProvider>,
@@ -143,5 +151,40 @@ describe("BunvexAuthNextjsProvider", () => {
     await waitFor(() => expect(token).toBeNull());
     const posted = fetchSpy.mock.calls.map(([url, init]) => [String(url), init?.method]);
     expect(posted).toContainEqual(["/session/out", "POST"]);
+  });
+
+  test("a session revoked on the server posts to the sign-out route, and forgets the session", async () => {
+    const { client, deployment } = makeClient();
+    fetchSpy = stubRoutes(null);
+    let token: string | null = null;
+    function Probe() {
+      token = useAuthToken();
+      return null;
+    }
+    render(
+      <BunvexAuthNextjsProvider
+        client={client}
+        storage={new InMemoryStorage()}
+        initialToken="from-the-server"
+        isAuthenticatedFunctionName="users:hasLiveSession"
+      >
+        <Probe />
+      </BunvexAuthNextjsProvider>,
+    );
+    await waitFor(() => expect(token).toBe("from-the-server"));
+    await waitFor(() => expect(deployment.setAuth).toHaveBeenCalled());
+    // The reference is rebuilt from the name, and subscribed once the deployment accepts the token.
+    expect(deployment.subscriptionsTo("users:hasLiveSession")).toEqual([]);
+    deployment.accept(true);
+    expect(deployment.subscriptionsTo("users:hasLiveSession")).toEqual([{ path: "users:hasLiveSession", args: {} }]);
+    deployment.serve("users:hasLiveSession", true);
+    expect(fetchSpy.mock.calls.map(([url]) => String(url))).not.toContain("/auth/signout");
+
+    await act(async () => {
+      deployment.serve("users:hasLiveSession", false);
+      await waitFor(() => expect(token).toBeNull());
+    });
+    const posted = fetchSpy.mock.calls.map(([url, init]) => [String(url), init?.method]);
+    expect(posted).toContainEqual(["/auth/signout", "POST"]);
   });
 });

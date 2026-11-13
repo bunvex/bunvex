@@ -76,23 +76,29 @@ export type AuthSessionResponse = { tokens: SlimTokenBundle | null };
  */
 export type ClientView<T> = T extends { tokens: TokenBundle } ? Omit<T, "tokens"> & { tokens: SlimTokenBundle } : T;
 
-/**
- * A refresh's outcome:
- *
- * - `rotated`: the new tokens. The token presented stays good until its successor is first presented, so a client that
- *   never received this answer can retry with the token it holds;
- * - `noSession`: the token is unknown, expired, or one nobody should hold any more (which also revoked its session).
- *   The client clears what it stored and treats the user as signed out.
- */
+/** The validator of {@link RefreshResult}, whose documentation gives the outcomes. */
 export const vRefreshResult = v.union(
   v.object({ kind: v.literal("rotated"), tokens: vTokenBundle }),
   v.object({ kind: v.literal("noSession") }),
 );
 
-/** A refresh's outcome: new tokens, or no session. */
+// v2's `RefreshResult` (`lib/types.ts:146-162`, 09a992d7): the doc moved here from the validator, and only a superseded
+// token revokes its session.
+/**
+ * A refresh's outcome, from the app's `refreshSession` mutation and from `ServerAuthSession.refresh()`, told apart by
+ * `kind`:
+ *
+ * - `{ kind: "rotated", tokens }`: the new {@link TokenBundle}, a fresh access token and the refresh token that
+ *   replaces the one presented. Keep both. The token presented stays good until its successor is first used, so a
+ *   client that never received this answer can retry with the token it holds.
+ * - `{ kind: "noSession" }`: the refresh token is unknown, expired, or superseded (a token issued after it has already
+ *   been used). Only a superseded token revokes anything: that is what a leaked token looks like, so presenting it ends
+ *   its session for everyone who holds it. An unknown or expired token has no live session left to revoke. Clear what
+ *   was stored and treat the user as signed out.
+ */
 export type RefreshResult = Infer<typeof vRefreshResult>;
 
-/** The app's `refreshSession` mutation: a refresh token exchanged for new tokens, or no session. */
+/** The app's `refreshSession` mutation: a refresh token exchanged for new tokens; see {@link RefreshResult}. */
 export type RefreshSessionFn = FunctionReference<"mutation", "public", { refreshToken: string }, RefreshResult>;
 
 /** The app's `signOut` mutation: the session of a refresh token revoked. */
@@ -101,11 +107,13 @@ export type SignOutFn = FunctionReference<"mutation", "public", { refreshToken: 
 /** The app's `isAuthenticated` query: whether the access token it is called with names a live session. */
 export type IsAuthenticatedFn = FunctionReference<"query", "public", Record<string, never>, boolean>;
 
+// v2's `ConvexAuthApi` (`lib/types.ts:198-202`, a48a91a5): `isAuthenticated` is required, for the provider's
+// subscription (STUDY-208 §1.10).
 /**
  * The session functions the app exports from `setupAuth`, given to the clients as references (an app may export them
  * under any names).
  */
-export type AuthApi = { refreshSession: RefreshSessionFn; signOut: SignOutFn };
+export type AuthApi = { refreshSession: RefreshSessionFn; signOut: SignOutFn; isAuthenticated: IsAuthenticatedFn };
 
 /**
  * The identity a sign-in method vouches for once it authenticated someone: what the core hands the app's callbacks.

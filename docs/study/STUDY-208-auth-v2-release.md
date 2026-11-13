@@ -728,7 +728,19 @@ shows the boundary and says where `proxy.ts` goes.
    | at the cap of 100 | p50 0.2 ms | p50 2.0–2.2 ms, p90 3.8–4.4 ms (the newest token of each of 100 sessions read, one session deleted, its erasure scheduled) |
 
    A method's sign-in also hashes the password: about 25 ms of argon2 (STUDY-201 §1.15).
-3. **The client.** §3.3, the examples' `api`, the README, and the parity rows.
+3. **The client.** §3.3, the examples' `api`, the README, and the parity rows. Built:
+   - `SessionWatcher` in both providers; `AuthApi.isAuthenticated` required; the Next.js client provider's
+     `isAuthenticatedFunctionName`, which the server provider passes; `RefreshResult` exported from `.` and `./ssr`;
+     the OAuth client's `REJECTED` folded into `OTHER_ERROR`;
+   - upstream's four `SessionWatcher` tests run the real `BunvexProviderWithAuth` and `useQuery` on a real
+     `BunvexReactClient` whose auth and query calls are spied (`test-react/deployment.ts`), instead of mocking
+     `@bunvex/react` (bun's `mock.module` is process-wide); each provider also signs out on a revocation in
+     `provider.test.tsx` and `nextjsProvider.test.tsx`;
+   - end to end, in the browser harness: `examples/_browser/auth-password.browser.ts` (one tab changes the password
+     with "sign out my other sessions", the other tab is back at the sign-in form without a reload) and
+     `auth-nextjs.browser.ts` (a session signed out over HTTP signs the page out, and its cookies are cleared).
+     `next dev` logs that it cannot validate Cache Components' instant UI on every page of `examples/auth-nextjs`
+     (before this PR too): the Next.js test leaves those two messages out.
 
 ## 4. Divergences
 

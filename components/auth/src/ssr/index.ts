@@ -7,6 +7,7 @@ export type {
   AuthSessionResponse,
   ClientView,
   IsAuthenticatedFn,
+  RefreshResult,
   RefreshSessionFn,
   SignInComplete,
   SignInEnvelope,

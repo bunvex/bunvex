@@ -1,7 +1,7 @@
 # @bunvex/auth
 
 Built-in auth for bunvex, as components. It is bunvex's version of [Convex Auth v2](https://github.com/get-convex/convex-auth)
-(`@convex-dev/auth` 2.0.0-beta), with the same component names, tables and indexes, function paths, arguments,
+(`@convex-dev/auth` 2.0.0), with the same component names, tables and indexes, function paths, arguments,
 results, defaults, messages and log lines, so a Convex export of its data imports unchanged.
 
 > **Work in progress.** This version ships the server side (the components, `setupAuth`, the username + password
@@ -85,7 +85,14 @@ const bunvex = new BunvexReactClient(import.meta.env.VITE_BUNVEX_URL);
 
 export function Root({ children }: { children: React.ReactNode }) {
   return (
-    <BunvexAuthProvider client={bunvex} api={{ refreshSession: api.auth.refreshSession, signOut: api.auth.signOut }}>
+    <BunvexAuthProvider
+      client={bunvex}
+      api={{
+        refreshSession: api.auth.refreshSession,
+        signOut: api.auth.signOut,
+        isAuthenticated: api.auth.isAuthenticated,
+      }}
+    >
       {children}
     </BunvexAuthProvider>
   );
@@ -101,6 +108,10 @@ function Account() {
   const { signOut } = useAuthActions();
 }
 ```
+
+The provider subscribes to `isAuthenticated` once the deployment has accepted the token, so a session ended on the
+server (signed out on another device, the password changed with `signOutOtherSessions`) signs the client out at once,
+without waiting for its access token to expire.
 
 Then, in any query, mutation or action, `await getAuthUserId(ctx)` (from `@bunvex/auth/server`) is the signed-in user's
 id, or `null`.
@@ -246,7 +257,10 @@ export const { bunvexAuthNextjsProxy, nextjsProxyRedirect, bunvexAuthNextjsAcces
 - `bunvexAuthNextjsAccessToken()` gives a Server Component or a Server Action the token to call your functions with
   (`preloadQuery(…, { token })`); `isAuthenticatedNextjs()` asks the deployment whether it is signed in.
 - `BunvexAuthNextjsServerProvider` goes in the root layout: the client provider, `BunvexAuthNextjsProvider`, starts with
-  the server's token, and the methods' usual hooks sign in through `/auth/signin`. It reads the auth cookies, so with
+  the server's token, and the methods' usual hooks sign in through `/auth/signin`; it subscribes to the config's
+  `isAuthenticated`, as the single-page provider does, and signing out after a revocation also clears the cookies. If
+  you render `BunvexAuthNextjsProvider` yourself, give it `isAuthenticatedFunctionName` (`getFunctionName` of that
+  query). It reads the auth cookies, so with
   Cache Components (`cacheComponents: true`, on in a new `create-next-app` app) render it inside a `<Suspense>`
   boundary:
 

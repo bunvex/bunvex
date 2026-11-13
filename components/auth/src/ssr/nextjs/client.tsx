@@ -6,13 +6,14 @@
 
 import { BunvexHttpClient } from "@bunvex/client";
 import { BunvexProviderWithAuth, BunvexReactClient } from "@bunvex/react";
+import { makeFunctionReference } from "@bunvex/server";
 import { type ReactNode, useMemo } from "react";
 import type { AmbientSignInClient, AuthSignInApi } from "../../browser/ambientSignInClient.ts";
 import { AuthClient } from "../../browser/sessionManager.ts";
 import { defaultStorage, type TokenStorage } from "../../browser/storage.ts";
-import type { AuthSessionResponse } from "../../lib/types.ts";
+import type { AuthSessionResponse, IsAuthenticatedFn } from "../../lib/types.ts";
 import { oauth } from "../../methods/oauth/client.ts";
-import { AuthProvider, useAuth } from "../../react/client.tsx";
+import { AuthProvider, SessionWatcher, useAuth } from "../../react/client.tsx";
 
 // A route's answer; one that is not JSON is no session.
 async function postAuth(route: string): Promise<AuthSessionResponse> {
@@ -33,6 +34,7 @@ export function BunvexAuthNextjsProvider({
   signInRoute = "/auth/signin",
   storage,
   ambientSignIns,
+  isAuthenticatedFunctionName,
   children,
 }: {
   /** Your `BunvexReactClient`; one is made for `bunvexUrl` otherwise. */
@@ -54,6 +56,12 @@ export function BunvexAuthNextjsProvider({
    * `[oauth()]`. Read once, when the client is made.
    */
   ambientSignIns?: AmbientSignInClient[];
+  /**
+   * The name of the app's `isAuthenticated` query (`BunvexAuthNextjsServerProvider` passes it: a function reference
+   * does not survive the trip from the server to the client, its name does). The provider subscribes to it, so a
+   * session revoked on the server signs the browser out at once.
+   */
+  isAuthenticatedFunctionName: string;
   children: ReactNode;
 }) {
   // The client's identity is what counts; the other props are read once.
@@ -109,9 +117,15 @@ export function BunvexAuthNextjsProvider({
     return { authClient, bunvex, signInApi };
   }, [client, bunvexUrl]);
 
+  const isAuthenticated = useMemo(
+    () => makeFunctionReference(isAuthenticatedFunctionName) as IsAuthenticatedFn,
+    [isAuthenticatedFunctionName],
+  );
+
   return (
     <AuthProvider authClient={authClient} signInApi={signInApi}>
       <BunvexProviderWithAuth client={bunvex} useAuth={useAuth}>
+        <SessionWatcher isAuthenticated={isAuthenticated} />
         {children}
       </BunvexProviderWithAuth>
     </AuthProvider>

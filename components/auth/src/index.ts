@@ -3,6 +3,7 @@
 export type {
   AuthApi,
   IsAuthenticatedFn,
+  RefreshResult,
   RefreshSessionFn,
   SignInComplete,
   SignInEnvelope,

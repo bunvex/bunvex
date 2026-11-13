@@ -1,5 +1,5 @@
 // The OAuth client the core's provider registers (STUDY-201 C-5, §3.4), upstream's `methods/oauth/client.test.ts`
-// ported (28), its URL parameters bunvex's (`bunvexAuthCode`, `bunvexAuthError`, DV-577) and its app error class
+// ported (27, at 2.0.0), its URL parameters bunvex's (`bunvexAuthCode`, `bunvexAuthError`, DV-577) and its app error class
 // bunvex's (`BunvexError`). The page's URL and history are the DOM preload's.
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { BunvexError } from "@bunvex/values";
@@ -61,7 +61,7 @@ describe("OAuth client", () => {
     await waitFor(() => expect(client.getSnapshot().isAuthenticated).toBe(true));
     expect(mutation).toHaveBeenCalledTimes(1);
     // The reference is rebuilt from the saved path.
-    expect(calledPath(mutation)).toBe("auth:completeSignInAcme");
+    expect(calledPath(mutation)).toBe("auth:completeSignInWithAcme");
     expect(mutation.mock.calls[0]![1]).toEqual({ code: "code-1", state: "state-1" });
     expect(client.getSnapshot().token).toBe("access-1");
     expect(flowError()).toBeNull();
@@ -229,28 +229,17 @@ describe("OAuth client", () => {
     expect(client.getSnapshot().isLoading).toBe(false);
   });
 
-  test("an app rejection sets REJECTED with the BunvexError data", async () => {
+  test("an app rejection sets OTHER_ERROR with the BunvexError on cause", async () => {
     at("/?bunvexAuthCode=code-1");
     const storage = new InMemoryStorage();
     seedPendingFlow(storage);
     const { client, mutation, flowError } = setupOAuth({ storage });
-    mutation.mockRejectedValueOnce(new BunvexError("A verified email is required to sign in"));
+    const rejected = new BunvexError({ reason: "policy" });
+    mutation.mockRejectedValueOnce(rejected);
     await client.init();
-    await waitFor(() =>
-      expect(flowError()).toEqual({ error: "REJECTED", data: "A verified email is required to sign in" }),
-    );
+    // The app's backend chose the data, so the app can read it off `cause`.
+    await waitFor(() => expect(flowError()).toEqual({ error: "OTHER_ERROR", cause: rejected }));
     expect(client.getSnapshot().isAuthenticated).toBe(false);
-  });
-
-  test("an app rejection passes non-string data through", async () => {
-    at("/?bunvexAuthCode=code-1");
-    const storage = new InMemoryStorage();
-    seedPendingFlow(storage);
-    const { client, mutation, flowError } = setupOAuth({ storage });
-    mutation.mockRejectedValueOnce(new BunvexError({ reason: "policy" }));
-    await client.init();
-    // The app's backend chose the shape, so the app can read it.
-    await waitFor(() => expect(flowError()).toEqual({ error: "REJECTED", data: { reason: "policy" } }));
   });
 
   test("a rejected storage read during redemption sets OTHER_ERROR", async () => {
@@ -298,7 +287,7 @@ describe("OAuth client", () => {
     expect(readFlow(storage)).toEqual({
       providerName: "acme",
       state: "state-1",
-      completeSignIn: "auth:completeSignInAcme",
+      completeSignIn: "auth:completeSignInWithAcme",
     });
   });
 
@@ -309,7 +298,7 @@ describe("OAuth client", () => {
     mutation.mockResolvedValueOnce(completed);
     expect(await actions.signIn(acmeRefs, { code: "code-1" })).toEqual({ status: "complete" });
     expect(mutation).toHaveBeenCalledTimes(1);
-    expect(calledPath(mutation)).toBe("auth:completeSignInAcme");
+    expect(calledPath(mutation)).toBe("auth:completeSignInWithAcme");
     expect(mutation.mock.calls[0]![1]).toEqual({ code: "code-1", state: "state-1" });
     expect(client.getSnapshot().isAuthenticated).toBe(true);
   });
@@ -365,7 +354,6 @@ describe("OAuth client", () => {
   });
 
   test("a BunvexError from the start is OTHER_ERROR too", async () => {
-    // Starting runs no app code, so nothing there refuses a sign-in.
     const { bunvexMutation, actions } = setupOAuth();
     const rejected = new BunvexError("Sign-ups are closed");
     bunvexMutation.mockRejectedValueOnce(rejected);

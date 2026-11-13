@@ -11,7 +11,7 @@ the username + password method:
 
 In the browser, `BunvexAuthProvider` keeps the session and refreshes its token; the sign-in form uses the method's hooks
 and words each error code itself; the account page changes the password, optionally signing out the user's other
-sessions. A username is unique whatever its case; a password has at least 10 characters and is not one of the most
+sessions, which the provider of each of those tabs sees at once: it is back at the sign-in form. A username is unique whatever its case; a password has at least 10 characters and is not one of the most
 common ones; five wrong passwords in a minute and the next attempt waits.
 
 ## Run
