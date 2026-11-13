@@ -108,8 +108,8 @@ test("a sign-up through the sign-in route: the access token alone in the page, b
 });
 
 test("pages: rendered signed in on the server, redirected when signed out, the sign-in page skipped when signed in", async () => {
-  const anonymous = browser();
-  const away = await anonymous.request("/");
+  const signedOut = browser();
+  const away = await signedOut.request("/");
   expect(away.status).toBe(307);
   expect(new URL(away.headers.get("location")!, base).pathname).toBe("/signin");
 
@@ -139,12 +139,12 @@ test("the proxy refreshes a request without an access token, and the page render
 
 test("the refresh route rotates the session; another site's requests are refused", async () => {
   const page = browser();
-  await page.signInClient.mutation(api.auth.signInAnonymously, {});
+  await page.signInClient.mutation(api.auth.signUpWithUsernamePassword, { username: "alan", password: PASSWORD });
   const refreshed = await page.request("/auth/refresh", { method: "POST", body: "{}" });
   expect(refreshed.status).toBe(200);
   const body = (await refreshed.json()) as { tokens: Record<string, string> };
   expect(Object.keys(body.tokens).sort()).toEqual(["accessToken", "userId"]);
-  expect(await (await page.request("/")).text()).toMatch(/data-testid="user">an anonymous user</);
+  expect(await (await page.request("/")).text()).toMatch(/data-testid="user">alan</);
   for (const route of ["/auth/signin?path=/api/mutation", "/auth/refresh", "/auth/signout"]) {
     const refused = await page.request(route, { method: "POST", body: "{}", headers: { origin: "https://evil.test" } });
     expect({ route, status: refused.status }).toEqual({ route, status: 403 });

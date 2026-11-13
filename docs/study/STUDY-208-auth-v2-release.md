@@ -692,7 +692,12 @@ shows the boundary and says where `proxy.ts` goes.
 
 1. **The package.** No init command (D-2), anonymous hidden (D-3), `examples/auth-anonymous` removed,
    `examples/auth-nextjs` password-only with Cache Components, and `examples/auth-password`'s `.gitignore`. This does
-   not depend on the pin; the differential's anonymous imports move with PR 2.
+   not depend on the pin. Built:
+   - the package has no `bin` and no anonymous entry; the anonymous sources are `@internal`;
+   - the differential app's bunvex side imports the anonymous method from `components/auth/src`
+     (`harness/convex-auth.ts`), so its scenario still runs on both sides;
+   - `examples/auth-nextjs` builds with `cacheComponents: true` because of the boundary: without it, `next build`
+     fails on the uncached cookies read, which its end-to-end test catches.
 2. **The server side at the new pin.** §3.1, §3.2 and §3.5 together, because the differential compares against
    2.0.0 as a whole. It includes:
    - the ported upstream tests (§5);

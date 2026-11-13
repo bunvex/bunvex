@@ -3,11 +3,11 @@ import { v } from "@bunvex/values";
 import { components } from "./_generated/api";
 import { internalMutation, query } from "./_generated/server";
 
-/** The user of a new account, whichever way it signed up: the auth core calls it once, and keeps the id it returns. */
+/** The user of a new account: the auth core calls it once, and keeps the id it returns. */
 export const createUser = internalMutation({
   args: {
     provider: v.object({
-      name: v.union(v.literal("password"), v.literal("anonymous")),
+      name: v.literal("password"),
       accountId: v.string(),
       profile: v.object({}),
     }),
@@ -16,7 +16,7 @@ export const createUser = internalMutation({
   handler: async (ctx) => await ctx.db.insert("users", { signedUpAt: Date.now() }),
 });
 
-/** The signed-in user and their username (null when anonymous), or null when signed out. */
+/** The signed-in user and their username, or null when signed out. */
 export const loggedInUser = query({
   args: {},
   handler: async (ctx) => {

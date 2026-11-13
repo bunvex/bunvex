@@ -4,21 +4,19 @@ Built-in auth for bunvex, as components. It is bunvex's version of [Convex Auth 
 (`@convex-dev/auth` 2.0.0-beta), with the same component names, tables and indexes, function paths, arguments,
 results, defaults, messages and log lines, so a Convex export of its data imports unchanged.
 
-> **Work in progress.** This version ships the server side (the components, `setupAuth`, the username + password and
-> anonymous methods, `getAuthUserId`, the provider for `auth.config.ts`) and the clients (`@bunvex/auth/browser`,
-> `@bunvex/auth/react` and the methods' hooks). Server rendering (Next.js) and more methods come later.
+> **Work in progress.** This version ships the server side (the components, `setupAuth`, the username + password
+> method, `getAuthUserId`, the provider for `auth.config.ts`), the clients (`@bunvex/auth/browser`, `@bunvex/auth/react`
+> and the method's hooks) and server rendering (`@bunvex/auth/ssr`, `@bunvex/auth/ssr/nextjs`). Email, OAuth and
+> passkeys come later.
 
 ## Setup
 
-Install the package, then let it write the three files below, as a start, from your project's root:
+Install the package, then write the three files below: `bunvex/bunvex.config.ts`, `bunvex/auth.config.ts` and
+`bunvex/auth.ts`.
 
 ```sh
 bun add @bunvex/auth
-bunx @bunvex/auth
 ```
-
-It writes `bunvex/auth.config.ts`, `bunvex/bunvex.config.ts` and `bunvex/auth.ts`, never over a file you have: for one
-that exists, it prints what the file should contain. Then add a sign-in method, as below.
 
 Mount the components your methods use:
 
@@ -105,8 +103,7 @@ function Account() {
 ```
 
 Then, in any query, mutation or action, `await getAuthUserId(ctx)` (from `@bunvex/auth/server`) is the signed-in user's
-id, or `null`. For anonymous sign-in, mount `authAnonymous` too and use `setupAnonymous` from
-`@bunvex/auth/methods/anonymous/server`.
+id, or `null`.
 
 ## The core component
 
@@ -149,10 +146,9 @@ Each mounts from `@bunvex/auth/components/<name>/bunvex.config.js`; the methods 
 - **`authUsername`** gives each user at most one username, unique across users whatever its case or Unicode
   normalization form, and kept as the user spelled it. Control, invisible and bidirectional characters, unusual spaces
   and a leading combining mark are refused.
-- **`authAnonymous`** creates anonymous accounts, each a random UUID.
 
 `@bunvex/auth/components/<name>/test` mounts each in a test deployment (`registerPasswordProvider`,
-`registerUsername`, `registerAnonymousProvider`).
+`registerUsername`).
 
 ## The browser client
 
@@ -214,11 +210,23 @@ export const { bunvexAuthNextjsProxy, nextjsProxyRedirect, bunvexAuthNextjsAcces
 ```
 
 - `bunvexAuthNextjsProxy(handler?)`, the default export of `proxy.ts`, refreshes the access token before a page renders
-  and runs your redirects (`isAuthenticated`, `getToken` and `nextjsProxyRedirect` help).
+  and runs your redirects (`isAuthenticated`, `getToken` and `nextjsProxyRedirect` help). Put `proxy.ts` next to your
+  `app/` directory, or at `src/proxy.ts` if your app has a `src/` directory: Next.js ignores a proxy anywhere else.
 - `bunvexAuthNextjsAccessToken()` gives a Server Component or a Server Action the token to call your functions with
   (`preloadQuery(…, { token })`); `isAuthenticatedNextjs()` asks the deployment whether it is signed in.
 - `BunvexAuthNextjsServerProvider` goes in the root layout: the client provider, `BunvexAuthNextjsProvider`, starts with
-  the server's token, and the methods' usual hooks sign in through `/auth/signin`.
+  the server's token, and the methods' usual hooks sign in through `/auth/signin`. It reads the auth cookies, so with
+  Cache Components (`cacheComponents: true`, on in a new `create-next-app` app) render it inside a `<Suspense>`
+  boundary:
+
+```tsx
+// app/layout.tsx
+<body>
+  <Suspense>
+    <BunvexAuthNextjsServerProvider>{children}</BunvexAuthNextjsServerProvider>
+  </Suspense>
+</body>
+```
 
 Cookies are `Secure` when `NODE_ENV` is `production` unless `cookieOptions.secure` says otherwise.
 [examples/auth-nextjs](../../examples/auth-nextjs) is a whole app.

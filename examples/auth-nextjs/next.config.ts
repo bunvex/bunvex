@@ -1,7 +1,9 @@
 import type { NextConfig } from "next";
 
-// bunvex's packages are TypeScript sources: Next compiles them like the app's own code.
 const config: NextConfig = {
+  // `create-next-app` turns on Cache Components; the example does too.
+  cacheComponents: true,
+  // bunvex's packages are TypeScript sources: Next compiles them like the app's own code.
   transpilePackages: [
     "@bunvex/auth",
     "@bunvex/client",

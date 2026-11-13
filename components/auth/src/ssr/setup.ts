@@ -34,7 +34,7 @@ export interface BunvexAuthServerConfig {
  *   bunvexUrl: process.env.NEXT_PUBLIC_BUNVEX_URL!,
  *   refreshSession: api.auth.refreshSession,
  *   signOut: api.auth.signOut,
- *   signIn: [api.auth.signInAnonymously, api.auth.signInWithUsernamePassword],
+ *   signIn: [api.auth.signInWithUsernamePassword, api.auth.signUpWithUsernamePassword],
  *   cookieOptions: { secure: process.env.NODE_ENV === "production" },
  * });
  *

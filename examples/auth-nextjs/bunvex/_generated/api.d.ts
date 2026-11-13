@@ -52,5 +52,4 @@ export declare const components: {
   auth: import("@bunvex/auth/_generated/component.js").ComponentApi<"auth">;
   authPassword: import("@bunvex/auth/components/password/_generated/component.js").ComponentApi<"authPassword">;
   authUsername: import("@bunvex/auth/components/username/_generated/component.js").ComponentApi<"authUsername">;
-  authAnonymous: import("@bunvex/auth/components/anonymous/_generated/component.js").ComponentApi<"authAnonymous">;
 };

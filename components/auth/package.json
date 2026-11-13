@@ -14,9 +14,6 @@
     "authentication",
     "sessions"
   ],
-  "bin": {
-    "auth": "./src/cli/init.ts"
-  },
   "exports": {
     ".": "./src/index.ts",
     "./server": "./src/server/index.ts",
@@ -27,8 +24,6 @@
     "./methods/username-password": "./src/methods/username-password/index.ts",
     "./methods/username-password/server": "./src/methods/username-password/server.ts",
     "./methods/username-password/react": "./src/methods/username-password/react.tsx",
-    "./methods/anonymous/server": "./src/methods/anonymous/server.ts",
-    "./methods/anonymous/react": "./src/methods/anonymous/react.tsx",
     "./bunvex.config": {
       "@bunvex/component-source": "./src/component/bunvex.config.ts",
       "bunvex": "./src/component/bunvex.config.ts",
@@ -71,20 +66,6 @@
       "types": "./src/components/username/_generated/component.ts"
     },
     "./components/username/test": "./src/testing/username.ts",
-    "./components/anonymous/bunvex.config": {
-      "@bunvex/component-source": "./src/components/anonymous/bunvex.config.ts",
-      "bunvex": "./src/components/anonymous/bunvex.config.ts",
-      "default": "./src/components/anonymous/bunvex.config.ts"
-    },
-    "./components/anonymous/bunvex.config.js": {
-      "@bunvex/component-source": "./src/components/anonymous/bunvex.config.ts",
-      "bunvex": "./src/components/anonymous/bunvex.config.ts",
-      "default": "./src/components/anonymous/bunvex.config.ts"
-    },
-    "./components/anonymous/_generated/component.js": {
-      "types": "./src/components/anonymous/_generated/component.ts"
-    },
-    "./components/anonymous/test": "./src/testing/anonymous.ts",
     "./package.json": "./package.json"
   },
   "dependencies": {

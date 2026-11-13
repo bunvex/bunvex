@@ -1,6 +1,5 @@
 "use client";
 
-import { useSignInAnonymously } from "@bunvex/auth/methods/anonymous/react";
 import {
   useSignInWithUsernamePassword,
   useSignUpWithUsernamePassword,
@@ -30,12 +29,11 @@ function message(userError: { error: string; [detail: string]: unknown }): strin
   }
 }
 
-// The methods' usual hooks, as in a single-page app: under the Next.js provider their calls go through the sign-in
+// The method's usual hooks, as in a single-page app: under the Next.js provider their calls go through the sign-in
 // route, which keeps the refresh token in its cookie.
 export default function SignIn() {
   const { signIn, pending: signingIn } = useSignInWithUsernamePassword(api.auth);
   const { signUp, pending: signingUp } = useSignUpWithUsernamePassword(api.auth);
-  const { signIn: signInAnonymously } = useSignInAnonymously(api.auth);
   const router = useRouter();
   const [mode, setMode] = useState<"signIn" | "signUp">("signIn");
   const [username, setUsername] = useState("");
@@ -79,15 +77,6 @@ export default function SignIn() {
       <p>
         <button type="button" onClick={() => setMode(mode === "signIn" ? "signUp" : "signIn")}>
           {mode === "signIn" ? "No account yet? Sign up" : "Have an account? Sign in"}
-        </button>{" "}
-        <button
-          type="button"
-          onClick={async () => {
-            await signInAnonymously();
-            router.push("/");
-          }}
-        >
-          Continue anonymously
         </button>
       </p>
     </main>

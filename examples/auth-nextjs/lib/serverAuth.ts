@@ -8,6 +8,6 @@ export const auth = setupBunvexAuthServer({
   refreshSession: api.auth.refreshSession,
   signOut: api.auth.signOut,
   // Every function that signs a user in (creates a session and returns its tokens). The sign-in route refuses any other.
-  signIn: [api.auth.signInWithUsernamePassword, api.auth.signUpWithUsernamePassword, api.auth.signInAnonymously],
+  signIn: [api.auth.signInWithUsernamePassword, api.auth.signUpWithUsernamePassword],
   cookieOptions: { secure: process.env.NODE_ENV === "production" },
 });
