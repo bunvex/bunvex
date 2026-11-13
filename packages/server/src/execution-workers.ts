@@ -1,6 +1,5 @@
 // The execution workers (STUDY-194 §4.12, §4.13; STUDY-190 PR 2): Bun Workers that run calls off the main thread,
-// started lazily up to a cap (`MAX_ISOLATE_WORKERS`, by default the core count: DV-574; 0 runs everything in-thread:
-// AD-47). The main thread keeps the permits; a call goes to the ready worker with the fewest calls in flight, and
+// started lazily up to a cap (`MAX_ISOLATE_WORKERS`: off by default, DV-574; 0 runs everything in-thread: AD-47). The main thread keeps the permits; a call goes to the ready worker with the fewest calls in flight, and
 // another worker is started when every ready one has at least one. A call made while no worker is ready runs
 // in-thread (`call` answers null), as the first calls after a start do (§10.4). The worker's side is
 // `execution-thread.ts`, which documents the messages.
@@ -13,14 +12,14 @@
 //   user time limit's message (Convex's timeout), its others as system errors.
 // - a worker that fails its start, or does not answer it, is ended and logged (once a minute); the pool waits before
 //   starting another, longer each time.
-import { availableParallelism } from "node:os";
 import { formatDuration, type KnobEnv, knob, threadEntry, timerDelay } from "@bunvex/core";
 
-// Convex's knob (crates/common/src/knobs.rs), default 300 isolate threads; bunvex's default is the core count
-// (DV-574), and 0 runs every call in-thread (AD-47).
-/** The execution workers' cap from `MAX_ISOLATE_WORKERS`: by default the machine's core count; 0 starts none. */
+// Convex's knob (crates/common/src/knobs.rs), default 300 isolate threads. bunvex's default is 0, every call
+// in-thread (AD-47), until the workers are hardened (DV-574, owner 2026-11-12); an operator opts in with a count, and
+// the CI runs the suites with them on.
+/** The execution workers' cap from `MAX_ISOLATE_WORKERS`: none by default; a count starts up to that many. */
 export function maxExecutionWorkers(env: KnobEnv = process.env): number {
-  return knob("MAX_ISOLATE_WORKERS", availableParallelism(), "uint", env);
+  return knob("MAX_ISOLATE_WORKERS", 0, "uint", env);
 }
 
 /** The execution worker module bunvex ships. */
