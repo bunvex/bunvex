@@ -1,8 +1,10 @@
-// The core component's suite (STUDY-201 §3.4), upstream's `component/core.test.ts` at the pin, ported to
+// The core component's suite (STUDY-201 §3.4, STUDY-208 §5), upstream's `component/core.test.ts` at v2.0.0, ported to
 // `@bunvex/testing`: the component's functions pushed as an app's (fixtures/standalone), as upstream runs them, so
-// `t.run` reads its tables. Vitest's fake timers are the deployment's virtual clock (`t.advanceTime`); the app
-// callbacks' spies are a table the fixture writes (they run in the deployment, not in the test's process); tokens are
-// verified with `jose` against `t.jwks()`, the issuer being the deployment's origin.
+// `t.run` reads its tables. Vitest's fake timers are the deployment's virtual clock (`t.advanceTime`), and
+// `finishScheduledFunctions` its `finishAllScheduledFunctions`; the app callbacks' spies are a table the fixture writes
+// (they run in the deployment, not in the test's process); tokens are verified with `jose` against `t.jwks()`, the
+// issuer being the deployment's origin. Upstream's `transactionLimits: true` needs no counterpart: bunvex always
+// enforces them.
 // biome-ignore-all lint/suspicious/noExplicitAny: the app's api and the inline functions' ctx are untyped
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { join } from "node:path";
@@ -11,17 +13,21 @@ import { bunvexTest, type TestBunvex } from "@bunvex/testing";
 import { createLocalJWKSet, decodeJwt, jwtVerify } from "jose";
 import type { Doc, Id } from "../src/component/_generated/dataModel.ts";
 import {
+  MAX_SESSIONS_PER_USER,
   REFRESH_GRACE_MS,
   SPENT_TOKEN_HORIZON_MS,
   STANDARD_ISSUED_REFRESH_TOKEN_LIMIT,
-} from "../src/component/public.ts";
+} from "../src/component/sessions.ts";
 import { sha256Hex } from "../src/lib/crypto.ts";
-import { type AuthClaims, type RefreshResult, type TokenBundle, USE_USER_ID_AS_ACCOUNT_ID } from "../src/lib/types.ts";
+import { resolveTtlConfig } from "../src/lib/ttl.ts";
+import type { AuthClaims, RefreshResult, TokenBundle } from "../src/lib/types.ts";
 
 const api = anyApi as any;
 const STANDALONE = join(import.meta.dir, "fixtures", "standalone");
-const AUDIENCE = "bunvex";
+const AUDIENCE = "bunvex-auth";
 const CREATE_USER_HANDLE = "testApp:createUser";
+/** The path of the component that authenticated the users of the tests. */
+const COMPONENT_PATH = "authPassword";
 const ON_SIGN_IN_HANDLE = "testApp:onSignIn";
 const THROWING_ON_SIGN_IN_HANDLE = "testApp:onSignInThatThrows";
 
@@ -45,24 +51,47 @@ async function verifyAccessToken(t: TestBunvex, token: string) {
 }
 
 function claims(overrides: Partial<AuthClaims> = {}): AuthClaims {
-  return { providerName: "password", providerAccountId: "alice", profile: { name: "Alice" }, ...overrides };
+  return { method: "usernamePassword", profile: { name: "Alice" }, ...overrides };
+}
+
+/** The lifetimes `setupAuth` passes when the app overrides the given ones: the component always gets all three. */
+function ttl(overrides: Parameters<typeof resolveTtlConfig>[0] = {}) {
+  return resolveTtlConfig(overrides);
+}
+
+/** The lifetimes `setupAuth` passes when the app overrides none. */
+const DEFAULT_TTL = ttl();
+const HOUR_MS = 60 * 60 * 1000;
+const DAYS_31_MS = 31 * 24 * HOUR_MS;
+
+/** Run the scheduled functions to completion, such as the erasure of a deleted session's refresh tokens. */
+async function finishScheduledFunctions(t: TestBunvex): Promise<void> {
+  await t.finishAllScheduledFunctions();
 }
 
 const createUserCalls = (t: TestBunvex) => t.query(api.testApp.calls, { kind: "createUser" }) as Promise<unknown[]>;
 const onSignInCalls = (t: TestBunvex) => t.query(api.testApp.calls, { kind: "onSignIn" }) as Promise<unknown[]>;
 
-/** Establish a brand new identity: the account, its app user, and a session. */
+/** Establish a brand new identity: its app user and a session. */
 async function signUp(t: TestBunvex, c: AuthClaims): Promise<TokenBundle> {
-  return await t.mutation(api.public.signUp, {
+  return await t.mutation(api.public._internal_dangerous_signUp, {
     claims: c,
+    componentPath: COMPONENT_PATH,
     createUserHandle: CREATE_USER_HANDLE,
     onSignInHandle: ON_SIGN_IN_HANDLE,
+    ...DEFAULT_TTL,
   });
 }
 
 /** Sign a known identity back in, as an app that attached an `onSignIn` does. */
-async function signIn(t: TestBunvex, c: AuthClaims): Promise<TokenBundle> {
-  return await t.mutation(api.public.signIn, { claims: c, onSignInHandle: ON_SIGN_IN_HANDLE });
+async function signIn(t: TestBunvex, c: AuthClaims, userId: string): Promise<TokenBundle> {
+  return await t.mutation(api.public._internal_dangerous_signIn, {
+    claims: c,
+    componentPath: COMPONENT_PATH,
+    userId,
+    onSignInHandle: ON_SIGN_IN_HANDLE,
+    ...DEFAULT_TTL,
+  });
 }
 
 /** Assert a refresh rotated the token, and narrow to the new bundle. */
@@ -73,7 +102,7 @@ function expectRotated(result: RefreshResult): TokenBundle {
 
 /** Exchange a refresh token, as a client rotating its session does. */
 async function refresh(t: TestBunvex, refreshToken: string): Promise<RefreshResult> {
-  return await t.mutation(api.public.refresh, { refreshToken });
+  return await t.mutation(api.public.refresh, { refreshToken, ...DEFAULT_TTL });
 }
 
 /** How many sessions currently exist. */
@@ -132,51 +161,87 @@ async function warningsOf<T>(fn: () => Promise<T>): Promise<{ result: T; warning
   }
 }
 
+describe("sessions and created user IDs", () => {
+  const createdUserIds = async (t: TestBunvex): Promise<string[]> =>
+    (await t.run(async (ctx: any) => await ctx.db.query("createdUserIds").collect())).map(
+      (row: { userId: string }) => row.userId,
+    );
+
+  test("a session records the path of the component that authenticated the user", async () => {
+    const t = setup();
+    const bundle = await signUp(t, claims());
+    const { payload } = await verifyAccessToken(t, bundle.accessToken);
+    const session = await t.run((ctx: any) => ctx.db.get(payload.sub as Id<"sessions">));
+    expect(session).toMatchObject({ component: COMPONENT_PATH });
+  });
+
+  test("signUp, signIn, and signUpWithoutSession record the user ID once", async () => {
+    const t = setup();
+    const { userId } = await signUp(t, claims());
+    await signIn(t, claims(), userId);
+    await signIn(t, claims(), "someone");
+    const { userId: pending } = await t.mutation(api.public._internal_dangerous_signUpWithoutSession, {
+      claims: claims(),
+      createUserHandle: CREATE_USER_HANDLE,
+    });
+    expect((await createdUserIds(t)).sort()).toEqual([userId, "someone", pending].sort());
+  });
+
+  test("markUserIdCreated records a user ID once, and refuses an empty one", async () => {
+    const t = setup();
+    await t.mutation(api.public.markUserIdCreated, { userId: "imported" });
+    await t.mutation(api.public.markUserIdCreated, { userId: "imported" });
+    expect(await createdUserIds(t)).toEqual(["imported"]);
+    await expect(t.mutation(api.public.markUserIdCreated, { userId: "" })).rejects.toThrow(
+      "Cannot mark an empty user ID as created.",
+    );
+  });
+});
+
 describe("signUp", () => {
-  test("creates an account + session and mints a verifiable JWT", async () => {
+  test("creates a session and mints a verifiable JWT", async () => {
     const t = setup();
     const bundle = await signUp(t, claims());
 
     expect(bundle.userId).toBeTruthy();
     expect(bundle.refreshToken).toBeTruthy();
 
-    const sessionId = await t.run(async (ctx: any) => (await ctx.db.query("sessions").unique())?._id);
-    expect(sessionId).not.toBeUndefined();
+    const session = await t.run(async (ctx: any) => await ctx.db.query("sessions").unique());
+    expect(session).not.toBeNull();
+    // The session holds the user id and the path of the component that authenticated the user, and nothing else about
+    // the identity.
+    expect(session).toMatchObject({ userId: bundle.userId, component: COMPONENT_PATH });
 
     // The access token verifies against the deployment's JWKS with the right claims. The subject is the session, not
     // the user: the app resolves the user through the session.
     const { payload } = await verifyAccessToken(t, bundle.accessToken);
-    expect(payload.sub).toBe(sessionId);
+    expect(payload.sub).toBe(session._id);
     expect(payload.exp! * 1000).toBeGreaterThan(t.now());
     expect(bundle.refreshTokenExpiresAt).toBeGreaterThan(payload.exp! * 1000);
-
-    const counts = await t.run(async (ctx: any) => ({ accounts: (await ctx.db.query("accounts").collect()).length }));
-    expect(counts).toEqual({ accounts: 1 });
   });
 
   test("invokes the app's createUser with the claims, then onSignIn", async () => {
     const t = setup();
     const bundle = await signUp(t, claims({ profile: { name: "Alice" } }));
 
-    expect(await createUserCalls(t)).toEqual([
-      { provider: { name: "password", accountId: "alice", profile: { name: "Alice" } } },
-    ]);
+    expect(await createUserCalls(t)).toEqual([{ method: { name: "usernamePassword", profile: { name: "Alice" } } }]);
     // A first sign-in is still a sign-in, so onSignIn runs too, with the id createUser just returned.
     expect(await onSignInCalls(t)).toEqual([
-      { provider: { name: "password", accountId: "alice", profile: { name: "Alice" } }, userId: bundle.userId },
+      { method: { name: "usernamePassword", profile: { name: "Alice" } }, userId: bundle.userId },
     ]);
   });
 
   test("creates the user without an onSignIn attached", async () => {
     const t = setup();
-    const bundle: TokenBundle = await t.mutation(api.public.signUp, {
+    const bundle: TokenBundle = await t.mutation(api.public._internal_dangerous_signUp, {
       claims: claims(),
+      componentPath: COMPONENT_PATH,
       createUserHandle: CREATE_USER_HANDLE,
+      ...DEFAULT_TTL,
     });
 
-    // The account is keyed to the id the app's createUser returned.
-    const account = await t.run((ctx: any) => ctx.db.query("accounts").unique());
-    expect(account?.userId).toBe(bundle.userId);
+    // The bundle carries the id the app's createUser returned.
+    expect(bundle.userId).toBe("user1");
     expect(await createUserCalls(t)).toHaveLength(1);
     expect(await onSignInCalls(t)).toHaveLength(0);
   });
@@ -184,65 +249,52 @@ describe("signUp", () => {
   test("an onSignIn that throws rolls back the user it just created", async () => {
     const t = setup();
     await expect(
-      t.mutation(api.public.signUp, {
+      t.mutation(api.public._internal_dangerous_signUp, {
         claims: claims(),
+        componentPath: COMPONENT_PATH,
         createUserHandle: CREATE_USER_HANDLE,
         onSignInHandle: THROWING_ON_SIGN_IN_HANDLE,
+        ...DEFAULT_TTL,
       }),
     ).rejects.toThrow(/no sign-ins for you/);
 
-    // The account insert is a write of the same mutation, so it rolls back with it, and the app's own rows the same
-    // way. The session was never reached, since onSignIn runs before it is minted.
+    // The app's rows are writes of the same mutation, so they roll back with it (the fixture logs createUser's call in
+    // a table: it is gone). The session was never reached, since onSignIn runs before it is minted, and the user id
+    // recorded before onSignIn rolled back too.
     const counts = await t.run(async (ctx: any) => ({
-      accounts: (await ctx.db.query("accounts").collect()).length,
+      createdUserIds: (await ctx.db.query("createdUserIds").collect()).length,
       sessions: (await ctx.db.query("sessions").collect()).length,
     }));
-    expect(counts).toEqual({ accounts: 0, sessions: 0 });
+    expect(counts).toEqual({ createdUserIds: 0, sessions: 0 });
     expect(await createUserCalls(t)).toHaveLength(0);
-  });
-
-  test("refuses to sign up an identity that already has an account", async () => {
-    const t = setup();
-    await signUp(t, claims());
-
-    // Rather than minting a second app user for someone who already has one.
-    await expect(signUp(t, claims())).rejects.toThrow(/already\s+exists/i);
-
-    const counts = await t.run(async (ctx: any) => ({
-      accounts: (await ctx.db.query("accounts").collect()).length,
-      sessions: (await ctx.db.query("sessions").collect()).length,
-    }));
-    expect(counts).toEqual({ accounts: 1, sessions: 1 });
   });
 });
 
 describe("signIn", () => {
-  test("reuses the existing account and mints a fresh session", async () => {
+  test("mints a fresh session for the given user", async () => {
     const t = setup();
     const first = await signUp(t, claims({ profile: { name: "Alice" } }));
-    const second = await signIn(t, claims({ profile: { name: "Alice 2.0" } }));
+    const second = await signIn(t, claims({ profile: { name: "Alice 2.0" } }), first.userId);
 
     expect(second.userId).toBe(first.userId);
-    const { accounts, sessions } = await t.run(async (ctx: any) => ({
-      accounts: (await ctx.db.query("accounts").collect()).length,
-      sessions: (await ctx.db.query("sessions").collect()).length,
-    }));
-    // One account reused; a fresh session per sign-in.
-    expect(accounts).toBe(1);
-    expect(sessions).toBe(2);
+    const sessions = await t.run(async (ctx: any) => await ctx.db.query("sessions").collect());
+    expect(sessions.map(({ userId, component }: Doc<"sessions">) => ({ userId, component }))).toEqual([
+      { userId: first.userId, component: COMPONENT_PATH },
+      { userId: first.userId, component: COMPONENT_PATH },
+    ]);
   });
 
   test("invokes the app's onSignIn with the resolved user id and latest claims", async () => {
     const t = setup();
     const first = await signUp(t, claims({ profile: { name: "Alice" } }));
-    await signIn(t, claims({ profile: { name: "Alice 2.0" } }));
+    await signIn(t, claims({ profile: { name: "Alice 2.0" } }), first.userId);
 
     // createUser ran once, for the sign-up; onSignIn ran for both.
     expect(await createUserCalls(t)).toHaveLength(1);
     const calls = await onSignInCalls(t);
     expect(calls).toHaveLength(2);
     expect(calls[1]).toEqual({
-      provider: { name: "password", accountId: "alice", profile: { name: "Alice 2.0" } },
+      method: { name: "usernamePassword", profile: { name: "Alice 2.0" } },
       userId: first.userId,
     });
   });
@@ -253,80 +305,51 @@ describe("signIn", () => {
     const before = (await onSignInCalls(t)).length;
 
     // No `onSignInHandle` is what an app that left `onSignIn` out sends.
-    const bundle: TokenBundle = await t.mutation(api.public.signIn, { claims: claims() });
+    const bundle: TokenBundle = await t.mutation(api.public._internal_dangerous_signIn, {
+      claims: claims(),
+      componentPath: COMPONENT_PATH,
+      userId: first.userId,
+      ...DEFAULT_TTL,
+    });
 
     expect(bundle.userId).toBe(first.userId);
     expect(await onSignInCalls(t)).toHaveLength(before);
   });
 
-  test("refuses to sign in an identity with no account", async () => {
+  test("refuses an empty user id", async () => {
     const t = setup();
-    // A miss means the method's records and the core's diverged, and creating a user here would paper over that.
-    await expect(signIn(t, claims())).rejects.toThrow(/must go through signUp/i);
+    // An empty string must never be accepted as a user id.
+    await expect(signIn(t, claims(), "")).rejects.toThrow("Cannot sign in: no user id was given.");
     expect(await sessionCount(t)).toBe(0);
   });
 });
 
 describe("signUpWithoutSession", () => {
-  test("creates the user and the account, but no session", async () => {
+  test("creates the user, but no session", async () => {
     const t = setup();
-    const { userId } = await t.mutation(api.public.signUpWithoutSession, {
+    const { userId } = await t.mutation(api.public._internal_dangerous_signUpWithoutSession, {
       claims: claims(),
       createUserHandle: CREATE_USER_HANDLE,
     });
 
-    const account = await t.run((ctx: any) => ctx.db.query("accounts").unique());
-    expect(account?.userId).toBe(userId);
+    // The id the app's createUser returned.
+    expect(userId).toBe("user1");
     expect(await createUserCalls(t)).toHaveLength(1);
-    // No sign-in happened, so onSignIn does not run.
+    // No sign-in happened, so onSignIn does not run, and no session was minted.
     expect(await onSignInCalls(t)).toHaveLength(0);
-
-    const counts = await t.run(async (ctx: any) => ({
-      accounts: (await ctx.db.query("accounts").collect()).length,
-      sessions: (await ctx.db.query("sessions").collect()).length,
-    }));
-    expect(counts).toEqual({ accounts: 1, sessions: 0 });
+    expect(await sessionCount(t)).toBe(0);
   });
 
-  test("a later signIn resolves the same user and mints a session", async () => {
+  test("a later signIn with the user id mints a session", async () => {
     const t = setup();
-    const { userId } = await t.mutation(api.public.signUpWithoutSession, {
+    const { userId } = await t.mutation(api.public._internal_dangerous_signUpWithoutSession, {
       claims: claims(),
       createUserHandle: CREATE_USER_HANDLE,
     });
 
-    const bundle = await signIn(t, claims());
+    const bundle = await signIn(t, claims(), userId);
     expect(bundle.userId).toBe(userId);
-    const counts = await t.run(async (ctx: any) => ({
-      accounts: (await ctx.db.query("accounts").collect()).length,
-      sessions: (await ctx.db.query("sessions").collect()).length,
-    }));
-    expect(counts).toEqual({ accounts: 1, sessions: 1 });
-  });
-
-  test("keys the account by the minted user id with USE_USER_ID_AS_ACCOUNT_ID", async () => {
-    const t = setup();
-    const { userId } = await t.mutation(api.public.signUpWithoutSession, {
-      claims: claims({ providerAccountId: USE_USER_ID_AS_ACCOUNT_ID, profile: { email: "alice@example.com" } }),
-      createUserHandle: CREATE_USER_HANDLE,
-    });
-
-    // The account's identifier is the user id the app minted, so a later sign-in passing it resolves the same user.
-    const bundle = await signIn(t, claims({ providerAccountId: userId }));
-    expect(bundle.userId).toBe(userId);
-    const accounts = await t.run(async (ctx: any) => await ctx.db.query("accounts").collect());
-    expect(accounts).toHaveLength(1);
-    expect(accounts[0].providerAccountId).toBe(userId);
-  });
-
-  test("refuses an identity that already has an account", async () => {
-    const t = setup();
-    await signUp(t, claims());
-
-    await expect(
-      t.mutation(api.public.signUpWithoutSession, { claims: claims(), createUserHandle: CREATE_USER_HANDLE }),
-    ).rejects.toThrow(/already\s+exists/i);
-    expect(await t.run(async (ctx: any) => (await ctx.db.query("accounts").collect()).length)).toBe(1);
+    expect(await sessionCount(t)).toBe(1);
   });
 });
 
@@ -420,16 +443,11 @@ describe("refresh", () => {
     const bundle = await signUp(t, claims());
     const successor = expectRotated(await refresh(t, bundle.refreshToken));
 
-    // Force the redeemed token past its expiry.
-    await t.run(async (ctx: any) => {
-      const [redeemed] = (await ctx.db.query("refreshTokens").collect()).filter(
-        (r: Doc<"refreshTokens">) => r.state === "redeemed",
-      );
-      await ctx.db.patch(redeemed._id, { expiresAt: Date.now() - 1000 });
-    });
+    // Past the default 30-day inactivity timeout.
+    await t.advanceTime(DAYS_31_MS);
 
     expect((await refresh(t, bundle.refreshToken)).kind).toBe("noSession");
-    // The dead session was removed in the same transaction, tokens and all.
+    // The dead session was removed in the same transaction.
     expect(await sessionCount(t)).toBe(0);
     expect((await refresh(t, successor.refreshToken)).kind).toBe("noSession");
   });
@@ -439,16 +457,103 @@ describe("refresh", () => {
     const bundle = await signUp(t, claims());
     const successor = expectRotated(await refresh(t, bundle.refreshToken));
 
-    await t.run(async (ctx: any) => {
-      const [issued] = (await ctx.db.query("refreshTokens").collect()).filter(
-        (r: Doc<"refreshTokens">) => r.state === "issued",
-      );
-      await ctx.db.patch(issued._id, { expiresAt: Date.now() - 1000 });
-    });
+    // Past the default 30-day inactivity timeout.
+    await t.advanceTime(DAYS_31_MS);
 
     expect((await refresh(t, successor.refreshToken)).kind).toBe("noSession");
     expect(await sessionCount(t)).toBe(0);
+    await finishScheduledFunctions(t);
     expect(await issuedHashes(t)).toEqual([]);
+  });
+
+  test("a lowered inactivity timeout expires tokens issued under the old one", async () => {
+    const t = setup();
+    // Issued under the default 30-day inactivity timeout.
+    const bundle = await signUp(t, claims());
+    await t.advanceTime(2 * HOUR_MS);
+
+    // Two hours old: dead under a one-hour inactivity timeout, though the 30-day one it was issued under has days to go.
+    const result = await t.mutation(api.public.refresh, {
+      refreshToken: bundle.refreshToken,
+      ...ttl({ refreshInactivityTimeoutSeconds: 60 * 60 }),
+    });
+    expect(result.kind).toBe("noSession");
+    expect(await sessionCount(t)).toBe(0);
+  });
+
+  test("a lowered inactivity timeout expires the redeemed token a retry would present", async () => {
+    const t = setup();
+    const bundle = await signUp(t, claims());
+    // Redeems the sign-in token. Suppose the answer is lost, so the client keeps presenting the redeemed token.
+    expectRotated(await refresh(t, bundle.refreshToken));
+    await t.advanceTime(2 * HOUR_MS);
+
+    const result = await t.mutation(api.public.refresh, {
+      refreshToken: bundle.refreshToken,
+      ...ttl({ refreshInactivityTimeoutSeconds: 60 * 60 }),
+    });
+    expect(result.kind).toBe("noSession");
+    expect(await sessionCount(t)).toBe(0);
+  });
+
+  test("refuses a session past its max lifetime, however recently it refreshed", async () => {
+    const t = setup();
+    const lifetimes = ttl({ refreshInactivityTimeoutSeconds: 60 * 60, sessionMaxLifetimeSeconds: 2 * 60 * 60 });
+    let bundle: TokenBundle = await t.mutation(api.public._internal_dangerous_signUp, {
+      claims: claims(),
+      componentPath: COMPONENT_PATH,
+      createUserHandle: CREATE_USER_HANDLE,
+      ...lifetimes,
+    });
+    // Refresh every half hour, well within the inactivity timeout, until the session is just short of its max lifetime.
+    for (let i = 0; i < 3; i++) {
+      await t.advanceTime(30 * 60 * 1000);
+      bundle = expectRotated(await t.mutation(api.public.refresh, { refreshToken: bundle.refreshToken, ...lifetimes }));
+    }
+    // Just past the two-hour max lifetime. A `_creationTime` can run a fraction of a millisecond ahead of the clock (a
+    // transaction starts no earlier than its snapshot), so the deadline is read from the session.
+    const [session] = await t.run(async (ctx: any) => await ctx.db.query("sessions").collect());
+    await t.advanceTime(Math.ceil(session._creationTime + 2 * HOUR_MS) - t.now() + 1);
+
+    const result = await t.mutation(api.public.refresh, { refreshToken: bundle.refreshToken, ...lifetimes });
+    expect(result.kind).toBe("noSession");
+    expect(await sessionCount(t)).toBe(0);
+  });
+
+  test("a lowered max lifetime ends a session created before the change", async () => {
+    const t = setup();
+    // Created under the default 30-day max lifetime.
+    const bundle = await signUp(t, claims());
+    await t.advanceTime(2 * HOUR_MS);
+    // Refresh under the old config, so that the lowered inactivity timeout cannot end the session.
+    const fresh = expectRotated(await refresh(t, bundle.refreshToken));
+    await t.advanceTime(60 * 1000);
+
+    const result = await t.mutation(api.public.refresh, {
+      refreshToken: fresh.refreshToken,
+      ...ttl({ sessionMaxLifetimeSeconds: 60 * 60 }),
+    });
+    expect(result.kind).toBe("noSession");
+    expect(await sessionCount(t)).toBe(0);
+  });
+
+  test("a redeemed token's inactivity counts from the session's newest token", async () => {
+    const t = setup();
+    const lifetimes = ttl({ refreshInactivityTimeoutSeconds: 60 * 60 });
+    const bundle: TokenBundle = await t.mutation(api.public._internal_dangerous_signUp, {
+      claims: claims(),
+      componentPath: COMPONENT_PATH,
+      createUserHandle: CREATE_USER_HANDLE,
+      ...lifetimes,
+    });
+    // The refresh commits, but the client never gets the answer.
+    await t.advanceTime(50 * 60 * 1000);
+    expectRotated(await t.mutation(api.public.refresh, { refreshToken: bundle.refreshToken, ...lifetimes }));
+    // The retried token is past the timeout, but the session last refreshed 20 minutes ago.
+    await t.advanceTime(20 * 60 * 1000);
+
+    expectRotated(await t.mutation(api.public.refresh, { refreshToken: bundle.refreshToken, ...lifetimes }));
+    expect(await sessionCount(t)).toBe(1);
   });
 
   test("reports no session for an unknown refresh token", async () => {
@@ -494,6 +599,7 @@ describe("refresh-token reuse detection", () => {
 
     expect((await refresh(t, stolen.refreshToken)).kind).toBe("noSession");
     expect(await sessionCount(t)).toBe(0);
+    await finishScheduledFunctions(t);
     expect(await retiredHashes(t)).toEqual([]);
     expect(await issuedHashes(t)).toEqual([]);
     // Revocation is mutual: the thief's token stops working too.
@@ -576,6 +682,7 @@ describe("refresh-token reuse detection", () => {
       `Refresh token used with at least ${STANDARD_ISSUED_REFRESH_TOKEN_LIMIT} issued tokens never redeemed: deleting the associated session.`,
     );
     expect(await sessionCount(t)).toBe(0);
+    await finishScheduledFunctions(t);
     expect(await issuedHashes(t)).toEqual([]);
   });
 
@@ -662,6 +769,7 @@ describe("signOut", () => {
     // What a client holds between refreshes: the issued token it hasn't used yet.
     await t.mutation(api.public.signOut, { refreshToken: rotated.refreshToken });
     expect(await sessionCount(t)).toBe(0);
+    await finishScheduledFunctions(t);
     expect(await issuedHashes(t)).toEqual([]);
     expect((await refresh(t, bundle.refreshToken)).kind).toBe("noSession");
   });
@@ -675,6 +783,7 @@ describe("signOut", () => {
     // A tab signing out just after a sibling refreshed presents the token it still holds.
     await t.mutation(api.public.signOut, { refreshToken: bundle.refreshToken });
     expect(await sessionCount(t)).toBe(0);
+    await finishScheduledFunctions(t);
     expect(await retiredHashes(t)).toEqual([]);
     expect((await refresh(t, next.refreshToken)).kind).toBe("noSession");
   });
@@ -688,8 +797,42 @@ describe("signOut", () => {
     expect(await issuedHashes(t)).toHaveLength(1);
 
     await t.mutation(api.public.signOut, { refreshToken: next.refreshToken });
-    // A refresh token must never outlive the session it names.
+    // The tokens are erased in the background, right after the session.
+    await finishScheduledFunctions(t);
     expect(await retiredHashes(t)).toEqual([]);
+    expect(await issuedHashes(t)).toEqual([]);
+  });
+
+  test("a token whose session is gone reports no session", async () => {
+    const t = setup();
+    const bundle = await signUp(t, claims());
+    const rotated = expectRotated(await refresh(t, bundle.refreshToken));
+    const next = expectRotated(await refresh(t, rotated.refreshToken));
+
+    await t.mutation(api.public.signOut, { refreshToken: next.refreshToken });
+
+    // Before the tokens are erased, each still names the session, which ended already. A spent one is no sign of a
+    // fork then: there is nothing left to revoke.
+    expect(await issuedHashes(t)).toHaveLength(1);
+    const { warnings } = await warningsOf(async () => {
+      expect((await refresh(t, next.refreshToken)).kind).toBe("noSession");
+      expect((await refresh(t, bundle.refreshToken)).kind).toBe("noSession");
+    });
+    expect(warnings).toEqual([]);
+  });
+
+  test("schedules the erasure of the session's refresh tokens", async () => {
+    const t = setup();
+    const bundle = await signUp(t, claims());
+    await t.mutation(api.public.signOut, { refreshToken: bundle.refreshToken });
+
+    // The session is gone at once; its token waits for `sessions:deleteSessionTokens`, then is gone too.
+    expect(await sessionCount(t)).toBe(0);
+    expect(await issuedHashes(t)).toHaveLength(1);
+    const jobs = await t.run(async (ctx: any) => await ctx.db.system.query("_scheduled_functions").collect());
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0].name).toMatch(/^sessions(\.js)?:deleteSessionTokens$/);
+    await finishScheduledFunctions(t);
     expect(await issuedHashes(t)).toEqual([]);
   });
 
@@ -706,7 +849,7 @@ describe("listSessions", () => {
   test("lists every session of the user", async () => {
     const t = setup();
     const bundle = await signUp(t, claims());
-    const otherBundle = await signIn(t, claims());
+    const otherBundle = await signIn(t, claims(), bundle.userId);
 
     const sessions = await t.query(api.public.listSessions, { userId: bundle.userId });
     expect(sessions.map((s: { sessionId: string }) => s.sessionId).sort()).toEqual(
@@ -717,8 +860,8 @@ describe("listSessions", () => {
   test("lists the newest session first", async () => {
     const t = setup();
     const first = await signUp(t, claims());
-    const second = await signIn(t, claims());
-    const third = await signIn(t, claims());
+    const second = await signIn(t, claims(), first.userId);
+    const third = await signIn(t, claims(), first.userId);
 
     const sessions = await t.query(api.public.listSessions, { userId: first.userId });
     expect(sessions.map((s: { sessionId: string }) => s.sessionId)).toEqual([third, second, first].map(sessionIdOf));
@@ -727,13 +870,13 @@ describe("listSessions", () => {
   test("lists only the sessions of the given user", async () => {
     const t = setup();
     const aliceBundle = await signUp(t, claims());
-    await signUp(t, claims({ providerAccountId: "bob" }));
+    await signUp(t, claims({ profile: { name: "Bob" } }));
 
     const sessions = await t.query(api.public.listSessions, { userId: aliceBundle.userId });
     expect(sessions.map((s: { sessionId: string }) => s.sessionId)).toEqual([sessionIdOf(aliceBundle)]);
   });
 
-  test("reports when the session's newest refresh token was issued and when it expires", async () => {
+  test("reports when the session's newest refresh token was issued", async () => {
     const t = setup();
     const bundle = await signUp(t, claims());
     await t.advanceTime(60_000);
@@ -742,39 +885,59 @@ describe("listSessions", () => {
 
     const sessions = await t.query(api.public.listSessions, { userId: bundle.userId });
     expect(sessions).toEqual([
-      {
-        sessionId: sessionIdOf(rotated),
-        creationTime: expect.any(Number),
-        lastRefreshedAt: expect.any(Number),
-        expiresAt: rotated.refreshTokenExpiresAt,
-      },
+      { sessionId: sessionIdOf(rotated), creationTime: expect.any(Number), lastRefreshedAt: expect.any(Number) },
     ]);
     // A `_creationTime` is its transaction's start time, the next float up for each further insert (as Convex's
     // backend; convex-test's is `Date.now()`).
     expect(Math.floor(sessions[0].lastRefreshedAt)).toBe(refreshedAt);
-    expect(rotated.refreshTokenExpiresAt).toBeGreaterThan(bundle.refreshTokenExpiresAt);
   });
 
   test("includes a session whose refresh tokens have all expired", async () => {
     const t = setup();
-    const bundle = await signUp(t, claims());
-    const shortLived: TokenBundle = await t.mutation(api.public.signIn, {
-      claims: claims(),
-      refreshTokenTtlSeconds: 60 * 60,
-    });
-    await t.advanceTime(2 * 60 * 60 * 1000);
+    const stale = await signUp(t, claims());
+    // Past the default 30-day inactivity timeout.
+    await t.advanceTime(DAYS_31_MS);
+    const fresh = await signIn(t, claims(), stale.userId);
 
-    const sessions = await t.query(api.public.listSessions, { userId: bundle.userId });
-    const expired = sessions.find((s: { sessionId: string }) => s.sessionId === sessionIdOf(shortLived));
-    expect(expired?.expiresAt).toBe(shortLived.refreshTokenExpiresAt);
-    expect(expired.expiresAt).toBeLessThan(t.now());
-    expect(sessions).toHaveLength(2);
+    const sessions = await t.query(api.public.listSessions, { userId: stale.userId });
+    expect(sessions.map((s: { sessionId: string }) => s.sessionId)).toEqual([fresh, stale].map(sessionIdOf));
+  });
+
+  test("no token outlives one inactivity timeout past the session's lastRefreshedAt", async () => {
+    const t = setup();
+    const oneHourSeconds = 60 * 60;
+    const bundle = await signUp(t, claims());
+    // Redeem the sign-in token, then present it again twice, as a client whose answers were lost would: the session
+    // has two issued siblings.
+    expectRotated(await refresh(t, bundle.refreshToken));
+    await t.advanceTime(60_000);
+    // Issued under the default 30-day inactivity timeout.
+    const older = expectRotated(await refresh(t, bundle.refreshToken));
+    await t.advanceTime(60_000);
+    // Issued after the timeout was lowered to an hour.
+    expectRotated(
+      await t.mutation(api.public.refresh, {
+        refreshToken: bundle.refreshToken,
+        ...ttl({ refreshInactivityTimeoutSeconds: oneHourSeconds }),
+      }),
+    );
+
+    const [listed] = await t.query(api.public.listSessions, { userId: bundle.userId });
+    expect(Math.floor(listed.lastRefreshedAt)).toBe(t.now());
+
+    // Once past it, the older sibling, issued under the longer timeout, cannot refresh the session either.
+    await t.advanceTime(Math.ceil(listed.lastRefreshedAt + oneHourSeconds * 1000) - t.now());
+    const result = await t.mutation(api.public.refresh, {
+      refreshToken: older.refreshToken,
+      ...ttl({ refreshInactivityTimeoutSeconds: oneHourSeconds }),
+    });
+    expect(result.kind).toBe("noSession");
   });
 
   test("leaves out, with a warning, a session with no issued token", async () => {
     const t = setup();
     const bundle = await signUp(t, claims());
-    const otherBundle = await signIn(t, claims());
+    const otherBundle = await signIn(t, claims(), bundle.userId);
     // Not a state the token lifecycle reaches; forced here to cover the guard.
     await t.run(async (ctx: any) => {
       const tokens = await ctx.db
@@ -797,12 +960,108 @@ describe("listSessions", () => {
   });
 });
 
+describe(`the cap of ${MAX_SESSIONS_PER_USER} sessions per user`, () => {
+  /** Sign the user in until they have `count` sessions, a second apart. */
+  async function signInUntil(t: TestBunvex, count: number): Promise<TokenBundle[]> {
+    const bundles = [await signUp(t, claims())];
+    while (bundles.length < count) {
+      await t.advanceTime(1000);
+      bundles.push(await signIn(t, claims(), bundles[0]!.userId));
+    }
+    return bundles;
+  }
+
+  test("keeps every session up to the cap", async () => {
+    const t = setup();
+    const { warnings } = await warningsOf(() => signInUntil(t, MAX_SESSIONS_PER_USER));
+    expect(await sessionCount(t)).toBe(MAX_SESSIONS_PER_USER);
+    expect(warnings.filter((w) => w.includes("Evicted"))).toEqual([]);
+  });
+
+  test("a sign-in at the cap revokes the session that refreshed longest ago", async () => {
+    const t = setup();
+    const [first, second, third] = (await signInUntil(t, MAX_SESSIONS_PER_USER)) as [
+      TokenBundle,
+      TokenBundle,
+      TokenBundle,
+    ];
+    // The oldest session is still in use, so the next oldest goes instead.
+    await t.advanceTime(1000);
+    expectRotated(await refresh(t, first.refreshToken));
+
+    await t.advanceTime(1000);
+    const { result: newest, warnings } = await warningsOf(() => signIn(t, claims(), first.userId));
+
+    expect(warnings).toContain(`Evicted 1 session past the ${MAX_SESSIONS_PER_USER} session limit for a single user`);
+    expect(await sessionCount(t)).toBe(MAX_SESSIONS_PER_USER);
+    const listed = (await t.query(api.public.listSessions, { userId: first.userId })).map(
+      (s: { sessionId: string }) => s.sessionId,
+    );
+    expect(listed).not.toContain(sessionIdOf(second));
+    expect(listed).toContain(sessionIdOf(first));
+    expect(listed).toContain(sessionIdOf(third));
+    expect(listed).toContain(sessionIdOf(newest));
+    expect((await refresh(t, second.refreshToken)).kind).toBe("noSession");
+  });
+
+  test("erases the revoked session's refresh tokens", async () => {
+    const t = setup();
+    const [first] = (await signInUntil(t, MAX_SESSIONS_PER_USER)) as [TokenBundle];
+    await signIn(t, claims(), first.userId);
+    await finishScheduledFunctions(t);
+    const remaining = await t.run(
+      async (ctx: any) =>
+        await ctx.db
+          .query("refreshTokens")
+          .withIndex("by_session_state", (q: any) => q.eq("sessionId", sessionIdOf(first) as Id<"sessions">))
+          .collect(),
+    );
+    expect(remaining).toEqual([]);
+  });
+
+  test("a user over the cap is brought back to it", async () => {
+    const t = setup();
+    const bundles = await signInUntil(t, MAX_SESSIONS_PER_USER);
+    // Sessions from before the cap existed; not reachable by signing in.
+    await t.run(async (ctx: any) => {
+      const { component } = await ctx.db.get(sessionIdOf(bundles[0]!) as Id<"sessions">);
+      for (let i = 0; i < 2; i++) {
+        const sessionId = await ctx.db.insert("sessions", { userId: bundles[0]!.userId, component });
+        await ctx.db.insert("refreshTokens", { hash: `extra-${i}`, sessionId, state: "issued" });
+      }
+    });
+
+    await t.advanceTime(1000);
+    const { result: newest, warnings } = await warningsOf(() => signIn(t, claims(), bundles[0]!.userId));
+
+    expect(warnings).toContain(`Evicted 3 sessions past the ${MAX_SESSIONS_PER_USER} session limit for a single user`);
+    expect(await sessionCount(t)).toBe(MAX_SESSIONS_PER_USER);
+    const listed = (await t.query(api.public.listSessions, { userId: newest.userId })).map(
+      (s: { sessionId: string }) => s.sessionId,
+    );
+    expect(listed).not.toContain(sessionIdOf(bundles[0]!));
+    expect(listed).not.toContain(sessionIdOf(bundles[1]!));
+    expect(listed).not.toContain(sessionIdOf(bundles[2]!));
+    expect(listed).toContain(sessionIdOf(newest));
+  });
+
+  test("counts only the user's own sessions", async () => {
+    const t = setup();
+    const bob = await signUp(t, claims({ profile: { name: "Bob" } }));
+    const [first] = (await signInUntil(t, MAX_SESSIONS_PER_USER)) as [TokenBundle];
+    await signIn(t, claims(), first.userId);
+
+    expect(await t.query(api.public.listSessions, { userId: bob.userId })).toHaveLength(1);
+    expect(await t.query(api.public.listSessions, { userId: first.userId })).toHaveLength(MAX_SESSIONS_PER_USER);
+  });
+});
+
 describe("revokeSessions", () => {
   test("revokes the sessions so they can no longer be refreshed", async () => {
     const t = setup();
     const bundle = await signUp(t, claims());
-    const second = await signIn(t, claims());
-    const third = await signIn(t, claims());
+    const second = await signIn(t, claims(), bundle.userId);
+    const third = await signIn(t, claims(), bundle.userId);
 
     const revoked: string[] = await t.mutation(api.public.revokeSessions, {
       sessionIds: [sessionIdOf(second), sessionIdOf(third)],
@@ -817,7 +1076,7 @@ describe("revokeSessions", () => {
   test("revokes the sessions of any user", async () => {
     const t = setup();
     const alice = await signUp(t, claims());
-    const bob = await signUp(t, claims({ providerAccountId: "bob" }));
+    const bob = await signUp(t, claims({ profile: { name: "Bob" } }));
 
     const revoked = await t.mutation(api.public.revokeSessions, { sessionIds: [sessionIdOf(alice), sessionIdOf(bob)] });
     expect(revoked).toHaveLength(2);
@@ -830,13 +1089,49 @@ describe("revokeSessions", () => {
     expectRotated(await refresh(t, bundle.refreshToken));
 
     await t.mutation(api.public.revokeSessions, { sessionIds: [sessionIdOf(bundle)] });
+    await finishScheduledFunctions(t);
     expect(await t.run(async (ctx: any) => await ctx.db.query("refreshTokens").collect())).toEqual([]);
+  });
+
+  test("revokes sessions holding more refresh tokens than one transaction can delete", async () => {
+    // The transaction limits are always the real ones: 16,000 writes and 32,000 reads. The deployment's write
+    // throughput limit (4 MiB a second, which convex-test does not have) would hold the scheduled erasures back on the
+    // virtual clock: it is raised for this deployment, whose engine reads it as it starts.
+    const saved = process.env.MAX_BYTES_WRITTEN_PER_SECOND;
+    process.env.MAX_BYTES_WRITTEN_PER_SECOND = String(1024 * 1024 * 1024);
+    const t = setup();
+    let bundles: TokenBundle[];
+    try {
+      bundles = [await signUp(t, claims())];
+    } finally {
+      if (saved === undefined) delete process.env.MAX_BYTES_WRITTEN_PER_SECOND;
+      else process.env.MAX_BYTES_WRITTEN_PER_SECOND = saved;
+    }
+    for (let i = 1; i < 12; i++) bundles.push(await signIn(t, claims(), bundles[0]!.userId));
+    // 1,500 rows each, 18,000 in all: more than one transaction may delete, and more than one run of the erasure takes
+    // for a single session.
+    for (const bundle of bundles)
+      await t.run(async (ctx: any) => {
+        for (let i = 1; i < 1500; i++)
+          await ctx.db.insert("refreshTokens", {
+            hash: `${sessionIdOf(bundle)}-${i}`,
+            sessionId: sessionIdOf(bundle) as Id<"sessions">,
+            state: "spent",
+            retiredAt: Date.now(),
+          });
+      });
+
+    const revoked = await t.mutation(api.public.revokeSessions, { sessionIds: bundles.map(sessionIdOf) });
+    expect(revoked).toHaveLength(12);
+    expect(await sessionCount(t)).toBe(0);
+    await finishScheduledFunctions(t);
+    expect(await t.run(async (ctx: any) => (await ctx.db.query("refreshTokens").collect()).length)).toBe(0);
   });
 
   test("skips an already-revoked session id", async () => {
     const t = setup();
     const bundle = await signUp(t, claims());
-    const otherBundle = await signIn(t, claims());
+    const otherBundle = await signIn(t, claims(), bundle.userId);
     await t.mutation(api.public.signOut, { refreshToken: bundle.refreshToken });
 
     expect(
@@ -872,88 +1167,116 @@ describe("revokeSessions", () => {
 });
 
 describe("token lifetime configuration", () => {
+  const signUpWith = (t: TestBunvex, lifetimes: Record<string, number>): Promise<TokenBundle> =>
+    t.mutation(api.public._internal_dangerous_signUp, {
+      claims: claims(),
+      componentPath: COMPONENT_PATH,
+      createUserHandle: CREATE_USER_HANDLE,
+      ...lifetimes,
+    });
+
   test("honors a custom access-token TTL on sign-up", async () => {
     const t = setup();
     const before = t.now();
-    const bundle: TokenBundle = await t.mutation(api.public.signUp, {
-      claims: claims(),
-      createUserHandle: CREATE_USER_HANDLE,
-      accessTokenTtlSeconds: 300,
-    });
+    const bundle = await signUpWith(t, ttl({ accessTokenTtlSeconds: 300 }));
     // The JWT `exp` is floored to the second, so allow a small window.
     const expMs = decodeJwt(bundle.accessToken).exp! * 1000;
     expect(expMs).toBeGreaterThanOrEqual(before + 300_000 - 1000);
     expect(expMs).toBeLessThanOrEqual(t.now() + 300_000);
   });
 
-  test("honors a custom refresh-token TTL on sign-up and on rotation", async () => {
+  test("honors a custom inactivity timeout on sign-up and on rotation", async () => {
     const t = setup();
     const oneHourSeconds = 60 * 60;
     const oneHourMs = oneHourSeconds * 1000;
 
     const before = t.now();
-    const bundle: TokenBundle = await t.mutation(api.public.signUp, {
-      claims: claims(),
-      createUserHandle: CREATE_USER_HANDLE,
-      refreshTokenTtlSeconds: oneHourSeconds,
-    });
+    const bundle = await signUpWith(t, ttl({ refreshInactivityTimeoutSeconds: oneHourSeconds }));
     expect(bundle.refreshTokenExpiresAt).toBeGreaterThanOrEqual(before + oneHourMs);
     // A transaction's time is its start, floored at its snapshot (as Convex's), so it may be a millisecond past the clock's.
     expect(bundle.refreshTokenExpiresAt).toBeLessThanOrEqual(t.now() + oneHourMs + 1000);
 
-    // The rotated token gets the configured lifetime too.
+    // The rotated token gets the configured timeout too.
     const rotated = expectRotated(
       await t.mutation(api.public.refresh, {
         refreshToken: bundle.refreshToken,
-        refreshTokenTtlSeconds: oneHourSeconds,
+        ...ttl({ refreshInactivityTimeoutSeconds: oneHourSeconds }),
       }),
     );
     expect(rotated.refreshTokenExpiresAt).toBeLessThanOrEqual(t.now() + oneHourMs + 1000);
   });
 
-  test("rejects a configuration where the access TTL is not shorter than the refresh TTL", async () => {
+  test("caps the refresh token's expiry at the session's max lifetime", async () => {
+    const t = setup();
+    const lifetimes = ttl({ refreshInactivityTimeoutSeconds: 2 * 60 * 60, sessionMaxLifetimeSeconds: 3 * 60 * 60 });
+    const bundle = await signUpWith(t, lifetimes);
+    const [session] = await t.run(async (ctx: any) => await ctx.db.query("sessions").collect());
+    // Fresh, the inactivity timeout comes first.
+    expect(bundle.refreshTokenExpiresAt).toBeGreaterThanOrEqual(t.now() + 2 * HOUR_MS);
+    expect(bundle.refreshTokenExpiresAt).toBeLessThan(session._creationTime + 3 * HOUR_MS);
+
+    // Two hours in, the max lifetime comes first.
+    await t.advanceTime(2 * HOUR_MS - 60_000);
+    const rotated = expectRotated(
+      await t.mutation(api.public.refresh, { refreshToken: bundle.refreshToken, ...lifetimes }),
+    );
+    expect(rotated.refreshTokenExpiresAt).toBe(session._creationTime + 3 * HOUR_MS);
+  });
+
+  test("rejects a configuration where the access TTL is not shorter than the inactivity timeout", async () => {
     const t = setup();
     await expect(
-      t.mutation(api.public.signUp, {
-        claims: claims(),
-        createUserHandle: CREATE_USER_HANDLE,
-        accessTokenTtlSeconds: 100,
-        refreshTokenTtlSeconds: 1,
-      }),
-    ).rejects.toThrow(/shorter than the refresh-token TTL/i);
+      signUpWith(t, { ...DEFAULT_TTL, accessTokenTtlSeconds: 100, refreshInactivityTimeoutSeconds: 1 }),
+    ).rejects.toThrow("Access-token TTL must be shorter than the refresh inactivity timeout.");
   });
 
-  test("rejects a non-positive TTL and an access TTL over an hour", async () => {
+  test("rejects a configuration where the inactivity timeout is longer than the max lifetime", async () => {
     const t = setup();
-    const signUpWith = (ttl: { accessTokenTtlSeconds?: number; refreshTokenTtlSeconds?: number }) =>
-      t.mutation(api.public.signUp, { claims: claims(), createUserHandle: CREATE_USER_HANDLE, ...ttl });
-    await expect(signUpWith({ accessTokenTtlSeconds: 0 })).rejects.toThrow("Token TTLs must be positive.");
-    await expect(signUpWith({ accessTokenTtlSeconds: 3601 })).rejects.toThrow(
+    await expect(
+      signUpWith(t, {
+        ...DEFAULT_TTL,
+        refreshInactivityTimeoutSeconds: 2 * 60 * 60,
+        sessionMaxLifetimeSeconds: 60 * 60,
+      }),
+    ).rejects.toThrow("Refresh inactivity timeout must be at most the session max lifetime.");
+  });
+
+  test("accepts an inactivity timeout equal to the max lifetime", async () => {
+    const t = setup();
+    const bundle = await signUpWith(
+      t,
+      ttl({ refreshInactivityTimeoutSeconds: 60 * 60, sessionMaxLifetimeSeconds: 60 * 60 }),
+    );
+    const [session] = await t.run(async (ctx: any) => await ctx.db.query("sessions").collect());
+    expect(bundle.refreshTokenExpiresAt).toBeLessThanOrEqual(session._creationTime + HOUR_MS);
+  });
+
+  test("rejects a non-finite or non-positive lifetime and an access TTL over an hour, in every function", async () => {
+    const t = setup();
+    await expect(signUpWith(t, { ...DEFAULT_TTL, sessionMaxLifetimeSeconds: Number.NaN })).rejects.toThrow(
+      "Token and session lifetimes must be finite numbers.",
+    );
+    await expect(signUpWith(t, { ...DEFAULT_TTL, accessTokenTtlSeconds: 0 })).rejects.toThrow(
+      "Token and session lifetimes must be positive.",
+    );
+    await expect(signUpWith(t, { ...DEFAULT_TTL, accessTokenTtlSeconds: 3601 })).rejects.toThrow(
       "Access-token TTL must be at most one hour (the deployment refuses to sign a longer-lived JWT).",
     );
-  });
-});
-
-describe("getUserIdByAccount", () => {
-  test("returns null for an unknown identity", async () => {
-    const t = setup();
-    expect(
-      await t.query(api.public.getUserIdByAccount, { provider: "password", providerAccountId: "alice" }),
-    ).toBeNull();
-  });
-
-  test("returns the user id after the account is created by signUp", async () => {
-    const t = setup();
     const bundle = await signUp(t, claims());
-    expect(await t.query(api.public.getUserIdByAccount, { provider: "password", providerAccountId: "alice" })).toBe(
-      bundle.userId,
-    );
-  });
-
-  test("does not confuse identities across methods", async () => {
-    const t = setup();
-    await signUp(t, claims({ providerName: "password", providerAccountId: "alice" }));
-    expect(await t.query(api.public.getUserIdByAccount, { provider: "google", providerAccountId: "alice" })).toBeNull();
+    await expect(
+      t.mutation(api.public._internal_dangerous_signIn, {
+        claims: claims(),
+        componentPath: COMPONENT_PATH,
+        userId: bundle.userId,
+        ...DEFAULT_TTL,
+        accessTokenTtlSeconds: -1,
+      }),
+    ).rejects.toThrow("Token and session lifetimes must be positive.");
+    await expect(
+      t.mutation(api.public.refresh, { refreshToken: bundle.refreshToken, ...DEFAULT_TTL, accessTokenTtlSeconds: 0 }),
+    ).rejects.toThrow("Token and session lifetimes must be positive.");
+    // The component has no defaults of its own: a call must pass all three.
+    await expect(t.mutation(api.public.refresh, { refreshToken: bundle.refreshToken })).rejects.toThrow();
   });
 });
 
@@ -993,7 +1316,7 @@ describe("getSession", () => {
   test("returns null for an id in another table", async () => {
     const t = setup();
     await signUp(t, claims());
-    const accountId = await t.run(async (ctx: any) => (await ctx.db.query("accounts").unique())!._id);
-    expect(await t.query(api.public.getSession, { sessionId: accountId })).toBeNull();
+    const tokenId = await t.run(async (ctx: any) => (await ctx.db.query("refreshTokens").unique())!._id);
+    expect(await t.query(api.public.getSession, { sessionId: tokenId })).toBeNull();
   });
 });

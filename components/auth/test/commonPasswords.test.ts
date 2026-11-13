@@ -1,15 +1,22 @@
-// The common-password list and lookup (STUDY-201 §3.4), upstream's `components/password/commonPasswords.test.ts`
-// ported.
+// The common-password list and lookup (STUDY-201 §3.4, STUDY-208 §1.11), upstream's
+// `components/password/commonPasswords.test.ts` at v2.0.0 ported.
 import { describe, expect, test } from "bun:test";
 import { COMMON_PASSWORDS_BY_LENGTH } from "../src/components/password/commonPasswords.generated.ts";
 import { isCommonPassword } from "../src/components/password/commonPasswords.ts";
 import { MIN_PASSWORD_LENGTH } from "../src/components/password/validation.ts";
+import { DEFAULT_MIN_PASSWORD_LENGTH } from "../src/lib/password.ts";
 
 const allPasswords = Object.values(COMMON_PASSWORDS_BY_LENGTH).flat();
 
 describe("the generated list", () => {
-  test("contains 3000 passwords", () => {
-    expect(allPasswords.length).toBe(3000);
+  test("contains 3000 passwords that the password methods accept", () => {
+    const methodPasswords = allPasswords.filter((password) => [...password].length >= DEFAULT_MIN_PASSWORD_LENGTH);
+    expect(methodPasswords.length).toBe(3000);
+  });
+
+  // Beyond upstream: the 3000 most frequent of the component's floor, 8 or more, are in it too.
+  test("contains the passwords of 8 and 9 characters among the 3000 most frequent of 8 or more", () => {
+    expect([COMMON_PASSWORDS_BY_LENGTH[8]!.length, COMMON_PASSWORDS_BY_LENGTH[9]!.length]).toEqual([1676, 747]);
   });
 
   test("contains no password that is too short", () => {
@@ -59,8 +66,13 @@ describe("isCommonPassword", () => {
     expect(isCommonPassword(decomposed)).toBe(false);
   });
 
+  test("finds a frequent password that only the component accepts", () => {
+    expect(isCommonPassword("password")).toBe(true);
+    expect(isCommonPassword("12345678")).toBe(true);
+  });
+
   test("does not find a password that is too short for the list", () => {
-    expect(isCommonPassword("password")).toBe(false);
+    expect(isCommonPassword("passwor")).toBe(false);
     expect(isCommonPassword("")).toBe(false);
   });
 });

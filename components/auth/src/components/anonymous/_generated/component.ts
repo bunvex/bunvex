@@ -23,6 +23,6 @@ import type { FunctionReference } from "@bunvex/server";
  */
 export type ComponentApi<Name extends string | undefined = string | undefined> = {
   provider: {
-    createAnonymousAccount: FunctionReference<"mutation", "internal", {}, any, Name>;
+    createAnonymousAccount: FunctionReference<"mutation", "internal", { userId: string }, null, Name>;
   };
 };

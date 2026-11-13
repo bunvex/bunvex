@@ -703,6 +703,31 @@ shows the boundary and says where `proxy.ts` goes.
    - the ported upstream tests (§5);
    - the examples' server code;
    - a measurement of sign-in with the cap's extra range read, against `main`.
+
+   Built:
+   - the components, the methods and `setupAuth` at 2.0.0, with upstream's new tests ported;
+   - `test/deployment.test.ts`, on a local backend with a SQLite store and workers:
+     - the token's issuer;
+     - the scheduled erasure;
+     - the mount check, also with a canonical URL set;
+     - a bad lifetime config failing `bunvex deploy`;
+   - the differential at `f73ec439`:
+     - the app imports v2's anonymous method from its built files;
+     - it waits for the scheduled erasure before reading the tables;
+     - it adds the 9-character password and the 101-character username.
+
+   **Write limit:** upstream's 12 × 1 500-row revocation runs with the test deployment's write limit raised, since
+   bunvex's 4 MiB/s throughput limit (which convex-test does not model) otherwise paces the erasures.
+
+   **Measured:** the core's sign-in alone (no hashing), one user signing in 300 times in a row with `@bunvex/testing`,
+   3 runs each:
+
+   | Sessions before the call | `main` | branch |
+   |---|---|---|
+   | under the cap | p50 0.25–0.35 ms | p50 0.39–0.45 ms (the user's sessions read) |
+   | at the cap of 100 | p50 0.2 ms | p50 2.0–2.2 ms, p90 3.8–4.4 ms (the newest token of each of 100 sessions read, one session deleted, its erasure scheduled) |
+
+   A method's sign-in also hashes the password: about 25 ms of argon2 (STUDY-201 §1.15).
 3. **The client.** §3.3, the examples' `api`, the README, and the parity rows.
 
 ## 4. Divergences

@@ -17,6 +17,8 @@ function message(userError: { error: string; [detail: string]: unknown }): strin
       return "Wrong username or password.";
     case "USERNAME_TAKEN":
       return "That username is taken.";
+    case "USERNAME_TOO_LONG":
+      return `A username has at most ${userError.maximumLength} characters.`;
     case "PASSWORD_TOO_SHORT":
       return `A password has at least ${userError.minimumLength} characters.`;
     case "PASSWORD_TOO_COMMON":

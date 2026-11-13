@@ -6,9 +6,8 @@ import { internalMutation, query } from "./_generated/server";
 /** The user of a new account: the auth core calls it once, and keeps the id it returns. */
 export const createUser = internalMutation({
   args: {
-    provider: v.object({
-      name: v.literal("password"),
-      accountId: v.string(),
+    method: v.object({
+      name: v.literal("usernamePassword"),
       profile: v.object({}),
     }),
   },

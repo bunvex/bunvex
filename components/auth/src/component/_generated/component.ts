@@ -23,14 +23,14 @@ import type { FunctionReference } from "@bunvex/server";
  */
 export type ComponentApi<Name extends string | undefined = string | undefined> = {
   public: {
+    _internal_dangerous_signIn: FunctionReference<"mutation", "internal", { accessTokenTtlSeconds: number; claims: { method: string; profile: any }; componentPath: string; onSignInHandle?: string; refreshInactivityTimeoutSeconds: number; sessionMaxLifetimeSeconds: number; userId: string }, { accessToken: string; refreshToken: string; refreshTokenExpiresAt: number; userId: string }, Name>;
+    _internal_dangerous_signUp: FunctionReference<"mutation", "internal", { accessTokenTtlSeconds: number; claims: { method: string; profile: any }; componentPath: string; createUserHandle: string; onSignInHandle?: string; refreshInactivityTimeoutSeconds: number; sessionMaxLifetimeSeconds: number }, { accessToken: string; refreshToken: string; refreshTokenExpiresAt: number; userId: string }, Name>;
+    _internal_dangerous_signUpWithoutSession: FunctionReference<"mutation", "internal", { claims: { method: string; profile: any }; createUserHandle: string }, { userId: string }, Name>;
     getSession: FunctionReference<"query", "internal", { sessionId: string }, { userId: string } | null, Name>;
-    getUserIdByAccount: FunctionReference<"query", "internal", { provider: string; providerAccountId: string }, string | null, Name>;
-    listSessions: FunctionReference<"query", "internal", { userId: string }, Array<{ creationTime: number; expiresAt: number; lastRefreshedAt: number; sessionId: string }>, Name>;
-    refresh: FunctionReference<"mutation", "internal", { accessTokenTtlSeconds?: number; refreshToken: string; refreshTokenTtlSeconds?: number }, { kind: "rotated"; tokens: { accessToken: string; refreshToken: string; refreshTokenExpiresAt: number; userId: string } } | { kind: "noSession" }, Name>;
+    listSessions: FunctionReference<"query", "internal", { userId: string }, Array<{ creationTime: number; lastRefreshedAt: number; sessionId: string }>, Name>;
+    markUserIdCreated: FunctionReference<"mutation", "internal", { userId: string }, null, Name>;
+    refresh: FunctionReference<"mutation", "internal", { accessTokenTtlSeconds: number; refreshInactivityTimeoutSeconds: number; refreshToken: string; sessionMaxLifetimeSeconds: number }, { kind: "rotated"; tokens: { accessToken: string; refreshToken: string; refreshTokenExpiresAt: number; userId: string } } | { kind: "noSession" }, Name>;
     revokeSessions: FunctionReference<"mutation", "internal", { sessionIds: Array<string> }, Array<string>, Name>;
-    signIn: FunctionReference<"mutation", "internal", { accessTokenTtlSeconds?: number; claims: { profile: any; providerAccountId: string; providerName: string }; onSignInHandle?: string; refreshTokenTtlSeconds?: number }, { accessToken: string; refreshToken: string; refreshTokenExpiresAt: number; userId: string }, Name>;
     signOut: FunctionReference<"mutation", "internal", { refreshToken: string }, null, Name>;
-    signUp: FunctionReference<"mutation", "internal", { accessTokenTtlSeconds?: number; claims: { profile: any; providerAccountId: string; providerName: string }; createUserHandle: string; onSignInHandle?: string; refreshTokenTtlSeconds?: number }, { accessToken: string; refreshToken: string; refreshTokenExpiresAt: number; userId: string }, Name>;
-    signUpWithoutSession: FunctionReference<"mutation", "internal", { claims: { profile: any; providerAccountId: string; providerName: string }; createUserHandle: string }, { userId: string }, Name>;
   };
 };

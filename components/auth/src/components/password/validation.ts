@@ -1,13 +1,17 @@
-// What a password may be (STUDY-201 §1.6), v2's rules (NIST's, as https://auth.pilcrowonpaper.com/passwords sums them
-// up): 10 to 100 characters, counted in code points of the input as given; no surrounding whitespace (Unicode's);
-// and, for a new password, not one of the most frequent ones. Hashing and checking take the NFC form.
+// What a password may be (STUDY-201 §1.6, STUDY-208 §1.11), v2.0.0's rules (NIST's, as
+// https://auth.pilcrowonpaper.com/passwords sums them up): 8 to 100 characters, counted in code points of the input as
+// given, at least the caller's minimum; no surrounding whitespace (Unicode's); and, for a new password, not one of the
+// most frequent ones. Hashing and checking take the NFC form. The password methods ask for 10
+// (`DEFAULT_MIN_PASSWORD_LENGTH`, `lib/password.ts`).
 import { type Infer, v } from "@bunvex/values";
 import { isCommonPassword } from "./commonPasswords.ts";
 
-/** The shortest password, in code points. */
-export const MIN_PASSWORD_LENGTH = 10;
-/** The shortest password the password methods accept, for a sign-up form to show the same limit. */
-export const DEFAULT_MIN_PASSWORD_LENGTH = MIN_PASSWORD_LENGTH;
+/**
+ * The shortest password the component accepts, in code points, in `_internal_dangerous_setPassword` and
+ * `verifyPassword`. Lower than the password methods' minimum (10), so the component verifies the passwords of other
+ * systems with this minimum.
+ */
+export const MIN_PASSWORD_LENGTH = 8;
 /** The longest password, in code points. */
 export const MAX_PASSWORD_LENGTH = 100;
 
@@ -40,21 +44,34 @@ export const verifyPasswordUserError = v.union(
 /** Why a password check failed. */
 export type VerifyPasswordUserError = Infer<typeof verifyPasswordUserError>;
 
-/** The first format rule `password` breaks, or null; it does not look at the common passwords. */
-export function validatePasswordInputFormat(password: string): PasswordFormatUserError | null {
+/**
+ * The first format rule `password` breaks, with `minimumLength` its shortest length, or null; it does not look at the
+ * common passwords. Throws when `minimumLength` is not between {@link MIN_PASSWORD_LENGTH} and
+ * {@link MAX_PASSWORD_LENGTH}: the caller's mistake, not the user's.
+ */
+export function validatePasswordInputFormat(password: string, minimumLength: number): PasswordFormatUserError | null {
+  // Negated, so `NaN` is refused too: every comparison with it is false.
+  if (!(minimumLength >= MIN_PASSWORD_LENGTH && minimumLength <= MAX_PASSWORD_LENGTH))
+    throw new Error(
+      `minimumLength must be between ${MIN_PASSWORD_LENGTH} and ${MAX_PASSWORD_LENGTH}, but it is ${minimumLength}.`,
+    );
   // Code points, not UTF-16 units: an emoji is one character, as NIST means it.
   const length = [...password].length;
-  if (length < MIN_PASSWORD_LENGTH) return { error: "PASSWORD_TOO_SHORT", minimumLength: MIN_PASSWORD_LENGTH };
+  if (length < minimumLength) return { error: "PASSWORD_TOO_SHORT", minimumLength };
   if (length > MAX_PASSWORD_LENGTH) return { error: "PASSWORD_TOO_LONG", maximumLength: MAX_PASSWORD_LENGTH };
   // `\s` under `u` is Unicode's whitespace (a no-break space too), which `trim()` comparisons would let through.
   if (/^\s|\s$/u.test(password)) return { error: "PASSWORD_HAS_SURROUNDING_WHITESPACE" };
   return null;
 }
 
-/** The first rule a new password (a sign-up's, a change's) breaks, the common passwords included, or null. */
-export function validateNewPassword(password: string): SetPasswordUserError | null {
+/**
+ * The first rule a new password (a sign-up's, a change's) breaks, with `minimumLength` its shortest length, the common
+ * passwords included, or null. Throws for a `minimumLength` out of range, as {@link validatePasswordInputFormat}.
+ */
+export function validateNewPassword(password: string, minimumLength: number): SetPasswordUserError | null {
   return (
-    validatePasswordInputFormat(password) ?? (isCommonPassword(password) ? { error: "PASSWORD_TOO_COMMON" } : null)
+    validatePasswordInputFormat(password, minimumLength) ??
+    (isCommonPassword(password) ? { error: "PASSWORD_TOO_COMMON" } : null)
   );
 }
 

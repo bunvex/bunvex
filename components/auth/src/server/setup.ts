@@ -1,7 +1,9 @@
-// `setupAuth` (STUDY-201 §1.5), v2's `setupConvexAuth` in bunvex's words (rule 5, C-4): the app's session functions
-// (`refreshSession`, `signOut`, `isAuthenticated`) over the core component, and the binding of each sign-in method,
-// whose mutations find their helpers on `ctx.bunvexAuth` (v2's `ctx.convexAuth`). The callbacks' handles are made on
-// each call; the token lifetimes are passed on every core call, checked there (not at setup), as v2's.
+// `setupAuth` (STUDY-201 §1.5, STUDY-208 §1.2, §1.6, §1.7), v2.0.0's `setupConvexAuth` in bunvex's words (rule 5, C-4):
+// the app's session functions (`refreshSession`, `signOut`, `isAuthenticated`) over the core component, and the
+// binding of each sign-in method (`bindMethod`), whose mutations find their helpers on `ctx.bunvexAuth` (v2's
+// `ctx.convexAuth`). The token and session lifetimes are resolved and checked when `setupAuth` runs, as the app's
+// modules load, so a bad configuration fails the push; every core call passes them. The callbacks' handles are made
+// on each call.
 import {
   createFunctionHandle,
   type GenericDataModel,
@@ -14,6 +16,8 @@ import {
 } from "@bunvex/server";
 import { type ObjectType, type PropertyValidators, type Validator, v } from "@bunvex/values";
 import type { ComponentApi } from "../component/_generated/component.ts";
+import { componentPathOf } from "../lib/componentPath.ts";
+import { resolveTtlConfig } from "../lib/ttl.ts";
 import {
   type BunvexAuthCtx,
   type RefreshResult,
@@ -44,7 +48,7 @@ export type AuthMutationBuilder<Profile> = <
 }) => RegisteredMutation<"public", ObjectType<ArgsValidator>, ReturnValue>;
 
 /**
- * The builders a method gets from `bindProvider`.
+ * The builders a method gets from `bindMethod`.
  *
  * @internal
  */
@@ -55,7 +59,7 @@ export type AuthCore<UsersTable extends string = string> = {
   /** The app's users table, as given to `setupAuth`: methods infer it from the core they are handed. */
   usersTable: UsersTable;
   /**
-   * The core component, as given to `setupAuth`: the methods find the user with it, wherever the app mounts it.
+   * The core component, as given to `setupAuth`: the methods find the user with it. The app mounts it as `auth`.
    *
    * @internal
    */
@@ -74,20 +78,21 @@ export type AuthCore<UsersTable extends string = string> = {
    */
   isAuthenticated: RegisteredQuery<"public", Record<string, never>, Promise<boolean>>;
   /**
-   * Bind a sign-in method to the core and get its builders. `name` keys the method's accounts, so it is unique among
-   * the methods of one core (a second throws at once). Methods call it from their `attachUserCallbacks`, once the app
-   * gave its callbacks; an app does not call it.
+   * Bind a sign-in method to the core and get its builders. The app's callbacks get `name` as `method.name`, so it is
+   * unique among the methods of one core (a second throws at once). Methods call it from their `attachUserCallbacks`,
+   * once the app gave its callbacks; an app does not call it.
    *
    * @internal
    */
-  bindProvider<Provider extends string, Profile>(
-    options: { name: Provider } & UserCallbacks<Provider, Profile, UsersTable>,
+  bindMethod<MethodName extends string, Profile>(
+    options: { name: MethodName } & UserCallbacks<MethodName, Profile, UsersTable>,
   ): MethodBuilders<Profile>;
 };
 
 /**
  * The app's auth: the session functions to export, and the core the sign-in methods bind to. A method verifies a user
- * its own way, then trades the identity for a session through the helpers on `ctx.bunvexAuth`.
+ * its own way, looks the identity up in its own component, then trades it for a session through the helpers on
+ * `ctx.bunvexAuth`: `completeSignUp` for a new identity, `completeSignIn` for a known one.
  *
  * ```ts
  * const auth = setupAuth({ component: components.auth });
@@ -99,8 +104,11 @@ export type AuthCore<UsersTable extends string = string> = {
  * }).attachUserCallbacks({ createUser: internal.users.createUserPassword });
  * ```
  *
- * Access tokens last a minute and refresh tokens 30 days, unless set here; the access token must be the shorter, and
- * well over a few seconds (clients refresh shortly before it expires). A change applies to tokens issued after it.
+ * Access tokens last a minute and sessions at most 30 days, unless set here. The refresh inactivity timeout is the max
+ * lifetime unless set, and at most it; the access token is shorter than the timeout, and well over a few seconds
+ * (clients refresh shortly before it expires). The lifetimes are checked here, so a bad one fails the push. A changed
+ * access-token lifetime applies to the tokens minted after it; the session lifetimes apply to every session, those
+ * already started included.
  */
 export function setupAuth<UsersTable extends string = "users">(options: {
   component: ComponentApi;
@@ -109,14 +117,27 @@ export function setupAuth<UsersTable extends string = "users">(options: {
    * returns an `Id<usersTable>`) and `onSignIn` (it takes one).
    */
   usersTable?: UsersTable;
-  /** The access token's lifetime, in seconds (60 by default). */
+  /**
+   * The access token's lifetime, in seconds (60 by default). A change applies to the tokens minted after it.
+   */
   accessTokenTtlSeconds?: number;
-  /** The refresh token's lifetime, in seconds (30 days by default). */
-  refreshTokenTtlSeconds?: number;
+  /**
+   * How long a session may go without a refresh before it ends, in seconds: the session's max lifetime by default, and
+   * at most it. A connected client refreshes about once per access-token lifetime, so this is how long a client may stay
+   * away (closed, offline, asleep) and still resume. A change applies to every session: lowered, it ends the sessions
+   * that went longer without a refresh.
+   */
+  refreshInactivityTimeoutSeconds?: number;
+  /**
+   * How long a session may last, in seconds (30 days by default), however often it refreshes: then the user signs in
+   * again. A change applies to every session, counted from its creation.
+   */
+  sessionMaxLifetimeSeconds?: number;
 }): AuthCore<UsersTable> {
-  const { component, accessTokenTtlSeconds, refreshTokenTtlSeconds } = options;
+  const { component } = options;
+  // When the app's modules load: a bad configuration fails the push, not the first sign-in.
+  const ttl = resolveTtlConfig(options);
   const usersTable = options.usersTable ?? ("users" as UsersTable);
-  const ttl = { accessTokenTtlSeconds, refreshTokenTtlSeconds };
 
   const refreshSession = mutationGeneric({
     args: { refreshToken: v.string() },
@@ -141,63 +162,68 @@ export function setupAuth<UsersTable extends string = "users">(options: {
     handler: async (ctx): Promise<boolean> => (await getAuthUserId(ctx, component)) !== null,
   });
 
-  // This core's methods: two sharing a name would share accounts.
+  // This core's methods: the callbacks could not tell two of one name apart.
   const bound = new Set<string>();
 
-  const bindProvider = <Provider extends string, Profile>({
+  const bindMethod = <MethodName extends string, Profile>({
     name,
     createUser,
     onSignIn,
-  }: { name: Provider } & UserCallbacks<Provider, Profile, UsersTable>): MethodBuilders<Profile> => {
+  }: { name: MethodName } & UserCallbacks<MethodName, Profile, UsersTable>): MethodBuilders<Profile> => {
     if (bound.has(name))
       throw new Error(
-        `A sign-in method named "${name}" is already bound to this auth core. Method names key the accounts table, so ` +
-          "each method must have a unique name.",
+        `A sign-in method named "${name}" is already bound to this auth core. The app's callbacks get the name of the ` +
+          "sign-in method as `method.name`, so each sign-in method must have a unique name.",
       );
     bound.add(name);
 
     // None when the app gave no `onSignIn`: the core then starts the session without telling the app.
     const onSignInHandle = async () => (onSignIn === undefined ? undefined : await createFunctionHandle(onSignIn));
-    const claims = (providerAccountId: string, profile: Profile) => ({
-      providerName: name,
-      providerAccountId,
-      profile,
-    });
+    const claims = (profile: Profile) => ({ method: name, profile });
 
-    /** Revoke the sessions listed; how many of them were revoked while still active (expired ones are not counted). */
+    /**
+     * Revoke the sessions listed; how many of them were revoked while still active (expired ones are not counted): a
+     * session expires one inactivity timeout after it last refreshed, or one max lifetime after it was created.
+     */
     const revokeListed = async (
       ctx: GenericMutationCtx<GenericDataModel>,
-      sessions: { sessionId: string; expiresAt: number }[],
+      sessions: { sessionId: string; creationTime: number; lastRefreshedAt: number }[],
     ): Promise<number> => {
       if (sessions.length === 0) return 0;
       const revoked = new Set(
         await ctx.runMutation(component.public.revokeSessions, { sessionIds: sessions.map((s) => s.sessionId) }),
       );
+      const inactivityMs = ttl.refreshInactivityTimeoutSeconds * 1000;
+      const maxLifetimeMs = ttl.sessionMaxLifetimeSeconds * 1000;
       const now = Date.now();
-      return sessions.filter((s) => revoked.has(s.sessionId) && s.expiresAt > now).length;
+      return sessions.filter(
+        (s) =>
+          revoked.has(s.sessionId) && s.lastRefreshedAt + inactivityMs > now && s.creationTime + maxLifetimeMs > now,
+      ).length;
     };
 
     const helpers = (ctx: GenericMutationCtx<GenericDataModel>): BunvexAuthCtx<Profile>["bunvexAuth"] => ({
-      completeSignUp: async ({ providerAccountId, profile }): Promise<TokenBundle> =>
-        await ctx.runMutation(component.public.signUp, {
-          claims: claims(providerAccountId, profile),
+      completeSignUp: async ({ profile, authenticatedBy }): Promise<TokenBundle> =>
+        await ctx.runMutation(component.public._internal_dangerous_signUp, {
+          claims: claims(profile),
+          componentPath: componentPathOf(authenticatedBy),
           createUserHandle: await createFunctionHandle(createUser),
           onSignInHandle: await onSignInHandle(),
           ...ttl,
         }),
-      completeSignIn: async ({ providerAccountId, profile }): Promise<TokenBundle> =>
-        await ctx.runMutation(component.public.signIn, {
-          claims: claims(providerAccountId, profile),
+      completeSignIn: async ({ userId, profile, authenticatedBy }): Promise<TokenBundle> =>
+        await ctx.runMutation(component.public._internal_dangerous_signIn, {
+          claims: claims(profile),
+          componentPath: componentPathOf(authenticatedBy),
+          userId,
           onSignInHandle: await onSignInHandle(),
           ...ttl,
         }),
-      signUpWithoutSession: async ({ providerAccountId, profile }) =>
-        await ctx.runMutation(component.public.signUpWithoutSession, {
-          claims: claims(providerAccountId, profile),
+      signUpWithoutSession: async ({ profile }) =>
+        await ctx.runMutation(component.public._internal_dangerous_signUpWithoutSession, {
+          claims: claims(profile),
           createUserHandle: await createFunctionHandle(createUser),
         }),
-      resolveUserId: async (providerAccountId) =>
-        await ctx.runQuery(component.public.getUserIdByAccount, { provider: name, providerAccountId }),
       revokeOtherSessions: async () => {
         const identity = await ctx.auth.getUserIdentity();
         if (identity === null) return 0;
@@ -227,5 +253,5 @@ export function setupAuth<UsersTable extends string = "users">(options: {
     return { authMutation };
   };
 
-  return { usersTable, component, signOut, refreshSession, isAuthenticated, bindProvider };
+  return { usersTable, component, signOut, refreshSession, isAuthenticated, bindMethod };
 }

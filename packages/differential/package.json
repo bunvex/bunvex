@@ -20,7 +20,7 @@
     "@bunvex/resend": "workspace:*",
     "@bunvex/sharded-counter": "workspace:*",
     "@bunvex/workpool": "workspace:*",
-    "@convex-dev/auth": "2.0.0-beta.0",
+    "@convex-dev/auth": "2.0.0",
     "@convex-dev/batch-worker": "0.3.6",
     "@convex-dev/rate-limiter": "0.4.2",
     "@convex-dev/resend": "0.2.10",
