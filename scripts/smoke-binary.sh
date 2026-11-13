@@ -36,7 +36,7 @@ KEY=$("$BIN" keygen admin-key --instance-name "$NAME" --instance-secret "$SECRET
   fail "keygen does not read INSTANCE_SECRET"
 
 start() {
-  (cd "$WORK" && INSTANCE_SECRET="$SECRET" exec "$BIN" --instance-name "$NAME" --port "$PORT" --site-proxy-port $((PORT + 1)) ${DB[@]+"${DB[@]}"} >"$WORK/backend.log" 2>&1) &
+  (cd "$WORK" && INSTANCE_SECRET="$SECRET" MAX_ISOLATE_WORKERS=2 exec "$BIN" --instance-name "$NAME" --port "$PORT" --site-proxy-port $((PORT + 1)) ${DB[@]+"${DB[@]}"} >"$WORK/backend.log" 2>&1) &
   PID=$!
   for _ in $(seq 1 50); do curl -sf "http://127.0.0.1:$PORT/instance_name" >/dev/null && return; sleep 0.2; done
   fail "the backend did not come up"
@@ -66,9 +66,10 @@ cli deploy --typecheck=disable >/dev/null 2>&1 || fail "deploy failed"
 cli run items:add '{ n: 42 }' >/dev/null 2>&1 || fail "run failed"
 [ "$(cli run items:all 2>/dev/null | tr -d ' \n')" = "[42]" ] || fail "unexpected data"
 [ "$want" = postgres ] || [ -d "$WORK/bunvex_local_storage/modules" ] || fail "no pushed code in bunvex_local_storage"
-# A client's queries run on the execution workers (STUDY-194): the first starts one, the next run there. Each worker
-# opens the store itself, with the drivers embedded beside it; one that cannot is in the log. Module state is per
-# worker (DV-573), so a count that starts again shows a worker answered (each call's args differ: none is cached).
+# A client's queries run on the execution workers (STUDY-194; off by default, DV-574, so `start` opts in): the first
+# starts one, the next run there. Each worker opens the store itself, with the drivers embedded beside it; one that
+# cannot is in the log. Module state is per worker (DV-573), so a count that starts again shows a worker answered
+# (each call's args differ: none is cached).
 counted() {
   curl -sf "http://127.0.0.1:$PORT/api/query" -H 'content-type: application/json' \
     -d "{\"path\":\"items:counted\",\"args\":{\"r\":$1},\"format\":\"json\"}"

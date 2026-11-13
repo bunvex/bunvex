@@ -7,6 +7,9 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 PROJECT="bunvex-smoke-$$"
 export PORT=${PORT:-13210} SITE_PROXY_PORT=${SITE_PROXY_PORT:-13211}
+# The execution workers are off by default (DV-574); the smoke opts in, to check that one opens the store with what
+# the image embeds.
+export MAX_ISOLATE_WORKERS=${MAX_ISOLATE_WORKERS:-2}
 APP=""
 FILES=(-f "$ROOT/docker/docker-compose.yml")
 # SMOKE_POSTGRES=1: on Postgres instead of SQLite.
@@ -49,7 +52,7 @@ cli deploy --typecheck=disable >/dev/null 2>&1 || fail "deploy failed"
 cli run items:add '{ n: 42 }' >/dev/null 2>&1 || fail "run failed"
 [ "$(cli run items:all 2>/dev/null | tr -d ' \n')" = "[42]" ] || fail "unexpected data"
 [ "$(cli run items:site 2>/dev/null)" = "\"http://127.0.0.1:$SITE_PROXY_PORT\"" ] || fail "unexpected site origin"
-# A client's queries run on the execution workers (STUDY-194), each opening the store with what the image embeds.
+# A client's queries run on the execution workers (STUDY-194, opted in above), each opening the store with what the image embeds.
 # Module state is per worker (DV-573): a count that starts again shows a worker answered (no call is cached).
 last=0
 restarted=""
