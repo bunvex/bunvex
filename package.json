@@ -36,7 +36,7 @@
     "test:examples:browser": "cd examples/_browser && bun test --timeout 180000 ./*.browser.ts"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.6.5",
+    "@biomejs/biome": "2.6.6",
     "@changesets/cli": "^2.29.0",
     "@hughescr/stryker-bun-runner": "1.6.0",
     "@stryker-mutator/core": "10.1.1",
