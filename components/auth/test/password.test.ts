@@ -237,8 +237,8 @@ describe("interoperability with hash-wasm", () => {
   });
 });
 
-// Verification re-derives the algorithm, version and parameters from the stored string, and refuses only one that is
-// not argon2i, argon2d or argon2id.
+// Verification re-derives the algorithm, version and parameters from the stored string: one that is not a PHC string
+// throws, and a PHC string of another algorithm does not match.
 describe("verifyPassword is lenient about the stored PHC string", () => {
   test("verifies an argon2i PHC hash", async () => {
     const t = setup();
@@ -279,9 +279,21 @@ describe("verifyPassword is lenient about the stored PHC string", () => {
     expect(phc.startsWith("$2a$")).toBe(true);
     // Sanity check: hash-wasm itself can verify its own bcrypt hash.
     expect(await bcryptVerify({ password: PASSWORD, hash: phc })).toBe(true);
-    // Only the argon2 family is understood: bcrypt's string is refused outright, not `false`, nor read as argon2id.
+    // bcrypt's string is not a PHC string (its "salt" field, the cost, is under 4 characters), so it is refused
+    // outright, not `false`, nor read as argon2id.
     await storeHash(t, phc);
-    await expect(verifyPassword(t, PASSWORD)).rejects.toThrow("Failed to verify password against the stored hash");
+    await expect(verifyPassword(t, PASSWORD)).rejects.toThrow(
+      "Failed to verify password against the stored hash: Error: salt invalid: value to short",
+    );
+  });
+
+  // Not upstream's: v2's argon2 reads a scrypt PHC string (as `password-hash-wasm/scrypt-encode` writes one, from a
+  // lucia hash: ln=14, r=16, p=1) and cannot verify it, so the sign-in is refused like a wrong password (STUDY-208 §6).
+  test("a scrypt PHC string does not match: INVALID_CREDENTIALS, not an error", async () => {
+    const t = setup();
+    const b64 = (bytes: Uint8Array) => Buffer.from(bytes).toString("base64").replace(/=+$/, "");
+    await storeHash(t, `$scrypt$ln=14,r=16,p=1$${b64(salt())}$${b64(new Uint8Array(64).fill(7))}`);
+    expect(await verifyPassword(t, PASSWORD)).toEqual({ success: false, userError: { error: "INVALID_CREDENTIALS" } });
   });
 });
 

@@ -744,7 +744,7 @@ shows the boundary and says where `proxy.ts` goes.
 
 ## 4. Divergences
 
-No new divergence.
+One divergence, found in the build: DV-585 (a version 0x10 hash, §6).
 
 **D-1** rewrites DV-576: `aud` and `applicationID` are `"bunvex-auth"`, where Convex Auth 2.0.0 has `"convex-auth"`
 (rule 5). DV-576 was `"bunvex"` against `"convex"`.
@@ -760,6 +760,7 @@ bunvex's (C-4, rule 5):
 | # | Divergence | Why | Decision |
 |---|---|---|---|
 | D-1 | The access token's `aud` and the provider's `applicationID` are `"bunvex-auth"` (v2.0.0: `"convex-auth"`) | rule 5; v2's reason for a specific audience applies as is | DV-576, rewritten (owner, 2026-11-12) |
+| DV-585 | A stored argon2 hash of version 0x10 (`v=16`) never matches (v2.0.0's `argon2` crate verifies it) | Bun's argon2 computes only version 0x13; only an app that writes such a row itself reaches it | DV-585 (owner, 2026-11-16) |
 
 ## 4b. Additions
 
@@ -812,9 +813,28 @@ None.
 
 ## 6. Not verified yet
 
-- **A `$scrypt$` row in `authPassword`.** Read, not run: v2's argon2 WASM would answer `INVALID_CREDENTIALS`, where
-  bunvex's verifier throws `unsupported algorithm scrypt` (`packages/server/src/password.ts:83-84`). Only an app that
-  writes such a row itself reaches it. The build runs v2's WASM on one to confirm, and matches it if it differs.
+**Verified since: a stored string v2's verifier cannot read.** A `$scrypt$` row in `authPassword` was read, not run,
+when this study was written. Run on v2.0.0's `password-hash-wasm` (2026-11-16), it does not match, so the sign-in is
+`INVALID_CREDENTIALS`. bunvex's verifier threw `unsupported algorithm scrypt`, which is a server error. More stored
+strings differed, all of them written by the app itself, not by the component. v2 reads a stored hash in two steps:
+- Rust `password-hash` 0.5.0 parses the PHC string. A string that is not one throws: `"Failed to verify password
+  against the stored hash: Error: <the crate's message>"`, for example `salt invalid: value to short` or `invalid
+  Base64 encoding`.
+- `argon2` 0.5.3 verifies it. Anything it cannot compute does not match, as a wrong password does not:
+  - another algorithm or version;
+  - an unknown parameter;
+  - a cost that is not a plain decimal or is out of range;
+  - a salt under 8 bytes;
+  - no salt or no tag.
+
+  A missing cost is that crate's default (`m=19456`, `t=2`, `p=1`), a cost given twice takes the last value, `keyid`
+  is read and unused, and `data` is the associated data.
+
+`packages/server/src/password.ts` now reads a stored hash the same way, with the crate's messages. The bounds of AD-49
+(64 MiB, 10 passes) still throw. `packages/server/test/password.test.ts` checks 60 strings against v2.0.0's WASM, its
+answers and its messages, and `components/auth/test/password.test.ts` signs in against a `$scrypt$` row. One case
+differs: DV-585 (§4).
+
 - **GHSA-hmvv-g278-4x95 in v2's email component** (§1.0), when email is studied.
 - **v2's planned "attestations"** (`createdUserIds`, the mount at `auth`) may change the sign-in functions' arguments
   again (`c9b399d3`'s "Known limit"). Daily triage catches it.
