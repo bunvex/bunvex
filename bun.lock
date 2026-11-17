@@ -48,7 +48,7 @@
         "@bunvex/sandbox": "workspace:*",
         "@bunvex/server": "workspace:*",
         "mysql2": "^3.24.6",
-        "postgres": "^4.1.0",
+        "postgres": "^4.1.1",
       },
     },
     "apps/site": {
@@ -90,7 +90,7 @@
         "@bunvex/server": "workspace:*",
         "@bunvex/values": "workspace:*",
         "mysql2": "^3.24.6",
-        "postgres": "^4.1.0",
+        "postgres": "^4.1.1",
       },
     },
     "components/auth": {
@@ -1065,7 +1065,7 @@
       },
       "devDependencies": {
         "mysql2": "^3.24.6",
-        "postgres": "^4.1.0",
+        "postgres": "^4.1.1",
       },
       "peerDependencies": {
         "mysql2": ">=3",
@@ -3111,7 +3111,7 @@
 
     "postcss-value-parser": ["postcss-value-parser@4.2.0", "", {}, "sha512-1NNCs6uurfkVbeXG4S8JFT9t19m45ICnif8zWLd5oPSZ50QnwMfK+H3jv408d4jw/7Bttv5axS5IiHoLaVNHeQ=="],
 
-    "postgres": ["postgres@4.1.0", "", {}, "sha512-s+0WH67YAyLdBQUb6XczbziBhY+C9uiQsg9S8R5RHdZhk6sdyK6202E+T2tXpiInSEEjDLRSJ3OpYBe3PN6MsQ=="],
+    "postgres": ["postgres@4.1.1", "", {}, "sha512-1kJDojqNZC+iTHHXh6eif0J98LUtyLAePe/qkW1GK35eh2JixlsAiIKq3FGI+xqI+SUGTNodzf7TScVeIIyUug=="],
 
     "potpack": ["potpack@2.1.0", "", {}, "sha512-pcaShQc1Shq0y+E7GqJqvZj8DTthWV1KeHGdi0Z6IAin2Oi3JnLCOfwnCo84qc+HAp52wT9nK9H7FAJp5a44GQ=="],
 
