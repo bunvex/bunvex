@@ -36,7 +36,7 @@ jobs:
     name: soak · SQLite
     runs-on: ubuntu-24.04
     # 45 minutes of workload, ~2 to drain, 1.5 of idle tail, the start and the install.
-    timeout-minutes: 60
+    timeout-minutes: 200 # temporary branch: a 150-minute soak
     env:
       MINUTES: ${{ github.event_name == 'pull_request' && '5' || inputs.minutes || '45' }}
       # The report-only switch (STUDY-174 §10.3): rules judged, printed, kept in the report and flagged as a
@@ -88,7 +88,7 @@ jobs:
           path: .data/soak/
           if-no-files-found: ignore
       - name: Open or update an issue
-        if: failure() && steps.soak.outcome == 'failure' && github.event_name != 'pull_request'
+        if: false # temporary branch: no issue comments
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
