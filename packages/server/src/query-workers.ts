@@ -245,10 +245,11 @@ function drawnIds(a: CallOutcome["writes"], b: CallOutcome["writes"]): [string, 
 const HOST_POSITIONS = new Set(["line", "column", "originalLine", "originalColumn", "sourceURL"]);
 
 /**
- * An error's text without where in the server's code it was thrown: its position fields, and the line and column of
- * each frame of its stack in a server file (an absolute path). The server's modules are not the same code on both
- * sides when one is instrumented (`bun test --coverage` instruments the main thread's), and the position is not the
- * outcome's. The app's own frames (`app.js:12:79`) are kept.
+ * An error's text without where in the server's code it was thrown: its position fields, and each frame of its stack
+ * in a server file (an absolute path). The server's modules are not the same code on both sides when one is
+ * instrumented (`bun test --coverage` instruments the main thread's), its frames are not the same calls (a worker's
+ * run starts from its message, an in-thread one from the engine's dispatch), and neither is the outcome's: a client
+ * sees the app's own frames (`app.js:12:79`), which are kept.
  */
 function hostPositionsOut(error: string): string {
   const out = (v: unknown): unknown => {
@@ -258,7 +259,7 @@ function hostPositionsOut(error: string): string {
       );
       return fields.map((f) =>
         Array.isArray(f) && f.length === 3 && f[0] === "stack" && typeof f[1] === "string"
-          ? [f[0], f[1].replace(/(\/[^\s():]+):\d+:\d+/g, "$1"), f[2]]
+          ? [f[0], f[1].replace(/\n\s+at (?:[^\n]* \()?\/[^\n]*/g, ""), f[2]]
           : out(f),
       );
     }

@@ -1333,7 +1333,19 @@ The owner turned the execution workers off by default: `MAX_ISOLATE_WORKERS` is 
   - a generated test of the values that cross: `undefined` and `null` at the top and nested, bytes, bigints, and every
     kind of call;
   - the differential check extended to what the caller receives (value, log entry, metrics), not only the outcome's
-    text;
+    text. Both are `worker-boundary.test.ts` (2026-11-13). It runs one app on two deployments, one with no workers
+    and one with a worker. The one without workers runs its calls without the codec, as production does: the
+    preload otherwise round-trips every engine's calls, so a mismatch in the codec was on both sides of the
+    comparison. Generated values, with fixed examples of what crossed wrong before, are returned and thrown as an
+    error's data through HTTP and the WebSocket, by queries and by mutations with and without writes; every
+    response, the function log and the execution counts must match. It found two:
+    - a query whose result is no value (`undefined` in an array, a bigint out of range) succeeded with `null` on a
+      worker, whose outcome carried no result. It now fails in its own run, wherever it runs, as Convex converts the
+      result in the app's code (`convexToJson`);
+    - a `BunvexError` whose data held bytes was an internal error, because the error codec tested `instanceof
+      ArrayBuffer`, which is false for the app's realm (`vm`). It now tests by tag.
+    The preload's comparison now leaves out a server error's frames in server files (a worker's run and an in-thread
+    one do not make the same calls), and keeps the app's;
   - the Soak nightly passing with workers on: memory (R1) and no stuck worker. With 4 workers it failed R1 in 6 of
     9 nights (up to 2.3 MB/min, median RSS about 810 MB against 291 MB without workers). Most of it was each worker's
     copy of the whole write log (300 s), kept for its index cache: a copy now keeps 30 s, the minimum retention (an
