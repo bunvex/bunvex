@@ -92,8 +92,10 @@ function field(v: unknown, depth: number): Field {
   if (v === undefined) return { $u: 1 };
   if (typeof v === "bigint") return { $b: v.toString() };
   if (isError(v)) return { $e: wire(v, depth + 1) as unknown as Field };
-  if (v instanceof ArrayBuffer) return { $a: values.Base64.fromByteArray(new Uint8Array(v)) };
-  if (v instanceof Uint8Array) return { $y: values.Base64.fromByteArray(v) };
+  // By tag, not `instanceof`: an app's bytes are made in its own realm (`vm`), whose classes are not this one's.
+  const tag = Object.prototype.toString.call(v);
+  if (tag === "[object ArrayBuffer]") return { $a: values.Base64.fromByteArray(new Uint8Array(v as ArrayBuffer)) };
+  if (tag === "[object Uint8Array]") return { $y: values.Base64.fromByteArray(v as Uint8Array) };
   if (Array.isArray(v)) return { $l: v.map((x) => field(x, depth + 1)) };
   if (values.isSimpleObject(v)) {
     const o: { [k: string]: Field } = {};

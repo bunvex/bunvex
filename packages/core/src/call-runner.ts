@@ -210,12 +210,15 @@ export async function inSession<T>(
   return { value };
 }
 
-/** A query's value as the text the cache and the transports send, or null when it is no value the text holds. */
-function resultText(value: unknown): string | null {
+/**
+ * A run's value as the text the cache and the transports send, or why it is no value the text holds (`undefined` in
+ * an array, a bigint out of range, a `Set`).
+ */
+function resultText(value: unknown): { text: string } | { error: unknown } {
   try {
-    return JSON.stringify(toJsonValue((value ?? null) as Value));
-  } catch {
-    return null;
+    return { text: JSON.stringify(toJsonValue((value ?? null) as Value)) };
+  } catch (error) {
+    return { error };
   }
 }
 
@@ -312,14 +315,25 @@ export class CallRunner {
     const run = await scope.result;
     let status: CallStatus = run.ok ? "ok" : "failed";
     let result: string | null = null;
+    let error: unknown = run.ok ? undefined : run.error;
     if (run.ok && run.value === REFUSED) status = "refused";
     else if (run.ok && session && "replayed" in (run.value as object)) {
       status = "replayed";
       result = JSON.stringify((run.value as { replayed: SessionRequestOutcome }).replayed);
-    } else if (run.ok) result = resultText(run.value);
+    } else if (run.ok) {
+      const r = resultText(run.value);
+      if ("text" in r) result = r.text;
+      else if (kind === "query") {
+        // Convex converts a query's result in the app's code (`convexToJson`, registration_impl.ts), so one that is
+        // no value fails the query itself, wherever it ran: a worker's outcome would otherwise carry no value at all.
+        // (A mutation's result is converted inside its run, `mustBeValue`; other calls keep their value in-thread.)
+        status = "failed";
+        error = r.error;
+      }
+    }
     // The report stays a value in the thread; `run` makes it the outcome's text when the outcome crosses.
     return {
-      outcome: outcomeOf(request.id, kind, run, status, result, run.ok ? null : bodies.encodeError(run.error)),
+      outcome: outcomeOf(request.id, kind, run, status, result, status === "failed" ? bodies.encodeError(error) : null),
       local: { tx: run.tx, value: run.ok ? run.value : undefined, report: scope.report() },
     };
   }
