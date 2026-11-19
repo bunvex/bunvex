@@ -1,7 +1,8 @@
 // Password hashing for `@bunvex/auth`'s `authPassword` component (AD-49, STUDY-201 C-2): argon2id as Convex Auth v2's
-// `argon2id-wasm` computes it (16 MiB, t = 3, p = 1, a 32-byte tag, its PHC string), on Bun's native `node:crypto`
-// argon2, which runs on the thread pool instead of the deployment's one JS thread. The salt is the caller's: drawn in
-// the mutation from its seeded stream, as v2 draws it, so the same salt gives v2's string byte for byte.
+// `password-hash-wasm` (`argon2id-wasm` before 2.0.0) computes it (16 MiB, t = 3, p = 1, a 32-byte tag, its PHC
+// string), on Bun's native `node:crypto` argon2, which runs on the thread pool instead of the deployment's one JS thread.
+// The salt is the caller's: drawn in the mutation from its seeded stream, as v2 draws it, so the same salt gives v2's
+// string byte for byte.
 //
 // A function reaches it by importing `@bunvex/server/password`, a module the runtime links (it is never bundled). It
 // answers only where the running function's scope carries a hasher: a mutation of a component whose definition is
@@ -15,7 +16,7 @@ import { runningScope } from "./function-handles.ts";
 /** The definition name of the one component whose mutations may hash passwords. */
 export const PASSWORD_COMPONENT = "authPassword";
 
-// `argon2id-wasm`'s parameters (Rust `argon2` 0.5's defaults: argon2id, version 0x13, a 32-byte output).
+// `password-hash-wasm`'s parameters (Rust `argon2` 0.5's defaults: argon2id, version 0x13, a 32-byte output).
 const MEMORY_KIB = 16384;
 const PASSES = 3;
 const PARALLELISM = 1;
@@ -41,84 +42,181 @@ export type PasswordHasher = {
 
 /** PHC's base64: the standard alphabet, unpadded. */
 const b64 = (bytes: Uint8Array) => Buffer.from(bytes).toString("base64").replace(/=+$/, "");
-const unb64 = (text: string): Buffer | null => (/^[A-Za-z0-9+/]+$/.test(text) ? Buffer.from(text, "base64") : null);
 
-function derive(
-  algorithm: Algorithm,
-  password: string,
-  salt: Uint8Array,
-  memory: number,
-  passes: number,
-  parallelism: number,
-  tagLength: number,
-): Promise<Buffer> {
+type Derivation = {
+  algorithm: Algorithm;
+  salt: Uint8Array;
+  memory: number;
+  passes: number;
+  parallelism: number;
+  data?: Uint8Array | undefined;
+  tag: { length: number };
+};
+
+function derive(d: Derivation, password: string): Promise<Buffer> {
+  const { memory, passes, parallelism } = d;
+  const params = { message: password, nonce: d.salt, memory, passes, parallelism, tagLength: d.tag.length };
   return new Promise((resolve, reject) =>
-    argon2(algorithm, { message: password, nonce: salt, memory, passes, parallelism, tagLength }, (e, tag) =>
+    argon2(d.algorithm, d.data ? { ...params, associatedData: d.data } : params, (e, tag) =>
       e ? reject(e) : resolve(tag),
     ),
   );
 }
 
-/** The argon2id PHC string of `password` under `salt`, as `argon2id-wasm`'s `hashPassword` makes it. */
+/** The argon2id PHC string of `password` under `salt`, as `password-hash-wasm`'s `hashPassword` makes it. */
 export async function argon2idPhc(password: string, salt: Uint8Array): Promise<string> {
   let tag: Buffer;
   try {
-    tag = await derive("argon2id", password, salt, MEMORY_KIB, PASSES, PARALLELISM, TAG_BYTES);
+    const own = { algorithm: "argon2id", salt, memory: MEMORY_KIB, passes: PASSES, parallelism: PARALLELISM } as const;
+    tag = await derive({ ...own, tag: { length: TAG_BYTES } }, password);
   } catch (e) {
     throw new Error(`Failed to hash password: ${(e as Error).message}`);
   }
   return `$argon2id$v=19$m=${MEMORY_KIB},t=${PASSES},p=${PARALLELISM}$${b64(salt)}$${b64(tag)}`;
 }
 
-type Phc = { algorithm: Algorithm; memory: number; passes: number; parallelism: number; salt: Buffer; tag: Buffer };
+// A stored hash is read in two steps, as v2's `password-hash-wasm` reads it (Rust `password-hash` 0.5.0's PHC parser,
+// then `argon2` 0.5.3's verifier; STUDY-208 §6): a string that is not a PHC string throws, with the parser's messages;
+// a PHC string that argon2 cannot verify (another algorithm or version, an unknown parameter, a cost out of range, a
+// salt under 8 bytes, no salt or no tag) does not match, as a wrong password does not.
+
+/** A PHC string's fields, as the PHC grammar reads them (`$id[$v=version][$params][$salt[$hash]]`). */
+type PhcString = { id: string; version?: number; params: [string, string][]; salt?: string; hash?: Buffer };
+
+const IDENT = /^[a-z0-9-]{1,32}$/;
+const firstNotIn = (text: string, allowed: RegExp) => [...text].find((c) => !allowed.test(c));
+const VALUE_CHAR = /[A-Za-z0-9/+.-]/;
+
+/** Why `text` is not a PHC value (at most 64 bytes of `[A-Za-z0-9/+.-]`), or nothing. */
+function valueError(text: string): string | undefined {
+  if (Buffer.byteLength(text) > 64) return "value to long";
+  const bad = firstNotIn(text, VALUE_CHAR);
+  return bad === undefined ? undefined : `contains invalid character: '${bad}'`;
+}
+
+/** `text` as a PHC decimal (digits, no leading zero, at most 2^32 - 1), or why not. */
+function decimal(text: string): number | string {
+  if (text === "") return "value malformed";
+  const bad = firstNotIn(text, /[0-9]/);
+  if (bad !== undefined) return `contains invalid character: '${bad}'`;
+  if (text.length > 1 && text.startsWith("0")) return "value format is invalid";
+  const n = Number(text);
+  return n > 0xffffffff ? "value format is invalid" : n;
+}
+
+/** `text` as canonical unpadded standard base64 of at most `max` bytes, or why not. */
+function base64(text: string, max: number): Buffer | string {
+  const whole = Math.floor(text.length / 4);
+  if (3 * whole + Math.floor((3 * (text.length - 4 * whole)) / 4) > max) return "invalid Base64 length";
+  if (!/^[A-Za-z0-9+/]*$/.test(text) || text.length % 4 === 1) return "invalid Base64 encoding";
+  const bytes = Buffer.from(text, "base64");
+  return b64(bytes) === text ? bytes : "invalid Base64 encoding";
+}
+
+/** `text`'s PHC fields, or why it is not a PHC string. */
+function parsePhcString(text: string): PhcString | string {
+  const fields = text.split("$");
+  if (text === "" || fields[0] !== "") return "password hash string missing field";
+  let at = 1;
+  const id = fields[at]!;
+  if (!IDENT.test(id)) return "invalid parameter name";
+  const phc: PhcString = { id, params: [] };
+  let field = fields[++at];
+  if (field?.startsWith("v=") && !field.includes(",")) {
+    const version = valueError(field.slice(2)) ?? decimal(field.slice(2));
+    if (typeof version === "string") return `invalid parameter value: ${version}`;
+    phc.version = version;
+    field = fields[++at];
+  }
+  if (field?.includes("=")) {
+    if (Buffer.byteLength(field) > 127) return "maximum number of parameters reached";
+    for (const pair of field.split(",")) {
+      const [name, value, extra] = pair.split("=");
+      if (!IDENT.test(name!)) return "invalid parameter name";
+      const why =
+        value === undefined
+          ? "value malformed"
+          : (valueError(value) ?? (extra === undefined ? undefined : "value malformed"));
+      if (why) return `invalid parameter value: ${why}`;
+      phc.params.push([name!, value!]);
+    }
+    field = fields[++at];
+  }
+  if (field !== undefined) {
+    const length = Buffer.byteLength(field);
+    const bad = firstNotIn(field, VALUE_CHAR);
+    if (length < 4) return "salt invalid: value to short";
+    if (length > 64) return "salt invalid: value to long";
+    if (bad !== undefined) return `salt invalid: contains invalid character: '${bad}'`;
+    phc.salt = field;
+    field = fields[++at];
+  }
+  if (field !== undefined) {
+    const hash = base64(field, 64);
+    if (typeof hash === "string") return hash;
+    if (hash.length < 10) return "output size too short, expected at least 10 bytes";
+    phc.hash = hash;
+    field = fields[++at];
+  }
+  return field === undefined ? phc : "password hash string contains trailing characters";
+}
+
+type Argon2Input = {
+  algorithm: Algorithm;
+  memory: number;
+  passes: number;
+  parallelism: number;
+  salt: Buffer;
+  data: Buffer | undefined;
+  tag: Buffer;
+};
 
 /**
- * A PHC string's algorithm, parameters, salt and tag, or why it cannot be read. As the Rust crate `argon2id-wasm`
- * verifies with, the parameters are the string's own (argon2i and argon2d too); a missing version is 0x13. Bun's
- * argon2 computes only version 0x13.
+ * What argon2 computes to check `phc`, or nothing where it cannot: as `argon2` 0.5.3 verifies, the costs are the
+ * string's own, a missing one is that crate's default (m=19456, t=2, p=1), `keyid` is read and unused, and `data` is
+ * the associated data.
  */
-function parsePhc(text: string): Phc | string {
-  const parts = text.split("$");
-  if (parts[0] !== "" || parts.length < 5 || parts.length > 6) return "not a PHC string";
-  const algorithm = parts[1]!;
-  if (!ALGORITHMS.includes(algorithm)) return `unsupported algorithm ${algorithm}`;
-  let i = 2;
-  if (parts[i]!.startsWith("v=")) {
-    if (parts[i] !== "v=19") return `unsupported version ${parts[i]!.slice(2)}`;
-    i++;
+function argon2Input(phc: PhcString): Argon2Input | undefined {
+  if (!phc.salt || !phc.hash || !ALGORITHMS.includes(phc.id)) return undefined;
+  // DV-585: Bun's argon2 computes only version 0x13, so a 0x10 hash (`v=16`), which v2's crate verifies, never matches.
+  if (phc.version !== undefined && phc.version !== 0x13) return undefined;
+  const costs = { m: 19456, t: 2, p: 1 };
+  let data: Buffer | undefined;
+  for (const [name, value] of phc.params) {
+    if (name === "m" || name === "t" || name === "p") {
+      const n = decimal(value);
+      if (typeof n === "string") return undefined;
+      costs[name] = n;
+    } else if (name === "keyid" || name === "data") {
+      const bytes = base64(value, name === "keyid" ? 8 : 32);
+      if (typeof bytes === "string") return undefined;
+      if (name === "data") data = bytes;
+    } else return undefined;
   }
-  if (parts.length - i !== 3) return "not a PHC string";
-  const params = new Map<string, number>();
-  for (const pair of parts[i]!.split(",")) {
-    const [name, value] = pair.split("=");
-    if (!name || value === undefined || !/^\d{1,10}$/.test(value) || params.has(name))
-      return `invalid parameter ${pair}`;
-    params.set(name, Number(value));
-  }
-  const memory = params.get("m");
-  const passes = params.get("t");
-  const parallelism = params.get("p");
-  if (memory === undefined || passes === undefined || parallelism === undefined || params.size !== 3)
-    return "the parameters must be m, t and p";
-  if (memory > MAX_MEMORY_KIB) return `memory cost over ${MAX_MEMORY_KIB} KiB`;
-  if (passes > MAX_PASSES) return `time cost over ${MAX_PASSES}`;
-  const salt = unb64(parts[i + 1]!);
-  const tag = unb64(parts[i + 2]!);
-  if (!salt || !tag) return "invalid base64";
-  return { algorithm: algorithm as Algorithm, memory, passes, parallelism, salt, tag };
+  const { m, t, p } = costs;
+  if (m < 8 || m < 8 * p || t < 1 || p < 1 || p > 0xffffff) return undefined;
+  const salt = base64(phc.salt, 64);
+  if (typeof salt === "string" || salt.length < MIN_SALT_BYTES) return undefined;
+  return { algorithm: phc.id as Algorithm, memory: m, passes: t, parallelism: p, salt, data, tag: phc.hash };
 }
 
 /** Whether `password` is the one `hash` (a PHC string) was made from, under the string's own parameters. */
 export async function verifyPhc(password: string, hash: string): Promise<boolean> {
-  const phc = parsePhc(hash);
-  if (typeof phc === "string") throw new Error(`Failed to verify password against the stored hash: ${phc}`);
+  // v2 wraps the crate's error, so its message reads "...stored hash: Error: <why>".
+  const fail = (why: string) => new Error(`Failed to verify password against the stored hash: Error: ${why}`);
+  const phc = parsePhcString(hash);
+  if (typeof phc === "string") throw fail(phc);
+  const input = argon2Input(phc);
+  if (!input) return false;
+  if (input.memory > MAX_MEMORY_KIB) throw fail(`memory cost over ${MAX_MEMORY_KIB} KiB`);
+  if (input.passes > MAX_PASSES) throw fail(`time cost over ${MAX_PASSES}`);
   let tag: Buffer;
   try {
-    tag = await derive(phc.algorithm, password, phc.salt, phc.memory, phc.passes, phc.parallelism, phc.tag.length);
+    tag = await derive(input, password);
   } catch (e) {
-    throw new Error(`Failed to verify password against the stored hash: ${(e as Error).message}`);
+    throw fail((e as Error).message);
   }
-  return timingSafeEqual(tag, phc.tag);
+  return timingSafeEqual(tag, input.tag);
 }
 
 /**
@@ -158,7 +256,7 @@ function saltBytes(bytes: unknown): Uint8Array {
   return Uint8Array.from(view);
 }
 
-// `argon2id-wasm`'s `hashPassword`, with the salt passed in (v2 draws it inside, from the mutation's stream).
+// `password-hash-wasm`'s `hashPassword`, with the salt passed in (v2 draws it inside, from the mutation's stream).
 /**
  * The argon2id hash of `password` (16 MiB, 3 passes, 1 lane, a 32-byte tag) under `salt`, as a PHC string. Only a
  * mutation of the `authPassword` component may call it.
@@ -172,10 +270,11 @@ export function hashPassword(password: string, salt: Uint8Array): Promise<string
   }
 }
 
-// `argon2id-wasm`'s `verifyPassword`.
+// `password-hash-wasm`'s `verifyPassword`.
 /**
- * Whether `password` matches `hash`, a PHC string (argon2id, argon2i or argon2d, under its own parameters). Only a
- * mutation of the `authPassword` component may call it.
+ * Whether `password` matches `hash`, a PHC string of argon2id, argon2i or argon2d, under the string's own parameters. A
+ * PHC string of another algorithm, or one argon2 cannot compute, does not match; a string that is not a PHC string
+ * rejects. Only a mutation of the `authPassword` component may call it.
  */
 export function verifyPassword(password: string, hash: string): Promise<boolean> {
   try {
