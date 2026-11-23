@@ -20,7 +20,7 @@
     "@bunvex/protocol": "workspace:*",
     "@bunvex/values": "workspace:*",
     "@types/object-inspect": "^1.13.0",
-    "object-inspect": "^1.13.4"
+    "object-inspect": "^1.14.0"
   },
   "peerDependencies": {
     "@bunvex/persistence": "workspace:^"
