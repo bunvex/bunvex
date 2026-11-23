@@ -34,7 +34,7 @@
     "@bunvex/persistence": "workspace:*",
     "argon2id-wasm": "0.0.0-alpha.2",
     "fast-check": "4.10.2",
-    "jose": "^6.2.17",
+    "jose": "^6.2.18",
     "typescript": "^5.9.0"
   },
   "repository": {
